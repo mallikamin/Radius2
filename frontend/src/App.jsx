@@ -9,38 +9,120 @@ const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency'
 // ============================================
 export default function App() {
   const [activeTab, setActiveTab] = useState('projects');
-  const tabs = [
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  
+  // Primary tabs - always visible
+  const primaryTabs = [
+    { id: 'dashboard', label: 'Dashboard' },
     { id: 'projects', label: 'Projects' },
     { id: 'inventory', label: 'Inventory' },
-    { id: 'transactions', label: 'Transactions' },
+    { id: 'transactions', label: 'Transactions' }
+  ];
+  
+  // Financial menu items
+  const financialTabs = [
     { id: 'receipts', label: 'Receipts' },
+    { id: 'payments', label: 'Payments' },
+    { id: 'reports', label: 'Reports' }
+  ];
+  
+  // Management menu items
+  const managementTabs = [
     { id: 'interactions', label: 'Interactions' },
     { id: 'customers', label: 'Customers' },
     { id: 'brokers', label: 'Brokers' },
-    { id: 'campaigns', label: 'Campaigns' },
-    { id: 'settings', label: 'Settings' }
+    { id: 'campaigns', label: 'Campaigns' }
   ];
+  
+  // All tabs for reference
+  const allTabs = [...primaryTabs, ...financialTabs, ...managementTabs, { id: 'settings', label: 'Settings' }];
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!showMoreMenu) return;
+    
+    const handleClickOutside = (event) => {
+      const target = event.target;
+      const menuElement = document.querySelector('.more-menu-container');
+      const buttonElement = document.querySelector('.more-menu-button');
+      
+      if (menuElement && buttonElement && 
+          !menuElement.contains(target) && 
+          !buttonElement.contains(target)) {
+        setShowMoreMenu(false);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showMoreMenu]);
 
   return (
     <div className="min-h-screen bg-[#fafafa]">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <h1 className="text-xl font-semibold tracking-tight text-gray-900">Radius</h1>
-          <nav className="flex gap-1 overflow-x-auto">
-            {tabs.map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`px-3 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
-                {tab.label}
+          <nav className="flex items-center gap-2">
+            {/* Primary tabs */}
+            <div className="flex gap-1">
+              {primaryTabs.map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            
+            {/* More menu dropdown */}
+            <div className="relative">
+              <button 
+                onClick={() => setShowMoreMenu(!showMoreMenu)}
+                className={`more-menu-button px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${showMoreMenu || financialTabs.some(t => t.id === activeTab) || managementTabs.some(t => t.id === activeTab) ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
+                More
               </button>
-            ))}
+              
+              {showMoreMenu && (
+                <div className="more-menu-container absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+                  <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Financial</div>
+                  {financialTabs.map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => { setActiveTab(tab.id); setShowMoreMenu(false); }}
+                      className={`w-full text-left px-4 py-2 text-sm transition-colors ${activeTab === tab.id ? 'bg-gray-100 text-gray-900 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
+                      {tab.label}
+                    </button>
+                  ))}
+                  <div className="border-t border-gray-100 my-1"></div>
+                  <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Management</div>
+                  {managementTabs.map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => { setActiveTab(tab.id); setShowMoreMenu(false); }}
+                      className={`w-full text-left px-4 py-2 text-sm transition-colors ${activeTab === tab.id ? 'bg-gray-100 text-gray-900 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            {/* Settings button - less prominent */}
+            <button 
+              onClick={() => setActiveTab('settings')}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === 'settings' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}>
+              Settings
+            </button>
           </nav>
         </div>
       </header>
       <main className="max-w-7xl mx-auto px-6 py-8">
+        {activeTab === 'dashboard' && <DashboardView />}
         {activeTab === 'projects' && <ProjectsView />}
         {activeTab === 'inventory' && <InventoryView />}
         {activeTab === 'transactions' && <TransactionsView />}
         {activeTab === 'receipts' && <ReceiptsView />}
+        {activeTab === 'payments' && <PaymentsView />}
+        {activeTab === 'reports' && <ReportsView />}
         {activeTab === 'interactions' && <InteractionsView />}
         {activeTab === 'customers' && <CustomersView />}
         {activeTab === 'brokers' && <BrokersView />}
@@ -396,6 +478,26 @@ function TransactionsView() {
   const [selectedTxn, setSelectedTxn] = useState(null);
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [selectedBroker, setSelectedBroker] = useState(null);
+  const [customerDetails, setCustomerDetails] = useState(null);
+  const [brokerDetails, setBrokerDetails] = useState(null);
+
+  const loadCustomerDetails = async (customerId) => {
+    try {
+      const res = await api.get(`/customers/${customerId}/details`);
+      setCustomerDetails(res.data);
+      setSelectedCustomer(customerId);
+    } catch (e) { alert('Error loading customer details'); }
+  };
+
+  const loadBrokerDetails = async (brokerId) => {
+    try {
+      const res = await api.get(`/brokers/${brokerId}/details`);
+      setBrokerDetails(res.data);
+      setSelectedBroker(brokerId);
+    } catch (e) { alert('Error loading broker details'); }
+  };
 
   useEffect(() => { loadData(); }, [filter]);
   const loadData = async () => {
@@ -474,7 +576,25 @@ function TransactionsView() {
               {transactions.map(t => (
                 <tr key={t.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{t.transaction_id}</td>
-                  <td className="px-6 py-4"><div className="text-sm font-medium">{t.customer_name}</div>{t.broker_name && <div className="text-xs text-gray-400">via {t.broker_name}</div>}</td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-medium">
+                      {t.customer_id ? (
+                        <button onClick={() => loadCustomerDetails(t.customer_id)} className="text-blue-600 hover:text-blue-800 hover:underline">
+                          {t.customer_name}
+                        </button>
+                      ) : (
+                        t.customer_name
+                      )}
+                    </div>
+                    {t.broker_name && t.broker_id && (
+                      <div className="text-xs text-gray-400">
+                        via <button onClick={() => loadBrokerDetails(t.broker_id)} className="text-blue-600 hover:text-blue-800 hover:underline">{t.broker_name}</button>
+                      </div>
+                    )}
+                    {t.broker_name && !t.broker_id && (
+                      <div className="text-xs text-gray-400">via {t.broker_name}</div>
+                    )}
+                  </td>
                   <td className="px-6 py-4"><div className="text-sm">{t.project_name}</div><div className="text-xs text-gray-500">{t.unit_number}</div></td>
                   <td className="px-6 py-4 text-sm text-right font-medium">{formatCurrency(t.total_value)}</td>
                   <td className="px-6 py-4 text-sm text-right text-green-600">{formatCurrency(t.total_paid)}</td>
@@ -492,6 +612,20 @@ function TransactionsView() {
 
       {showModal && <NewTransactionModal onClose={() => setShowModal(false)} onSuccess={() => { setShowModal(false); loadData(); }} />}
       {selectedTxn && <TransactionDetailModal txn={selectedTxn} onClose={() => setSelectedTxn(null)} onUpdate={loadData} />}
+      
+      {selectedCustomer && customerDetails && (
+        <CustomerDetailModal 
+          customer={customerDetails} 
+          onClose={() => { setSelectedCustomer(null); setCustomerDetails(null); }} 
+        />
+      )}
+      
+      {selectedBroker && brokerDetails && (
+        <BrokerDetailModal 
+          broker={brokerDetails} 
+          onClose={() => { setSelectedBroker(null); setBrokerDetails(null); }} 
+        />
+      )}
     </div>
   );
 }
@@ -1701,6 +1835,882 @@ function CampaignsView() {
 }
 
 // ============================================
+// PAYMENTS VIEW (Outgoing Payments - Commissions, Incentives, Creditors)
+// ============================================
+function PaymentsView() {
+  const [payments, setPayments] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [brokers, setBrokers] = useState([]);
+  const [reps, setReps] = useState([]);
+  const [creditors, setCreditors] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [filter, setFilter] = useState({ payment_type: '', status: '', broker_id: '', rep_id: '', creditor_id: '' });
+  const [form, setForm] = useState({
+    payment_type: 'broker_commission', payee_type: 'broker',
+    broker_id: '', company_rep_id: '', creditor_id: '', transaction_id: '',
+    amount: '', payment_method: 'bank_transfer', reference_number: '',
+    payment_date: new Date().toISOString().split('T')[0], notes: '',
+    approved_by_rep_id: '', status: 'completed', allocations: []
+  });
+
+  useEffect(() => { loadData(); }, [filter]);
+  const loadData = async () => {
+    try {
+      const params = {};
+      if (filter.payment_type) params.payment_type = filter.payment_type;
+      if (filter.status) params.status = filter.status;
+      if (filter.broker_id) params.broker_id = filter.broker_id;
+      if (filter.rep_id) params.rep_id = filter.rep_id;
+      if (filter.creditor_id) params.creditor_id = filter.creditor_id;
+
+      const [payRes, sumRes, brkRes, repRes, crdRes] = await Promise.all([
+        api.get('/payments', { params }).catch(() => ({ data: [] })),
+        api.get('/payments/summary').catch(() => ({ data: { total_payments: 0, total_amount: 0, today_count: 0, today_amount: 0, month_count: 0, month_amount: 0, by_type: {}, pending_count: 0, pending_amount: 0 } })),
+        api.get('/brokers').catch(() => ({ data: [] })),
+        api.get('/company-reps').catch(() => ({ data: [] })),
+        api.get('/creditors').catch(() => ({ data: [] }))
+      ]);
+      setPayments(payRes.data || []);
+      setSummary(sumRes.data);
+      setBrokers(brkRes.data || []);
+      setReps(repRes.data || []);
+      setCreditors(crdRes.data || []);
+    } catch (e) {
+      console.error(e);
+      setSummary({ total_payments: 0, total_amount: 0, today_count: 0, today_amount: 0, month_count: 0, month_amount: 0, by_type: {}, pending_count: 0, pending_amount: 0 });
+    }
+    finally { setLoading(false); }
+  };
+
+  const loadTransactions = async (brokerId) => {
+    if (!brokerId) return;
+    try {
+      const broker = brokers.find(b => b.id === brokerId || b.broker_id === brokerId);
+      if (broker) {
+        const res = await api.get(`/brokers/${broker.broker_id}`);
+        const txnIds = res.data.transactions?.map(t => t.transaction_id) || [];
+        const allTxns = await api.get('/transactions');
+        setTransactions(allTxns.data.filter(t => txnIds.includes(t.transaction_id)) || []);
+      }
+    } catch (e) { setTransactions([]); }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.amount || parseFloat(form.amount) <= 0) { alert('Enter valid amount'); return; }
+    if (form.payment_type === 'broker_commission' && !form.broker_id) { alert('Select broker'); return; }
+    if (form.payment_type === 'rep_incentive' && !form.company_rep_id) { alert('Select company rep'); return; }
+    if (form.payment_type === 'creditor' && !form.creditor_id) { alert('Select creditor'); return; }
+    
+    try {
+      await api.post('/payments', form);
+      setShowModal(false);
+      setForm({
+        payment_type: 'broker_commission', payee_type: 'broker',
+        broker_id: '', company_rep_id: '', creditor_id: '', transaction_id: '',
+        amount: '', payment_method: 'bank_transfer', reference_number: '',
+        payment_date: new Date().toISOString().split('T')[0], notes: '',
+        approved_by_rep_id: '', status: 'completed', allocations: []
+      });
+      setTransactions([]);
+      loadData();
+    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+  };
+
+  const updatePaymentType = (type) => {
+    setForm({
+      ...form,
+      payment_type: type,
+      payee_type: type === 'broker_commission' ? 'broker' : type === 'rep_incentive' ? 'company_rep' : 'creditor',
+      broker_id: type === 'broker_commission' ? form.broker_id : '',
+      company_rep_id: type === 'rep_incentive' ? form.company_rep_id : '',
+      creditor_id: type === 'creditor' ? form.creditor_id : '',
+      transaction_id: ''
+    });
+    if (type === 'broker_commission' && form.broker_id) {
+      loadTransactions(form.broker_id);
+    } else {
+      setTransactions([]);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div><h2 className="text-2xl font-semibold text-gray-900">Payments</h2>
+          <p className="text-sm text-gray-500 mt-1">Commission payments, incentives & creditor payments</p></div>
+        <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Record Payment</button>
+      </div>
+
+      {summary && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <SummaryCard label="Total Payments" value={summary.total_payments} />
+            <SummaryCard label="Total Paid" value={formatCurrency(summary.total_amount)} />
+            <SummaryCard label="Today" value={summary.today_count} sub={formatCurrency(summary.today_amount)} />
+            <SummaryCard label="This Month" value={summary.month_count} sub={formatCurrency(summary.month_amount)} />
+          </div>
+          <div className="grid grid-cols-4 gap-4">
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Broker Commissions</div>
+              <div className="text-lg font-semibold text-blue-600">{formatCurrency(summary.by_type?.broker_commission || 0)}</div>
+            </div>
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Rep Incentives</div>
+              <div className="text-lg font-semibold text-purple-600">{formatCurrency(summary.by_type?.rep_incentive || 0)}</div>
+            </div>
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Creditor Payments</div>
+              <div className="text-lg font-semibold text-orange-600">{formatCurrency(summary.by_type?.creditor || 0)}</div>
+            </div>
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Pending</div>
+              <div className="text-lg font-semibold text-amber-600">{formatCurrency(summary.pending_amount || 0)}</div>
+              <div className="text-xs text-gray-500 mt-1">{summary.pending_count} payments</div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Filters */}
+      <div className="bg-white rounded-xl border p-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Type</label>
+            <select value={filter.payment_type} onChange={e => setFilter({...filter, payment_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Types</option>
+              <option value="broker_commission">Broker Commission</option>
+              <option value="rep_incentive">Rep Incentive</option>
+              <option value="creditor">Creditor</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <select value={filter.status} onChange={e => setFilter({...filter, status: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Status</option>
+              <option value="completed">Completed</option>
+              <option value="pending">Pending</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Broker</label>
+            <select value={filter.broker_id} onChange={e => setFilter({...filter, broker_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Brokers</option>
+              {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Rep</label>
+            <select value={filter.rep_id} onChange={e => setFilter({...filter, rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Reps</option>
+              {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Creditor</label>
+            <select value={filter.creditor_id} onChange={e => setFilter({...filter, creditor_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Creditors</option>
+              {creditors.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {loading ? <Loader /> : payments.length === 0 ? <Empty msg="No payments recorded" /> : (
+        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+          <table className="w-full">
+            <thead><tr className="border-b border-gray-100">
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Payment</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Payee</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Type</th>
+              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Amount</th>
+              <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Method</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Date</th>
+              <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-50">
+              {payments.map(p => (
+                <tr key={p.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-mono text-gray-900">{p.payment_id}</div>
+                    {p.reference_number && <div className="text-xs text-gray-400">Ref: {p.reference_number}</div>}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-medium">{p.broker_name || p.rep_name || p.creditor_name || '-'}</div>
+                    <div className="text-xs text-gray-400">{p.broker_id || p.rep_id || p.creditor_id || ''}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      p.payment_type === 'broker_commission' ? 'bg-blue-50 text-blue-700' :
+                      p.payment_type === 'rep_incentive' ? 'bg-purple-50 text-purple-700' :
+                      p.payment_type === 'creditor' ? 'bg-orange-50 text-orange-700' : 'bg-gray-100'
+                    }`}>{p.payment_type.replace('_', ' ')}</span>
+                  </td>
+                  <td className="px-6 py-4 text-right text-sm font-semibold text-red-600">{formatCurrency(p.amount)}</td>
+                  <td className="px-6 py-4 text-center">
+                    <span className="text-xs text-gray-600">{p.payment_method || '-'}</span>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{p.payment_date}</td>
+                  <td className="px-6 py-4 text-center">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      p.status === 'completed' ? 'bg-green-50 text-green-700' :
+                      p.status === 'pending' ? 'bg-amber-50 text-amber-700' : 'bg-gray-100'
+                    }`}>{p.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showModal && (
+        <Modal title="Record Payment" onClose={() => { setShowModal(false); setTransactions([]); }} wide>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Type *</label>
+              <select required value={form.payment_type} onChange={e => updatePaymentType(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
+                <option value="broker_commission">💰 Broker Commission</option>
+                <option value="rep_incentive">🎯 Rep Incentive</option>
+                <option value="creditor">🏦 Creditor Payment</option>
+                <option value="other">📋 Other</option>
+              </select>
+            </div>
+
+            {form.payment_type === 'broker_commission' && (
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Broker *</label>
+                <select required value={form.broker_id} onChange={e => { setForm({...form, broker_id: e.target.value}); loadTransactions(e.target.value); }} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select Broker</option>
+                  {brokers.map(b => <option key={b.id} value={b.id}>{b.name} ({b.broker_id})</option>)}
+                </select>
+              </div>
+            )}
+
+            {form.payment_type === 'rep_incentive' && (
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Company Rep *</label>
+                <select required value={form.company_rep_id} onChange={e => setForm({...form, company_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select Rep</option>
+                  {reps.map(r => <option key={r.id} value={r.id}>{r.name} ({r.rep_id})</option>)}
+                </select>
+              </div>
+            )}
+
+            {form.payment_type === 'creditor' && (
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Creditor *</label>
+                <select required value={form.creditor_id} onChange={e => setForm({...form, creditor_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select Creditor</option>
+                  {creditors.map(c => <option key={c.id} value={c.id}>{c.name} ({c.creditor_id})</option>)}
+                </select>
+              </div>
+            )}
+
+            {form.payment_type === 'broker_commission' && transactions.length > 0 && (
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Allocate to Transaction (Optional)</label>
+                <select value={form.transaction_id} onChange={e => setForm({...form, transaction_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">No specific transaction</option>
+                  {transactions.map(t => <option key={t.id} value={t.id}>{t.transaction_id} - {t.project_name} ({formatCurrency(t.total_value)})</option>)}
+                </select>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Amount *" type="number" required value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} />
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
+                <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="cash">💵 Cash</option>
+                  <option value="cheque">📝 Cheque</option>
+                  <option value="bank_transfer">🏦 Bank Transfer</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Reference #" value={form.reference_number} onChange={e => setForm({...form, reference_number: e.target.value})} />
+              <Input label="Payment Date" type="date" value={form.payment_date} onChange={e => setForm({...form, payment_date: e.target.value})} />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Approved By</label>
+                <select value={form.approved_by_rep_id} onChange={e => setForm({...form, approved_by_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select Rep</option>
+                  {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+                <select value={form.status} onChange={e => setForm({...form, status: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="completed">✅ Completed</option>
+                  <option value="pending">⏳ Pending</option>
+                  <option value="cancelled">❌ Cancelled</option>
+                </select>
+              </div>
+            </div>
+
+            <Input label="Notes" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} />
+
+            <div className="flex justify-end gap-3 pt-4 border-t">
+              <button type="button" onClick={() => { setShowModal(false); setTransactions([]); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="submit" className="px-6 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Record Payment</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// DASHBOARD VIEW
+// ============================================
+function DashboardView() {
+  const [summary, setSummary] = useState(null);
+  const [customerStats, setCustomerStats] = useState([]);
+  const [projectStats, setProjectStats] = useState([]);
+  const [brokerStats, setBrokerStats] = useState([]);
+  const [topReceivables, setTopReceivables] = useState([]);
+  const [projectInventory, setProjectInventory] = useState([]);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [selectedBroker, setSelectedBroker] = useState(null);
+  const [customerDetails, setCustomerDetails] = useState(null);
+  const [brokerDetails, setBrokerDetails] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { loadData(); }, []);
+  const loadData = async () => {
+    try {
+      const [sumRes, custRes, projRes, brkRes, recRes, invRes] = await Promise.all([
+        api.get('/dashboard/summary').catch(() => ({ data: null })),
+        api.get('/dashboard/customer-stats').catch(() => ({ data: [] })),
+        api.get('/dashboard/project-stats').catch(() => ({ data: [] })),
+        api.get('/dashboard/broker-stats').catch(() => ({ data: [] })),
+        api.get('/dashboard/top-receivables?limit=10').catch(() => ({ data: [] })),
+        api.get('/dashboard/project-inventory').catch(() => ({ data: [] }))
+      ]);
+      setSummary(sumRes.data);
+      setCustomerStats(custRes.data || []);
+      setProjectStats(projRes.data || []);
+      setBrokerStats(brkRes.data || []);
+      setTopReceivables(recRes.data || []);
+      setProjectInventory(invRes.data || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const loadCustomerDetails = async (customerId) => {
+    try {
+      const res = await api.get(`/customers/${customerId}/details`);
+      setCustomerDetails(res.data);
+      setSelectedCustomer(customerId);
+    } catch (e) { alert('Error loading customer details'); }
+  };
+
+  const loadBrokerDetails = async (brokerId) => {
+    try {
+      const res = await api.get(`/brokers/${brokerId}/details`);
+      setBrokerDetails(res.data);
+      setSelectedBroker(brokerId);
+    } catch (e) { alert('Error loading broker details'); }
+  };
+
+  const topBroker = brokerStats.length > 0 ? brokerStats.sort((a, b) => b.total_sale_value - a.total_sale_value)[0] : null;
+
+  return (
+    <div className="space-y-6">
+      <div><h2 className="text-2xl font-semibold text-gray-900">Dashboard</h2>
+        <p className="text-sm text-gray-500 mt-1">Comprehensive system overview & analytics</p></div>
+
+      {loading ? <Loader /> : summary && (
+        <>
+          {/* Key Metrics Row 1 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <SummaryCard label="Total Customers" value={summary.customers?.total} />
+            <SummaryCard label="Total Transactions" value={summary.transactions?.total} />
+            <SummaryCard label="Total Sale Value" value={formatCurrency(summary.financials?.total_sale)} />
+            <SummaryCard label="Total Received" value={formatCurrency(summary.financials?.total_received)} />
+          </div>
+
+          {/* Outstanding Breakdown - NEW */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Outstanding Breakdown</h3>
+              </div>
+              <div className="space-y-4">
+                <div className="p-4 bg-red-50 rounded-lg border-l-4 border-red-500">
+                  <div className="text-xs font-medium text-red-600 uppercase mb-1">Total Overdue</div>
+                  <div className="text-2xl font-bold text-red-700">{formatCurrency(summary.financials?.total_overdue || 0)}</div>
+                  <div className="text-xs text-red-600 mt-1">Installments due on or before today</div>
+                </div>
+                <div className="p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
+                  <div className="text-xs font-medium text-blue-600 uppercase mb-1">Future Receivable</div>
+                  <div className="text-2xl font-bold text-blue-700">{formatCurrency(summary.financials?.future_receivable || 0)}</div>
+                  <div className="text-xs text-blue-600 mt-1">Not due yet</div>
+                </div>
+                <div className="pt-3 border-t">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium text-gray-600">Total Outstanding</span>
+                    <span className="text-lg font-semibold text-gray-900">{formatCurrency(summary.financials?.total_outstanding)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Broker Performance Card - NEW */}
+            {topBroker && (
+              <div className="bg-white rounded-2xl shadow-sm border p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Top Broker Performance</h3>
+                  <span className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded">#1</span>
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <button onClick={() => loadBrokerDetails(topBroker.broker_id)} className="text-left w-full hover:bg-gray-50 p-2 rounded-lg transition-colors">
+                      <div className="font-semibold text-gray-900">{topBroker.name}</div>
+                      <div className="text-xs text-gray-500">{topBroker.broker_id} • {topBroker.mobile}</div>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 pt-3 border-t">
+                    <div>
+                      <div className="text-xs text-gray-500">Total Sales</div>
+                      <div className="text-lg font-semibold">{formatCurrency(topBroker.total_sale_value)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Transactions</div>
+                      <div className="text-lg font-semibold">{topBroker.total_transactions}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Commission Rate</div>
+                      <div className="text-lg font-semibold">{topBroker.commission?.rate}%</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Commission Earned</div>
+                      <div className="text-lg font-semibold text-green-600">{formatCurrency(topBroker.commission?.total_earned)}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Key Metrics Row 2 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <SummaryCard label="This Month Sale" value={formatCurrency(summary.transactions?.this_month_value)} />
+            <SummaryCard label="Active Projects" value={summary.projects?.active} />
+            <SummaryCard label="Available Inventory" value={summary.inventory?.available} sub={`${summary.inventory?.total} total units`} />
+            <SummaryCard label="Active Brokers" value={summary.brokers?.active} />
+          </div>
+
+          {/* Project Inventory Details - NEW */}
+          {projectInventory.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <h3 className="text-lg font-semibold mb-4">Project-Wise Inventory Analysis</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left p-3 font-semibold text-gray-700">Project</th>
+                      <th className="text-right p-3 font-semibold text-gray-700">Total Units</th>
+                      <th className="text-right p-3 font-semibold text-gray-700">Available</th>
+                      <th className="text-right p-3 font-semibold text-gray-700">Sold</th>
+                      <th className="text-right p-3 font-semibold text-gray-700">Total Marlas</th>
+                      <th className="text-right p-3 font-semibold text-gray-700">Available Marlas</th>
+                      <th className="text-right p-3 font-semibold text-gray-700">Total Value</th>
+                      <th className="text-right p-3 font-semibold text-gray-700">Available Value</th>
+                      <th className="text-right p-3 font-semibold text-gray-700">Utilization</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projectInventory.map(p => (
+                      <tr key={p.project_id} className="border-b hover:bg-gray-50">
+                        <td className="p-3">
+                          <div className="font-medium">{p.name}</div>
+                          <div className="text-xs text-gray-500">{p.location || 'N/A'}</div>
+                        </td>
+                        <td className="text-right p-3">{p.summary.total_units}</td>
+                        <td className="text-right p-3 text-green-600 font-medium">{p.summary.available_units}</td>
+                        <td className="text-right p-3 text-blue-600 font-medium">{p.summary.sold_units}</td>
+                        <td className="text-right p-3">{p.area.total_marlas.toFixed(2)}</td>
+                        <td className="text-right p-3 text-green-600">{p.area.available_marlas.toFixed(2)}</td>
+                        <td className="text-right p-3 font-medium">{formatCurrency(p.value.total_value)}</td>
+                        <td className="text-right p-3 text-green-600 font-medium">{formatCurrency(p.value.available_value)}</td>
+                        <td className="text-right p-3">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            p.summary.utilization_rate >= 80 ? 'bg-green-100 text-green-800' :
+                            p.summary.utilization_rate >= 50 ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {p.summary.utilization_rate.toFixed(1)}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Top Receivables by Customer - NEW */}
+          {topReceivables.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <h3 className="text-lg font-semibold mb-4">Top Receivables by Customer</h3>
+              <div className="space-y-3">
+                {topReceivables.map(c => (
+                  <div key={c.customer_id} className="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <button onClick={() => loadCustomerDetails(c.customer_id)} className="text-left hover:text-blue-600 transition-colors">
+                          <div className="font-semibold text-gray-900">{c.customer_name}</div>
+                          <div className="text-xs text-gray-500">{c.customer_id} • {c.mobile}</div>
+                        </button>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold text-gray-900">{formatCurrency(c.total_outstanding)}</div>
+                        <div className="text-xs text-gray-500">{c.transaction_count} transactions</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 pt-3 border-t">
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Overdue</div>
+                        <div className="text-sm font-semibold text-red-600">{formatCurrency(c.overdue)}</div>
+                        <div className="text-xs text-gray-400">{c.overdue_installments.length} installments</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Future Receivable</div>
+                        <div className="text-sm font-semibold text-blue-600">{formatCurrency(c.future_receivable)}</div>
+                        <div className="text-xs text-gray-400">{c.future_installments.length} installments</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Total Sale</div>
+                        <div className="text-sm font-semibold text-gray-900">{formatCurrency(c.total_sale)}</div>
+                        <div className="text-xs text-gray-400">{formatCurrency(c.total_received)} received</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top Customers */}
+          {customerStats.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <h3 className="text-lg font-semibold mb-4">Top Customers by Sale Value</h3>
+              <div className="space-y-2">
+                {customerStats.sort((a, b) => b.total_sale - a.total_sale).slice(0, 5).map(c => (
+                  <div key={c.customer_id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                    <div>
+                      <button onClick={() => loadCustomerDetails(c.customer_id)} className="text-left hover:text-blue-600 transition-colors">
+                        <div className="font-medium">{c.name}</div>
+                        <div className="text-xs text-gray-500">{c.customer_id}</div>
+                      </button>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold">{formatCurrency(c.total_sale)}</div>
+                      <div className="text-xs text-gray-500">{c.transaction_count} transactions</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top Projects */}
+          {projectStats.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <h3 className="text-lg font-semibold mb-4">Project Performance</h3>
+              <div className="space-y-2">
+                {projectStats.sort((a, b) => b.financials.total_sale - a.financials.total_sale).slice(0, 5).map(p => (
+                  <div key={p.project_id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                    <div>
+                      <div className="font-medium">{p.name}</div>
+                      <div className="text-xs text-gray-500">{p.project_id}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold">{formatCurrency(p.financials.total_sale)}</div>
+                      <div className="text-xs text-gray-500">{p.transaction_count} transactions</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Customer Details Modal */}
+      {selectedCustomer && customerDetails && (
+        <CustomerDetailModal 
+          customer={customerDetails} 
+          onClose={() => { setSelectedCustomer(null); setCustomerDetails(null); }} 
+        />
+      )}
+
+      {/* Broker Details Modal */}
+      {selectedBroker && brokerDetails && (
+        <BrokerDetailModal 
+          broker={brokerDetails} 
+          onClose={() => { setSelectedBroker(null); setBrokerDetails(null); }} 
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// REPORTS VIEW
+// ============================================
+function ReportsView() {
+  const [customers, setCustomers] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [brokers, setBrokers] = useState([]);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [selectedBroker, setSelectedBroker] = useState(null);
+  const [customerReport, setCustomerReport] = useState(null);
+  const [projectReport, setProjectReport] = useState(null);
+  const [brokerReport, setBrokerReport] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [reportType, setReportType] = useState('customer');
+
+  useEffect(() => { loadData(); }, []);
+  const loadData = async () => {
+    try {
+      const [custRes, projRes, brkRes] = await Promise.all([
+        api.get('/customers').catch(() => ({ data: [] })),
+        api.get('/projects').catch(() => ({ data: [] })),
+        api.get('/brokers').catch(() => ({ data: [] }))
+      ]);
+      setCustomers(custRes.data || []);
+      setProjects(projRes.data || []);
+      setBrokers(brkRes.data || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const loadCustomerReport = async (customerId) => {
+    try {
+      const res = await api.get(`/reports/customers/detailed/${customerId}`);
+      setCustomerReport(res.data);
+      setSelectedCustomer(customerId);
+    } catch (e) { alert('Error loading report'); }
+  };
+
+  const loadProjectReport = async (projectId) => {
+    try {
+      const res = await api.get(`/reports/projects/${projectId}`);
+      setProjectReport(res.data);
+      setSelectedProject(projectId);
+    } catch (e) { alert('Error loading report'); }
+  };
+
+  const loadBrokerReport = async (brokerId) => {
+    try {
+      const res = await api.get(`/reports/brokers/${brokerId}`);
+      setBrokerReport(res.data);
+      setSelectedBroker(brokerId);
+    } catch (e) { alert('Error loading report'); }
+  };
+
+  const downloadPDF = async (type, id) => {
+    try {
+      let url = '';
+      if (type === 'customer') url = `/api/reports/customers/pdf/${id}`;
+      else if (type === 'project') url = `/api/reports/projects/pdf/${id}`;
+      else if (type === 'broker') url = `/api/reports/brokers/pdf/${id}`;
+      
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `${type}_${id}_report.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+    } catch (e) { alert('Error downloading PDF'); }
+  };
+
+  const downloadExcel = async (type) => {
+    try {
+      let url = '';
+      if (type === 'customer') url = '/api/reports/customers/excel';
+      else if (type === 'project') url = '/api/reports/projects/excel';
+      else if (type === 'broker') url = '/api/reports/brokers/excel';
+      
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `${type}s_report.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+    } catch (e) { alert('Error downloading Excel'); }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div><h2 className="text-2xl font-semibold text-gray-900">Reports & Analytics</h2>
+          <p className="text-sm text-gray-500 mt-1">Generate detailed reports and exports</p></div>
+      </div>
+
+      {/* Report Type Selector */}
+      <div className="bg-white rounded-xl border p-4">
+        <div className="flex gap-2">
+          <button onClick={() => setReportType('customer')} className={`px-4 py-2 rounded-lg text-sm font-medium ${reportType === 'customer' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'}`}>
+            Customer Reports
+          </button>
+          <button onClick={() => setReportType('project')} className={`px-4 py-2 rounded-lg text-sm font-medium ${reportType === 'project' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'}`}>
+            Project Reports
+          </button>
+          <button onClick={() => setReportType('broker')} className={`px-4 py-2 rounded-lg text-sm font-medium ${reportType === 'broker' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'}`}>
+            Broker Reports
+          </button>
+        </div>
+      </div>
+
+      {reportType === 'customer' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-2xl shadow-sm border p-6">
+            <h3 className="text-lg font-semibold mb-4">Select Customer</h3>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {customers.map(c => (
+                <button key={c.id} onClick={() => loadCustomerReport(c.id)}
+                  className={`w-full text-left p-3 rounded-lg border ${selectedCustomer === c.id ? 'bg-blue-50 border-blue-200' : 'hover:bg-gray-50'}`}>
+                  <div className="font-medium">{c.name}</div>
+                  <div className="text-xs text-gray-500">{c.customer_id} • {c.mobile}</div>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 pt-4 border-t">
+              <button onClick={() => downloadExcel('customer')} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
+                📊 Download All Customers (Excel)
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border p-6">
+            <h3 className="text-lg font-semibold mb-4">Report Preview</h3>
+            {customerReport ? (
+              <div className="space-y-4">
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="text-sm font-medium mb-2">Financial Summary</div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>Total Sale: <span className="font-semibold">{formatCurrency(customerReport.financials.total_sale)}</span></div>
+                    <div>Total Received: <span className="font-semibold">{formatCurrency(customerReport.financials.total_received)}</span></div>
+                    <div>Overdue: <span className="font-semibold text-red-600">{formatCurrency(customerReport.financials.overdue)}</span></div>
+                    <div>Future Receivable: <span className="font-semibold">{formatCurrency(customerReport.financials.future_receivable)}</span></div>
+                  </div>
+                </div>
+                <div className="text-sm">
+                  <div>Transactions: {customerReport.transactions.length}</div>
+                  <div>Interactions: {customerReport.interactions.total_count}</div>
+                </div>
+                <button onClick={() => downloadPDF('customer', customerReport.customer.customer_id)} className="w-full px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
+                  📄 Download PDF
+                </button>
+              </div>
+            ) : (
+              <div className="text-gray-400 text-center py-8">Select a customer to view report</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {reportType === 'project' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-2xl shadow-sm border p-6">
+            <h3 className="text-lg font-semibold mb-4">Select Project</h3>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {projects.map(p => (
+                <button key={p.id} onClick={() => loadProjectReport(p.id)}
+                  className={`w-full text-left p-3 rounded-lg border ${selectedProject === p.id ? 'bg-blue-50 border-blue-200' : 'hover:bg-gray-50'}`}>
+                  <div className="font-medium">{p.name}</div>
+                  <div className="text-xs text-gray-500">{p.project_id} • {p.location}</div>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 pt-4 border-t">
+              <button onClick={() => downloadExcel('project')} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
+                📊 Download All Projects (Excel)
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border p-6">
+            <h3 className="text-lg font-semibold mb-4">Report Preview</h3>
+            {projectReport ? (
+              <div className="space-y-4">
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="text-sm font-medium mb-2">Financial Summary</div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>Total Sale: <span className="font-semibold">{formatCurrency(projectReport.financials.total_sale)}</span></div>
+                    <div>Total Received: <span className="font-semibold">{formatCurrency(projectReport.financials.total_received)}</span></div>
+                    <div>Available Units: <span className="font-semibold">{projectReport.inventory.available_units}</span></div>
+                    <div>Sold Units: <span className="font-semibold">{projectReport.inventory.sold_units}</span></div>
+                  </div>
+                </div>
+                <button onClick={() => downloadPDF('project', projectReport.project.project_id)} className="w-full px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
+                  📄 Download PDF
+                </button>
+              </div>
+            ) : (
+              <div className="text-gray-400 text-center py-8">Select a project to view report</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {reportType === 'broker' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-2xl shadow-sm border p-6">
+            <h3 className="text-lg font-semibold mb-4">Select Broker</h3>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {brokers.map(b => (
+                <button key={b.id} onClick={() => loadBrokerReport(b.id)}
+                  className={`w-full text-left p-3 rounded-lg border ${selectedBroker === b.id ? 'bg-blue-50 border-blue-200' : 'hover:bg-gray-50'}`}>
+                  <div className="font-medium">{b.name}</div>
+                  <div className="text-xs text-gray-500">{b.broker_id} • {b.mobile}</div>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 pt-4 border-t">
+              <button onClick={() => downloadExcel('broker')} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
+                📊 Download All Brokers (Excel)
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border p-6">
+            <h3 className="text-lg font-semibold mb-4">Report Preview</h3>
+            {brokerReport ? (
+              <div className="space-y-4">
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="text-sm font-medium mb-2">Commission Summary</div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>Total Earned: <span className="font-semibold">{formatCurrency(brokerReport.commission.total_earned)}</span></div>
+                    <div>Total Paid: <span className="font-semibold">{formatCurrency(brokerReport.commission.total_paid)}</span></div>
+                    <div>Pending: <span className="font-semibold text-amber-600">{formatCurrency(brokerReport.commission.pending)}</span></div>
+                    <div>Transactions: <span className="font-semibold">{brokerReport.financials.total_transactions}</span></div>
+                  </div>
+                </div>
+                <button onClick={() => downloadPDF('broker', brokerReport.broker.broker_id)} className="w-full px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
+                  📄 Download PDF
+                </button>
+              </div>
+            ) : (
+              <div className="text-gray-400 text-center py-8">Select a broker to view report</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
 // SETTINGS VIEW (Company Reps)
 // ============================================
 function SettingsView() {
@@ -1787,6 +2797,449 @@ function SettingsView() {
         </Modal>
       )}
     </div>
+  );
+}
+
+// ============================================
+// MEDIA MANAGER COMPONENT
+// ============================================
+function MediaManager({ entityType, entityId, onUpload }) {
+  const [files, setFiles] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [description, setDescription] = useState('');
+
+  useEffect(() => {
+    if (entityId) loadFiles();
+  }, [entityType, entityId]);
+
+  const loadFiles = async () => {
+    try {
+      const res = await api.get(`/media/${entityType}/${entityId}`);
+      setFiles(res.data || []);
+    } catch (e) { console.error(e); }
+  };
+
+  const handleUpload = async (e) => {
+    e.preventDefault();
+    if (!uploadFile) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadFile);
+      formData.append('entity_type', entityType);
+      formData.append('entity_id', entityId);
+      if (description) formData.append('description', description);
+      await api.post('/media/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setUploadFile(null);
+      setDescription('');
+      setShowUpload(false);
+      loadFiles();
+      if (onUpload) onUpload();
+    } catch (e) { alert('Error uploading file'); }
+    finally { setUploading(false); }
+  };
+
+  const handleDelete = async (fileId) => {
+    if (!confirm('Delete this file?')) return;
+    try {
+      await api.delete(`/media/${fileId}`);
+      loadFiles();
+    } catch (e) { alert('Error deleting file'); }
+  };
+
+  const handleDownload = (fileId, fileName) => {
+    window.open(`/api/media/${fileId}/download`, '_blank');
+  };
+
+  if (!entityId) return null;
+
+  return (
+    <div className="bg-white rounded-xl border p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold">Attachments</h4>
+        <button onClick={() => setShowUpload(!showUpload)} className="text-xs text-blue-600 hover:text-blue-800">
+          {showUpload ? 'Cancel' : '+ Upload'}
+        </button>
+      </div>
+
+      {showUpload && (
+        <form onSubmit={handleUpload} className="mb-4 p-3 bg-gray-50 rounded-lg">
+          <input type="file" onChange={e => setUploadFile(e.target.files[0])} className="mb-2 text-sm" required />
+          <input type="text" placeholder="Description (optional)" value={description} onChange={e => setDescription(e.target.value)} className="w-full border rounded px-2 py-1 text-sm mb-2" />
+          <button type="submit" disabled={uploading} className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50">
+            {uploading ? 'Uploading...' : 'Upload'}
+          </button>
+        </form>
+      )}
+
+      {files.length === 0 ? (
+        <div className="text-xs text-gray-400 text-center py-4">No files attached</div>
+      ) : (
+        <div className="space-y-2">
+          {files.map(f => (
+            <div key={f.id} className="flex items-center justify-between p-2 bg-gray-50 rounded text-sm">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className="text-gray-500">
+                  {f.file_type === 'pdf' ? '📄' : f.file_type === 'image' ? '🖼️' : f.file_type === 'video' ? '🎥' : f.file_type === 'audio' ? '🎵' : '📎'}
+                </span>
+                <span className="truncate">{f.file_name}</span>
+                {f.description && <span className="text-xs text-gray-400">({f.description})</span>}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => handleDownload(f.file_id, f.file_name)} className="text-blue-600 hover:text-blue-800 text-xs">
+                  Download
+                </button>
+                <button onClick={() => handleDelete(f.file_id)} className="text-red-600 hover:text-red-800 text-xs">
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// DETAIL MODALS
+// ============================================
+function CustomerDetailModal({ customer, onClose }) {
+  const formatDate = (dateStr) => {
+    if (!dateStr) return 'N/A';
+    return new Date(dateStr).toLocaleDateString('en-PK', { year: 'numeric', month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <Modal title={`Customer Details: ${customer.customer.name}`} onClose={onClose} wide>
+      <div className="space-y-6 max-h-[80vh] overflow-y-auto">
+        {/* Personal Details */}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Personal Information</h3>
+          <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg">
+            <div>
+              <div className="text-xs text-gray-500">Customer ID</div>
+              <div className="font-medium">{customer.customer.customer_id}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Mobile</div>
+              <div className="font-medium">{customer.customer.mobile}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Email</div>
+              <div className="font-medium">{customer.customer.email || 'N/A'}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">CNIC</div>
+              <div className="font-medium">{customer.customer.cnic || 'N/A'}</div>
+            </div>
+            <div className="col-span-2">
+              <div className="text-xs text-gray-500">Address</div>
+              <div className="font-medium">{customer.customer.address || 'N/A'}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Financial Summary */}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Financial Summary</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <div className="text-xs text-blue-600 mb-1">Total Sale</div>
+              <div className="text-lg font-semibold text-blue-900">{formatCurrency(customer.financials.total_sale)}</div>
+            </div>
+            <div className="bg-green-50 p-4 rounded-lg">
+              <div className="text-xs text-green-600 mb-1">Total Received</div>
+              <div className="text-lg font-semibold text-green-900">{formatCurrency(customer.financials.total_received)}</div>
+            </div>
+            <div className="bg-red-50 p-4 rounded-lg">
+              <div className="text-xs text-red-600 mb-1">Total Overdue</div>
+              <div className="text-lg font-semibold text-red-900">{formatCurrency(customer.financials.total_overdue)}</div>
+            </div>
+            <div className="bg-purple-50 p-4 rounded-lg">
+              <div className="text-xs text-purple-600 mb-1">Future Receivable</div>
+              <div className="text-lg font-semibold text-purple-900">{formatCurrency(customer.financials.future_receivable)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Overdue Installments */}
+        {customer.installments.overdue.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-red-700 uppercase mb-3">Overdue Installments ({customer.installments.overdue.length})</h3>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-red-50">
+                  <tr>
+                    <th className="text-left p-2 font-semibold text-red-700">Project</th>
+                    <th className="text-left p-2 font-semibold text-red-700">Unit</th>
+                    <th className="text-right p-2 font-semibold text-red-700">Due Date</th>
+                    <th className="text-right p-2 font-semibold text-red-700">Amount</th>
+                    <th className="text-right p-2 font-semibold text-red-700">Paid</th>
+                    <th className="text-right p-2 font-semibold text-red-700">Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customer.installments.overdue.map((inst, idx) => (
+                    <tr key={idx} className="border-t hover:bg-red-50">
+                      <td className="p-2">{inst.project_name || 'N/A'}</td>
+                      <td className="p-2">{inst.unit_number || 'N/A'}</td>
+                      <td className="text-right p-2">{formatDate(inst.due_date)}</td>
+                      <td className="text-right p-2">{formatCurrency(inst.amount)}</td>
+                      <td className="text-right p-2">{formatCurrency(inst.amount_paid)}</td>
+                      <td className="text-right p-2 font-semibold text-red-700">{formatCurrency(inst.balance)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Future Installments */}
+        {customer.installments.future.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-blue-700 uppercase mb-3">Future Installments ({customer.installments.future.length})</h3>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-blue-50">
+                  <tr>
+                    <th className="text-left p-2 font-semibold text-blue-700">Project</th>
+                    <th className="text-left p-2 font-semibold text-blue-700">Unit</th>
+                    <th className="text-right p-2 font-semibold text-blue-700">Due Date</th>
+                    <th className="text-right p-2 font-semibold text-blue-700">Amount</th>
+                    <th className="text-right p-2 font-semibold text-blue-700">Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customer.installments.future.map((inst, idx) => (
+                    <tr key={idx} className="border-t hover:bg-blue-50">
+                      <td className="p-2">{inst.project_name || 'N/A'}</td>
+                      <td className="p-2">{inst.unit_number || 'N/A'}</td>
+                      <td className="text-right p-2">{formatDate(inst.due_date)}</td>
+                      <td className="text-right p-2">{formatCurrency(inst.amount)}</td>
+                      <td className="text-right p-2 font-semibold text-blue-700">{formatCurrency(inst.balance)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Receipts */}
+        {customer.receipts.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Receipts ({customer.receipts.length})</h3>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left p-2 font-semibold">Receipt ID</th>
+                    <th className="text-right p-2 font-semibold">Date</th>
+                    <th className="text-right p-2 font-semibold">Amount</th>
+                    <th className="text-left p-2 font-semibold">Method</th>
+                    <th className="text-left p-2 font-semibold">Reference</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customer.receipts.map((r, idx) => (
+                    <tr key={idx} className="border-t hover:bg-gray-50">
+                      <td className="p-2">{r.receipt_id}</td>
+                      <td className="text-right p-2">{formatDate(r.payment_date)}</td>
+                      <td className="text-right p-2 font-medium">{formatCurrency(r.amount)}</td>
+                      <td className="p-2">{r.payment_method || 'N/A'}</td>
+                      <td className="p-2">{r.reference_number || 'N/A'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Interactions */}
+        {customer.interactions.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Recent Interactions ({customer.interactions.length})</h3>
+            <div className="space-y-2">
+              {customer.interactions.map((i, idx) => (
+                <div key={idx} className="border rounded-lg p-3 bg-gray-50">
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="font-medium">{i.interaction_type}</div>
+                    <div className="text-xs text-gray-500">{formatDate(i.created_at)}</div>
+                  </div>
+                  <div className="text-sm text-gray-600">{i.notes || 'No notes'}</div>
+                  {i.rep_name && <div className="text-xs text-gray-500 mt-1">By: {i.rep_name}</div>}
+                  {i.next_follow_up && <div className="text-xs text-blue-600 mt-1">Next follow-up: {formatDate(i.next_follow_up)}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function BrokerDetailModal({ broker, onClose }) {
+  const formatDate = (dateStr) => {
+    if (!dateStr) return 'N/A';
+    return new Date(dateStr).toLocaleDateString('en-PK', { year: 'numeric', month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <Modal title={`Broker Details: ${broker.broker.name}`} onClose={onClose} wide>
+      <div className="space-y-6 max-h-[80vh] overflow-y-auto">
+        {/* Personal Details */}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Personal Information</h3>
+          <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg">
+            <div>
+              <div className="text-xs text-gray-500">Broker ID</div>
+              <div className="font-medium">{broker.broker.broker_id}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Mobile</div>
+              <div className="font-medium">{broker.broker.mobile}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Email</div>
+              <div className="font-medium">{broker.broker.email || 'N/A'}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Company</div>
+              <div className="font-medium">{broker.broker.company || 'N/A'}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Commission Rate</div>
+              <div className="font-medium">{broker.broker.commission_rate}%</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Status</div>
+              <div className="font-medium">{broker.broker.status}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Performance Summary */}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Performance Summary</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <div className="text-xs text-blue-600 mb-1">Total Sales</div>
+              <div className="text-lg font-semibold text-blue-900">{formatCurrency(broker.performance.total_sale_value)}</div>
+            </div>
+            <div className="bg-green-50 p-4 rounded-lg">
+              <div className="text-xs text-green-600 mb-1">Commission Earned</div>
+              <div className="text-lg font-semibold text-green-900">{formatCurrency(broker.performance.commission.total_earned)}</div>
+            </div>
+            <div className="bg-purple-50 p-4 rounded-lg">
+              <div className="text-xs text-purple-600 mb-1">Commission Paid</div>
+              <div className="text-lg font-semibold text-purple-900">{formatCurrency(broker.performance.commission.total_paid)}</div>
+            </div>
+            <div className="bg-orange-50 p-4 rounded-lg">
+              <div className="text-xs text-orange-600 mb-1">Pending</div>
+              <div className="text-lg font-semibold text-orange-900">{formatCurrency(broker.performance.commission.pending)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Brokered Transactions */}
+        {broker.brokered_transactions.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Brokered Transactions ({broker.brokered_transactions.length})</h3>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left p-2 font-semibold">Transaction ID</th>
+                    <th className="text-left p-2 font-semibold">Project</th>
+                    <th className="text-left p-2 font-semibold">Customer</th>
+                    <th className="text-right p-2 font-semibold">Sale Value</th>
+                    <th className="text-right p-2 font-semibold">Commission</th>
+                    <th className="text-right p-2 font-semibold">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {broker.brokered_transactions.map((t, idx) => (
+                    <tr key={idx} className="border-t hover:bg-gray-50">
+                      <td className="p-2">{t.transaction_id}</td>
+                      <td className="p-2">{t.project_name || 'N/A'}</td>
+                      <td className="p-2">{t.customer_name || 'N/A'}</td>
+                      <td className="text-right p-2">{formatCurrency(t.total_value)}</td>
+                      <td className="text-right p-2 font-medium text-green-600">{formatCurrency(t.commission_amount)} ({t.commission_rate}%)</td>
+                      <td className="text-right p-2">{formatDate(t.booking_date)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Commission Payments */}
+        {broker.payments.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Commission Payments ({broker.payments.length})</h3>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left p-2 font-semibold">Payment ID</th>
+                    <th className="text-right p-2 font-semibold">Date</th>
+                    <th className="text-right p-2 font-semibold">Amount</th>
+                    <th className="text-left p-2 font-semibold">Method</th>
+                    <th className="text-left p-2 font-semibold">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {broker.payments.map((p, idx) => (
+                    <tr key={idx} className="border-t hover:bg-gray-50">
+                      <td className="p-2">{p.payment_id}</td>
+                      <td className="text-right p-2">{formatDate(p.payment_date)}</td>
+                      <td className="text-right p-2 font-medium">{formatCurrency(p.amount)}</td>
+                      <td className="p-2">{p.payment_method || 'N/A'}</td>
+                      <td className="p-2">
+                        <span className={`px-2 py-1 rounded text-xs ${
+                          p.status === 'completed' ? 'bg-green-100 text-green-800' :
+                          p.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-red-100 text-red-800'
+                        }`}>
+                          {p.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Interactions */}
+        {broker.interactions.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Recent Interactions ({broker.interactions.length})</h3>
+            <div className="space-y-2">
+              {broker.interactions.map((i, idx) => (
+                <div key={idx} className="border rounded-lg p-3 bg-gray-50">
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="font-medium">{i.interaction_type}</div>
+                    <div className="text-xs text-gray-500">{formatDate(i.created_at)}</div>
+                  </div>
+                  <div className="text-sm text-gray-600">{i.notes || 'No notes'}</div>
+                  {i.rep_name && <div className="text-xs text-gray-500 mt-1">By: {i.rep_name}</div>}
+                  {i.next_follow_up && <div className="text-xs text-blue-600 mt-1">Next follow-up: {formatDate(i.next_follow_up)}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 

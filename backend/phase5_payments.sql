@@ -79,6 +79,20 @@ DROP TRIGGER IF EXISTS trg_payment_id ON payments;
 CREATE TRIGGER trg_payment_id BEFORE INSERT ON payments FOR EACH ROW EXECUTE FUNCTION generate_payment_id();
 
 -- =============================================
+-- PAYMENT ALLOCATIONS TABLE (links payments to transactions)
+-- =============================================
+CREATE TABLE IF NOT EXISTS payment_allocations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    payment_id UUID NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+    transaction_id UUID NOT NULL REFERENCES transactions(id),
+    amount DECIMAL(15,2) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_alloc_payment ON payment_allocations(payment_id);
+CREATE INDEX IF NOT EXISTS idx_payment_alloc_transaction ON payment_allocations(transaction_id);
+
+-- =============================================
 -- USEFUL VIEWS FOR REPORTS
 -- =============================================
 

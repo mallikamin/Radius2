@@ -4,7 +4,7 @@ Customers, Brokers, Projects, Inventory, Transactions
 """
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
@@ -22,7 +22,13 @@ import io
 # DATABASE SETUP
 # ============================================
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://sitara:sitara123@localhost:5432/sitara_crm")
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=20,
+    max_overflow=10,
+    pool_pre_ping=True,
+    pool_recycle=3600
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -209,6 +215,61 @@ class ReceiptAllocation(Base):
     amount = Column(Numeric(15, 2), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
+class Creditor(Base):
+    __tablename__ = "creditors"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    creditor_id = Column(String(20), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    mobile = Column(String(20))
+    company = Column(String(255))
+    bank_name = Column(String(100))
+    bank_account = Column(String(50))
+    bank_iban = Column(String(50))
+    notes = Column(Text)
+    status = Column(String(20), default="active")
+    created_at = Column(DateTime, server_default=func.now())
+
+class Payment(Base):
+    __tablename__ = "payments"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    payment_id = Column(String(20), unique=True, nullable=False)
+    payment_type = Column(String(50), nullable=False)  # broker_commission, rep_incentive, creditor, other
+    payee_type = Column(String(50))  # broker, company_rep, creditor
+    broker_id = Column(UUID(as_uuid=True), ForeignKey("brokers.id"))
+    company_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    creditor_id = Column(UUID(as_uuid=True), ForeignKey("creditors.id"))
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id"))
+    amount = Column(Numeric(15, 2), nullable=False)
+    payment_method = Column(String(50))  # cash, cheque, bank_transfer
+    reference_number = Column(String(100))
+    payment_date = Column(Date, default=date.today)
+    notes = Column(Text)
+    approved_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    status = Column(String(20), default="completed")  # pending, completed, cancelled
+    created_at = Column(DateTime, server_default=func.now())
+
+class PaymentAllocation(Base):
+    __tablename__ = "payment_allocations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    payment_id = Column(UUID(as_uuid=True), ForeignKey("payments.id"), nullable=False)
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+class MediaFile(Base):
+    __tablename__ = "media_files"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    file_id = Column(String(20), unique=True, nullable=False)
+    entity_type = Column(String(50), nullable=False)  # transaction, interaction, project, receipt, payment
+    entity_id = Column(UUID(as_uuid=True), nullable=False)
+    file_name = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_type = Column(String(50))  # pdf, excel, image, audio, video, other
+    file_size = Column(Integer)
+    uploaded_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    description = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+
 # ============================================
 # FASTAPI APP
 # ============================================
@@ -251,6 +312,18 @@ def health_check(db: Session = Depends(get_db)):
         try:
             tables["receipts"] = db.execute(text("SELECT COUNT(*) FROM receipts")).scalar()
         except: tables["receipts"] = "table not found"
+        try:
+            tables["payments"] = db.execute(text("SELECT COUNT(*) FROM payments")).scalar()
+        except: tables["payments"] = "table not found"
+        try:
+            tables["creditors"] = db.execute(text("SELECT COUNT(*) FROM creditors")).scalar()
+        except: tables["creditors"] = "table not found"
+        try:
+            tables["payments"] = db.execute(text("SELECT COUNT(*) FROM payments")).scalar()
+        except: tables["payments"] = "table not found"
+        try:
+            tables["media_files"] = db.execute(text("SELECT COUNT(*) FROM media_files")).scalar()
+        except: tables["media_files"] = "table not found"
         
         return {"status": "healthy", "tables": tables}
     except Exception as e:
@@ -1462,3 +1535,1327 @@ def delete_receipt(rid: str, db: Session = Depends(get_db)):
     
     db.delete(r); db.commit()
     return {"message": "Receipt deleted"}
+
+# ============================================
+# CREDITORS API
+# ============================================
+@app.get("/api/creditors")
+def list_creditors(db: Session = Depends(get_db)):
+    creditors = db.query(Creditor).order_by(Creditor.created_at.desc()).all()
+    return [{
+        "id": str(c.id), "creditor_id": c.creditor_id, "name": c.name,
+        "mobile": c.mobile, "company": c.company, "bank_name": c.bank_name,
+        "bank_account": c.bank_account, "bank_iban": c.bank_iban,
+        "notes": c.notes, "status": c.status, "created_at": str(c.created_at)
+    } for c in creditors]
+
+@app.get("/api/creditors/{cid}")
+def get_creditor(cid: str, db: Session = Depends(get_db)):
+    c = db.query(Creditor).filter((Creditor.id == cid) | (Creditor.creditor_id == cid)).first()
+    if not c: raise HTTPException(404, "Creditor not found")
+    return {
+        "id": str(c.id), "creditor_id": c.creditor_id, "name": c.name,
+        "mobile": c.mobile, "company": c.company, "bank_name": c.bank_name,
+        "bank_account": c.bank_account, "bank_iban": c.bank_iban,
+        "notes": c.notes, "status": c.status, "created_at": str(c.created_at)
+    }
+
+@app.post("/api/creditors")
+def create_creditor(data: dict, db: Session = Depends(get_db)):
+    c = Creditor(
+        name=data["name"], mobile=data.get("mobile"), company=data.get("company"),
+        bank_name=data.get("bank_name"), bank_account=data.get("bank_account"),
+        bank_iban=data.get("bank_iban"), notes=data.get("notes")
+    )
+    db.add(c); db.commit(); db.refresh(c)
+    return {"message": "Creditor created", "id": str(c.id), "creditor_id": c.creditor_id}
+
+@app.put("/api/creditors/{cid}")
+def update_creditor(cid: str, data: dict, db: Session = Depends(get_db)):
+    c = db.query(Creditor).filter((Creditor.id == cid) | (Creditor.creditor_id == cid)).first()
+    if not c: raise HTTPException(404, "Creditor not found")
+    for k in ["name", "mobile", "company", "bank_name", "bank_account", "bank_iban", "notes", "status"]:
+        if k in data and data[k] is not None: setattr(c, k, data[k])
+    db.commit()
+    return {"message": "Creditor updated"}
+
+@app.delete("/api/creditors/{cid}")
+def delete_creditor(cid: str, db: Session = Depends(get_db)):
+    c = db.query(Creditor).filter((Creditor.id == cid) | (Creditor.creditor_id == cid)).first()
+    if not c: raise HTTPException(404, "Creditor not found")
+    db.delete(c); db.commit()
+    return {"message": "Creditor deleted"}
+
+# ============================================
+# PAYMENTS API
+# ============================================
+@app.get("/api/payments")
+def list_payments(
+    broker_id: str = None, rep_id: str = None, creditor_id: str = None,
+    payment_type: str = None, status: str = None, start_date: str = None,
+    end_date: str = None, limit: int = 100, db: Session = Depends(get_db)
+):
+    q = db.query(Payment)
+    if broker_id:
+        b = db.query(Broker).filter((Broker.id == broker_id) | (Broker.broker_id == broker_id)).first()
+        if b: q = q.filter(Payment.broker_id == b.id)
+    if rep_id:
+        r = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
+        if r: q = q.filter(Payment.company_rep_id == r.id)
+    if creditor_id:
+        c = db.query(Creditor).filter((Creditor.id == creditor_id) | (Creditor.creditor_id == creditor_id)).first()
+        if c: q = q.filter(Payment.creditor_id == c.id)
+    if payment_type: q = q.filter(Payment.payment_type == payment_type)
+    if status: q = q.filter(Payment.status == status)
+    if start_date: q = q.filter(Payment.payment_date >= date.fromisoformat(start_date))
+    if end_date: q = q.filter(Payment.payment_date <= date.fromisoformat(end_date))
+    
+    payments = q.order_by(Payment.created_at.desc()).limit(limit).all()
+    result = []
+    for p in payments:
+        broker = db.query(Broker).filter(Broker.id == p.broker_id).first() if p.broker_id else None
+        rep = db.query(CompanyRep).filter(CompanyRep.id == p.company_rep_id).first() if p.company_rep_id else None
+        creditor = db.query(Creditor).filter(Creditor.id == p.creditor_id).first() if p.creditor_id else None
+        txn = db.query(Transaction).filter(Transaction.id == p.transaction_id).first() if p.transaction_id else None
+        approver = db.query(CompanyRep).filter(CompanyRep.id == p.approved_by_rep_id).first() if p.approved_by_rep_id else None
+        
+        result.append({
+            "id": str(p.id), "payment_id": p.payment_id, "payment_type": p.payment_type,
+            "payee_type": p.payee_type, "broker_name": broker.name if broker else None,
+            "broker_id": broker.broker_id if broker else None,
+            "rep_name": rep.name if rep else None, "rep_id": rep.rep_id if rep else None,
+            "creditor_name": creditor.name if creditor else None,
+            "creditor_id": creditor.creditor_id if creditor else None,
+            "transaction_id": txn.transaction_id if txn else None,
+            "amount": float(p.amount), "payment_method": p.payment_method,
+            "reference_number": p.reference_number,
+            "payment_date": str(p.payment_date) if p.payment_date else None,
+            "notes": p.notes, "approved_by": approver.name if approver else None,
+            "status": p.status, "created_at": str(p.created_at)
+        })
+    return result
+
+@app.get("/api/payments/summary")
+def get_payments_summary(db: Session = Depends(get_db)):
+    today = date.today()
+    month_start = today.replace(day=1)
+    
+    total_payments = db.query(Payment).count()
+    total_amount = db.query(func.sum(Payment.amount)).filter(Payment.status == "completed").scalar() or 0
+    today_count = db.query(Payment).filter(Payment.payment_date == today, Payment.status == "completed").count()
+    today_amount = db.query(func.sum(Payment.amount)).filter(Payment.payment_date == today, Payment.status == "completed").scalar() or 0
+    month_count = db.query(Payment).filter(Payment.payment_date >= month_start, Payment.status == "completed").count()
+    month_amount = db.query(func.sum(Payment.amount)).filter(Payment.payment_date >= month_start, Payment.status == "completed").scalar() or 0
+    
+    # By payment type
+    by_type = {}
+    for ptype in ['broker_commission', 'rep_incentive', 'creditor', 'other']:
+        amt = db.query(func.sum(Payment.amount)).filter(Payment.payment_type == ptype, Payment.status == "completed").scalar() or 0
+        by_type[ptype] = float(amt)
+    
+    # Pending payments
+    pending_count = db.query(Payment).filter(Payment.status == "pending").count()
+    pending_amount = db.query(func.sum(Payment.amount)).filter(Payment.status == "pending").scalar() or 0
+    
+    return {
+        "total_payments": total_payments, "total_amount": float(total_amount),
+        "today_count": today_count, "today_amount": float(today_amount),
+        "month_count": month_count, "month_amount": float(month_amount),
+        "by_type": by_type, "pending_count": pending_count, "pending_amount": float(pending_amount)
+    }
+
+@app.get("/api/payments/available-commissions")
+def get_available_commissions(broker_id: str = None, rep_id: str = None, db: Session = Depends(get_db)):
+    """Calculate available commissions for brokers/reps"""
+    result = {}
+    
+    if broker_id:
+        broker = db.query(Broker).filter((Broker.id == broker_id) | (Broker.broker_id == broker_id)).first()
+        if not broker: raise HTTPException(404, "Broker not found")
+        
+        # Get all transactions for this broker
+        txns = db.query(Transaction).filter(Transaction.broker_id == broker.id).all()
+        total_commission_earned = sum(float(t.total_value or 0) * float(t.broker_commission_rate or 0) / 100 for t in txns)
+        
+        # Get total paid
+        total_paid = db.query(func.sum(Payment.amount)).filter(
+            Payment.broker_id == broker.id,
+            Payment.payment_type == "broker_commission",
+            Payment.status == "completed"
+        ).scalar() or 0
+        
+        result["broker"] = {
+            "broker_id": broker.broker_id, "name": broker.name,
+            "total_commission_earned": total_commission_earned,
+            "total_commission_paid": float(total_paid),
+            "available_commission": total_commission_earned - float(total_paid),
+            "transactions": [{"transaction_id": t.transaction_id, "commission": float(t.total_value or 0) * float(t.broker_commission_rate or 0) / 100} for t in txns]
+        }
+    
+    if rep_id:
+        rep = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
+        if not rep: raise HTTPException(404, "Rep not found")
+        
+        # For reps, we'd need to define incentive structure - for now, return basic info
+        total_paid = db.query(func.sum(Payment.amount)).filter(
+            Payment.company_rep_id == rep.id,
+            Payment.payment_type == "rep_incentive",
+            Payment.status == "completed"
+        ).scalar() or 0
+        
+        result["rep"] = {
+            "rep_id": rep.rep_id, "name": rep.name,
+            "total_incentive_paid": float(total_paid)
+        }
+    
+    return result
+
+@app.get("/api/payments/broker/{broker_id}")
+def get_broker_payments(broker_id: str, db: Session = Depends(get_db)):
+    broker = db.query(Broker).filter((Broker.id == broker_id) | (Broker.broker_id == broker_id)).first()
+    if not broker: raise HTTPException(404, "Broker not found")
+    
+    payments = db.query(Payment).filter(
+        Payment.broker_id == broker.id
+    ).order_by(Payment.created_at.desc()).all()
+    
+    return [{
+        "id": str(p.id), "payment_id": p.payment_id, "amount": float(p.amount),
+        "payment_type": p.payment_type, "payment_method": p.payment_method,
+        "payment_date": str(p.payment_date), "status": p.status,
+        "transaction_id": db.query(Transaction).filter(Transaction.id == p.transaction_id).first().transaction_id if p.transaction_id else None,
+        "created_at": str(p.created_at)
+    } for p in payments]
+
+@app.get("/api/payments/rep/{rep_id}")
+def get_rep_payments(rep_id: str, db: Session = Depends(get_db)):
+    rep = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
+    if not rep: raise HTTPException(404, "Rep not found")
+    
+    payments = db.query(Payment).filter(
+        Payment.company_rep_id == rep.id
+    ).order_by(Payment.created_at.desc()).all()
+    
+    return [{
+        "id": str(p.id), "payment_id": p.payment_id, "amount": float(p.amount),
+        "payment_type": p.payment_type, "payment_method": p.payment_method,
+        "payment_date": str(p.payment_date), "status": p.status,
+        "created_at": str(p.created_at)
+    } for p in payments]
+
+@app.get("/api/payments/{pid}")
+def get_payment(pid: str, db: Session = Depends(get_db)):
+    p = db.query(Payment).filter((Payment.id == pid) | (Payment.payment_id == pid)).first()
+    if not p: raise HTTPException(404, "Payment not found")
+    
+    broker = db.query(Broker).filter(Broker.id == p.broker_id).first() if p.broker_id else None
+    rep = db.query(CompanyRep).filter(CompanyRep.id == p.company_rep_id).first() if p.company_rep_id else None
+    creditor = db.query(Creditor).filter(Creditor.id == p.creditor_id).first() if p.creditor_id else None
+    txn = db.query(Transaction).filter(Transaction.id == p.transaction_id).first() if p.transaction_id else None
+    approver = db.query(CompanyRep).filter(CompanyRep.id == p.approved_by_rep_id).first() if p.approved_by_rep_id else None
+    
+    # Get allocations
+    allocations = db.query(PaymentAllocation).filter(PaymentAllocation.payment_id == p.id).all()
+    alloc_details = []
+    for a in allocations:
+        t = db.query(Transaction).filter(Transaction.id == a.transaction_id).first()
+        alloc_details.append({
+            "id": str(a.id), "transaction_id": t.transaction_id if t else None,
+            "amount": float(a.amount)
+        })
+    
+    return {
+        "id": str(p.id), "payment_id": p.payment_id, "payment_type": p.payment_type,
+        "payee_type": p.payee_type,
+        "broker": {"id": str(broker.id), "name": broker.name, "broker_id": broker.broker_id} if broker else None,
+        "rep": {"id": str(rep.id), "name": rep.name, "rep_id": rep.rep_id} if rep else None,
+        "creditor": {"id": str(creditor.id), "name": creditor.name, "creditor_id": creditor.creditor_id} if creditor else None,
+        "transaction": {"id": str(txn.id), "transaction_id": txn.transaction_id} if txn else None,
+        "amount": float(p.amount), "payment_method": p.payment_method,
+        "reference_number": p.reference_number,
+        "payment_date": str(p.payment_date) if p.payment_date else None,
+        "notes": p.notes, "approved_by": {"id": str(approver.id), "name": approver.name} if approver else None,
+        "status": p.status, "created_at": str(p.created_at),
+        "allocations": alloc_details
+    }
+
+@app.post("/api/payments")
+def create_payment(data: dict, db: Session = Depends(get_db)):
+    broker = None
+    rep = None
+    creditor = None
+    transaction = None
+    approver = None
+    
+    if data.get("broker_id"):
+        broker = db.query(Broker).filter(
+            (Broker.id == data["broker_id"]) | (Broker.broker_id == data["broker_id"]) | (Broker.mobile == data["broker_id"])
+        ).first()
+        if not broker: raise HTTPException(404, "Broker not found")
+    
+    if data.get("company_rep_id"):
+        rep = db.query(CompanyRep).filter(
+            (CompanyRep.id == data["company_rep_id"]) | (CompanyRep.rep_id == data["company_rep_id"])
+        ).first()
+        if not rep: raise HTTPException(404, "Rep not found")
+    
+    if data.get("creditor_id"):
+        creditor = db.query(Creditor).filter(
+            (Creditor.id == data["creditor_id"]) | (Creditor.creditor_id == data["creditor_id"])
+        ).first()
+        if not creditor: raise HTTPException(404, "Creditor not found")
+    
+    if data.get("transaction_id"):
+        transaction = db.query(Transaction).filter(
+            (Transaction.id == data["transaction_id"]) | (Transaction.transaction_id == data["transaction_id"])
+        ).first()
+    
+    if data.get("approved_by_rep_id"):
+        approver = db.query(CompanyRep).filter(
+            (CompanyRep.id == data["approved_by_rep_id"]) | (CompanyRep.rep_id == data["approved_by_rep_id"])
+        ).first()
+    
+    # Determine payee_type
+    payee_type = None
+    if broker: payee_type = "broker"
+    elif rep: payee_type = "company_rep"
+    elif creditor: payee_type = "creditor"
+    
+    p = Payment(
+        payment_type=data["payment_type"],
+        payee_type=payee_type,
+        broker_id=broker.id if broker else None,
+        company_rep_id=rep.id if rep else None,
+        creditor_id=creditor.id if creditor else None,
+        transaction_id=transaction.id if transaction else None,
+        amount=data["amount"],
+        payment_method=data.get("payment_method"),
+        reference_number=data.get("reference_number"),
+        payment_date=date.fromisoformat(data["payment_date"]) if data.get("payment_date") else date.today(),
+        notes=data.get("notes"),
+        approved_by_rep_id=approver.id if approver else None,
+        status=data.get("status", "completed")
+    )
+    db.add(p); db.flush()
+    
+    # Handle allocations
+    allocations = data.get("allocations", [])
+    if allocations:
+        for alloc in allocations:
+            txn = db.query(Transaction).filter(
+                (Transaction.id == alloc["transaction_id"]) | (Transaction.transaction_id == alloc["transaction_id"])
+            ).first()
+            if txn:
+                db.add(PaymentAllocation(payment_id=p.id, transaction_id=txn.id, amount=alloc["amount"]))
+    elif transaction:
+        # Auto-allocate to transaction if only one transaction specified
+        db.add(PaymentAllocation(payment_id=p.id, transaction_id=transaction.id, amount=data["amount"]))
+    
+    db.commit(); db.refresh(p)
+    return {"message": "Payment created", "id": str(p.id), "payment_id": p.payment_id}
+
+@app.put("/api/payments/{pid}")
+def update_payment(pid: str, data: dict, db: Session = Depends(get_db)):
+    p = db.query(Payment).filter((Payment.id == pid) | (Payment.payment_id == pid)).first()
+    if not p: raise HTTPException(404, "Payment not found")
+    
+    for k in ["payment_type", "amount", "payment_method", "reference_number", "notes", "status"]:
+        if k in data and data[k] is not None: setattr(p, k, data[k])
+    if "payment_date" in data: p.payment_date = date.fromisoformat(data["payment_date"]) if data["payment_date"] else None
+    
+    db.commit()
+    return {"message": "Payment updated"}
+
+@app.delete("/api/payments/{pid}")
+def delete_payment(pid: str, db: Session = Depends(get_db)):
+    p = db.query(Payment).filter((Payment.id == pid) | (Payment.payment_id == pid)).first()
+    if not p: raise HTTPException(404, "Payment not found")
+    
+    # Delete allocations
+    allocations = db.query(PaymentAllocation).filter(PaymentAllocation.payment_id == p.id).all()
+    for a in allocations:
+        db.delete(a)
+    
+    db.delete(p); db.commit()
+    return {"message": "Payment deleted"}
+
+# ============================================
+# DASHBOARD API
+# ============================================
+@app.get("/api/dashboard/summary")
+def get_dashboard_summary(db: Session = Depends(get_db)):
+    """Overall system statistics"""
+    today = date.today()
+    month_start = today.replace(day=1)
+    
+    # Customers
+    total_customers = db.query(Customer).count()
+    active_customers = db.query(Customer).join(Transaction).distinct().count()
+    
+    # Transactions
+    total_transactions = db.query(Transaction).count()
+    total_sale_value = db.query(func.sum(Transaction.total_value)).scalar() or 0
+    
+    # Receipts
+    total_received = db.query(func.sum(Receipt.amount)).scalar() or 0
+    month_received = db.query(func.sum(Receipt.amount)).filter(Receipt.payment_date >= month_start).scalar() or 0
+    
+    # Payments
+    total_paid = db.query(func.sum(Payment.amount)).filter(Payment.status == "completed").scalar() or 0
+    month_paid = db.query(func.sum(Payment.amount)).filter(Payment.payment_date >= month_start, Payment.status == "completed").scalar() or 0
+    
+    # Outstanding breakdown: Overdue vs Future Receivable
+    today = date.today()
+    total_overdue = 0
+    total_future_receivable = 0
+    
+    all_transactions = db.query(Transaction).all()
+    for txn in all_transactions:
+        installments = db.query(Installment).filter(Installment.transaction_id == txn.id).all()
+        for inst in installments:
+            balance = float(inst.amount) - float(inst.amount_paid or 0)
+            if balance > 0:
+                if inst.due_date <= today:
+                    total_overdue += balance
+                else:
+                    total_future_receivable += balance
+    
+    total_outstanding = float(total_sale_value) - float(total_received)
+    
+    # Projects
+    total_projects = db.query(Project).count()
+    active_projects = db.query(Project).filter(Project.status == "active").count()
+    
+    # Brokers
+    total_brokers = db.query(Broker).count()
+    active_brokers = db.query(Broker).filter(Broker.status == "active").count()
+    
+    # Inventory
+    total_units = db.query(Inventory).count()
+    available_units = db.query(Inventory).filter(Inventory.status == "available").count()
+    sold_units = db.query(Inventory).filter(Inventory.status == "sold").count()
+    
+    # This month transactions
+    this_month_txns = db.query(Transaction).filter(Transaction.booking_date >= month_start).count()
+    this_month_sale = db.query(func.sum(Transaction.total_value)).filter(Transaction.booking_date >= month_start).scalar() or 0
+    
+    return {
+        "customers": {"total": total_customers, "active": active_customers},
+        "transactions": {"total": total_transactions, "total_value": float(total_sale_value), "this_month": this_month_txns, "this_month_value": float(this_month_sale)},
+        "financials": {
+            "total_sale": float(total_sale_value),
+            "total_received": float(total_received),
+            "total_outstanding": float(total_outstanding),
+            "total_overdue": float(total_overdue),
+            "future_receivable": float(total_future_receivable),
+            "total_paid": float(total_paid),
+            "month_received": float(month_received),
+            "month_paid": float(month_paid)
+        },
+        "projects": {"total": total_projects, "active": active_projects},
+        "brokers": {"total": total_brokers, "active": active_brokers},
+        "inventory": {"total": total_units, "available": available_units, "sold": sold_units}
+    }
+
+@app.get("/api/dashboard/customer-stats")
+def get_customer_stats(db: Session = Depends(get_db)):
+    """Customer financial summaries"""
+    customers = db.query(Customer).all()
+    result = []
+    
+    for c in customers:
+        txns = db.query(Transaction).filter(Transaction.customer_id == c.id).all()
+        total_sale = sum(float(t.total_value or 0) for t in txns)
+        
+        # Calculate received
+        total_received = 0
+        for t in txns:
+            installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
+            total_received += sum(float(i.amount_paid or 0) for i in installments)
+        
+        # Calculate overdue (installments past due date)
+        today = date.today()
+        overdue = 0
+        future_receivable = 0
+        
+        for t in txns:
+            installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
+            for i in installments:
+                balance = float(i.amount) - float(i.amount_paid or 0)
+                if balance > 0:
+                    if i.due_date < today:
+                        overdue += balance
+                    else:
+                        future_receivable += balance
+        
+        # Interaction count
+        interactions = db.query(Interaction).filter(Interaction.customer_id == c.id).count()
+        
+        result.append({
+            "customer_id": c.customer_id,
+            "name": c.name,
+            "mobile": c.mobile,
+            "total_sale": total_sale,
+            "total_received": total_received,
+            "overdue": overdue,
+            "future_receivable": future_receivable,
+            "outstanding": total_sale - total_received,
+            "interaction_count": interactions,
+            "transaction_count": len(txns)
+        })
+    
+    return result
+
+@app.get("/api/dashboard/project-stats")
+def get_project_stats(db: Session = Depends(get_db)):
+    """Project performance statistics"""
+    projects = db.query(Project).all()
+    result = []
+    
+    for p in projects:
+        inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
+        txns = db.query(Transaction).filter(Transaction.project_id == p.id).all()
+        
+        # Inventory stats
+        available = [i for i in inventory if i.status == "available"]
+        sold = [i for i in inventory if i.status == "sold"]
+        total_marlas = sum(float(i.area_marla) for i in inventory)
+        available_marlas = sum(float(i.area_marla) for i in available)
+        sold_marlas = sum(float(i.area_marla) for i in sold)
+        
+        # Financial stats
+        total_sale = sum(float(t.total_value or 0) for t in txns)
+        total_received = 0
+        overdue = 0
+        future_receivable = 0
+        today = date.today()
+        
+        for t in txns:
+            installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
+            for i in installments:
+                paid = float(i.amount_paid or 0)
+                total_received += paid
+                balance = float(i.amount) - paid
+                if balance > 0:
+                    if i.due_date < today:
+                        overdue += balance
+                    else:
+                        future_receivable += balance
+        
+        result.append({
+            "project_id": p.project_id,
+            "name": p.name,
+            "location": p.location,
+            "inventory": {
+                "total_units": len(inventory),
+                "available_units": len(available),
+                "sold_units": len(sold),
+                "total_marlas": total_marlas,
+                "available_marlas": available_marlas,
+                "sold_marlas": sold_marlas
+            },
+            "financials": {
+                "total_sale": total_sale,
+                "total_received": total_received,
+                "overdue": overdue,
+                "future_receivable": future_receivable,
+                "outstanding": total_sale - total_received
+            },
+            "transaction_count": len(txns)
+        })
+    
+    return result
+
+@app.get("/api/dashboard/broker-stats")
+def get_broker_stats(db: Session = Depends(get_db)):
+    """Broker performance statistics"""
+    brokers = db.query(Broker).all()
+    result = []
+    
+    for b in brokers:
+        txns = db.query(Transaction).filter(Transaction.broker_id == b.id).all()
+        total_sale = sum(float(t.total_value or 0) for t in txns)
+        total_commission_earned = sum(float(t.total_value or 0) * float(t.broker_commission_rate or 0) / 100 for t in txns)
+        
+        # Commission paid
+        total_commission_paid = db.query(func.sum(Payment.amount)).filter(
+            Payment.broker_id == b.id,
+            Payment.payment_type == "broker_commission",
+            Payment.status == "completed"
+        ).scalar() or 0
+        
+        # Interactions
+        interactions = db.query(Interaction).filter(Interaction.broker_id == b.id).count()
+        
+        result.append({
+            "broker_id": b.broker_id,
+            "name": b.name,
+            "mobile": b.mobile,
+            "total_transactions": len(txns),
+            "total_sale_value": total_sale,
+            "commission": {
+                "rate": float(b.commission_rate or 0),
+                "total_earned": total_commission_earned,
+                "total_paid": float(total_commission_paid),
+                "pending": total_commission_earned - float(total_commission_paid)
+            },
+            "interaction_count": interactions
+        })
+    
+    return result
+
+@app.get("/api/dashboard/revenue-trends")
+def get_revenue_trends(start_date: str = None, end_date: str = None, db: Session = Depends(get_db)):
+    """Time-series revenue data"""
+    if not start_date:
+        start_date = (date.today() - timedelta(days=90)).isoformat()
+    if not end_date:
+        end_date = date.today().isoformat()
+    
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    
+    # Get receipts by date
+    receipts = db.query(Receipt).filter(
+        Receipt.payment_date >= start,
+        Receipt.payment_date <= end
+    ).order_by(Receipt.payment_date).all()
+    
+    # Group by date
+    daily_receipts = {}
+    for r in receipts:
+        date_str = str(r.payment_date)
+        if date_str not in daily_receipts:
+            daily_receipts[date_str] = 0
+        daily_receipts[date_str] += float(r.amount)
+    
+    # Get payments by date
+    payments = db.query(Payment).filter(
+        Payment.payment_date >= start,
+        Payment.payment_date <= end,
+        Payment.status == "completed"
+    ).order_by(Payment.payment_date).all()
+    
+    daily_payments = {}
+    for p in payments:
+        date_str = str(p.payment_date)
+        if date_str not in daily_payments:
+            daily_payments[date_str] = 0
+        daily_payments[date_str] += float(p.amount)
+    
+    # Generate all dates in range
+    trends = []
+    current = start
+    while current <= end:
+        date_str = current.isoformat()
+        trends.append({
+            "date": date_str,
+            "receipts": daily_receipts.get(date_str, 0),
+            "payments": daily_payments.get(date_str, 0),
+            "net": daily_receipts.get(date_str, 0) - daily_payments.get(date_str, 0)
+        })
+        current += timedelta(days=1)
+    
+    return trends
+
+@app.get("/api/dashboard/top-receivables")
+def get_top_receivables(limit: int = 10, db: Session = Depends(get_db)):
+    """Top receivables by customer with overdue breakdown"""
+    today = date.today()
+    customers = db.query(Customer).all()
+    result = []
+    
+    for c in customers:
+        txns = db.query(Transaction).filter(Transaction.customer_id == c.id).all()
+        total_sale = sum(float(t.total_value or 0) for t in txns)
+        
+        # Calculate received
+        total_received = 0
+        overdue_amount = 0
+        future_amount = 0
+        overdue_installments = []
+        future_installments = []
+        
+        for t in txns:
+            installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
+            for i in installments:
+                paid = float(i.amount_paid or 0)
+                total_received += paid
+                balance = float(i.amount) - paid
+                if balance > 0:
+                    inst_data = {
+                        "installment_number": i.installment_number,
+                        "due_date": str(i.due_date),
+                        "amount": float(i.amount),
+                        "amount_paid": paid,
+                        "balance": balance,
+                        "status": i.status,
+                        "transaction_id": str(t.transaction_id),
+                        "project_name": db.query(Project).filter(Project.id == t.project_id).first().name if t.project_id else None
+                    }
+                    if i.due_date <= today:
+                        overdue_amount += balance
+                        overdue_installments.append(inst_data)
+                    else:
+                        future_amount += balance
+                        future_installments.append(inst_data)
+        
+        outstanding = total_sale - total_received
+        if outstanding > 0:
+            result.append({
+                "customer_id": c.customer_id,
+                "customer_name": c.name,
+                "mobile": c.mobile,
+                "total_sale": total_sale,
+                "total_received": total_received,
+                "total_outstanding": outstanding,
+                "overdue": overdue_amount,
+                "future_receivable": future_amount,
+                "overdue_installments": overdue_installments,
+                "future_installments": future_installments,
+                "transaction_count": len(txns)
+            })
+    
+    # Sort by total outstanding descending
+    result.sort(key=lambda x: x["total_outstanding"], reverse=True)
+    return result[:limit]
+
+@app.get("/api/dashboard/project-inventory")
+def get_project_inventory(db: Session = Depends(get_db)):
+    """Project-wise inventory breakdown with detailed metrics"""
+    projects = db.query(Project).all()
+    result = []
+    
+    for p in projects:
+        inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
+        available = [i for i in inventory if i.status == "available"]
+        sold = [i for i in inventory if i.status == "sold"]
+        
+        # Calculate totals
+        total_units = len(inventory)
+        available_units = len(available)
+        sold_units = len(sold)
+        
+        total_marlas = sum(float(i.area_marla or 0) for i in inventory)
+        available_marlas = sum(float(i.area_marla or 0) for i in available)
+        sold_marlas = sum(float(i.area_marla or 0) for i in sold)
+        
+        total_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in inventory)
+        available_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in available)
+        sold_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in sold)
+        
+        # Average rates
+        avg_rate = total_value / total_marlas if total_marlas > 0 else 0
+        available_avg_rate = available_value / available_marlas if available_marlas > 0 else 0
+        
+        # Unit type breakdown
+        unit_types = {}
+        for i in inventory:
+            ut = i.unit_type or "plot"
+            if ut not in unit_types:
+                unit_types[ut] = {"total": 0, "available": 0, "sold": 0}
+            unit_types[ut]["total"] += 1
+            if i.status == "available":
+                unit_types[ut]["available"] += 1
+            elif i.status == "sold":
+                unit_types[ut]["sold"] += 1
+        
+        result.append({
+            "project_id": p.project_id,
+            "name": p.name,
+            "location": p.location,
+            "status": p.status,
+            "summary": {
+                "total_units": total_units,
+                "available_units": available_units,
+                "sold_units": sold_units,
+                "utilization_rate": (sold_units / total_units * 100) if total_units > 0 else 0
+            },
+            "area": {
+                "total_marlas": total_marlas,
+                "available_marlas": available_marlas,
+                "sold_marlas": sold_marlas,
+                "available_percentage": (available_marlas / total_marlas * 100) if total_marlas > 0 else 0
+            },
+            "value": {
+                "total_value": total_value,
+                "available_value": available_value,
+                "sold_value": sold_value,
+                "avg_rate_per_marla": avg_rate,
+                "available_avg_rate": available_avg_rate
+            },
+            "unit_types": unit_types
+        })
+    
+    return result
+
+@app.get("/api/customers/{customer_id}/details")
+def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
+    """Comprehensive customer details for modal popup"""
+    # Find customer by ID or mobile
+    customer = db.query(Customer).filter(
+        (Customer.customer_id == customer_id) | (Customer.mobile == customer_id) | (Customer.id == customer_id)
+    ).first()
+    
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    
+    today = date.today()
+    
+    # Transactions
+    txns = db.query(Transaction).filter(Transaction.customer_id == customer.id).all()
+    total_sale = sum(float(t.total_value or 0) for t in txns)
+    
+    # Receipts
+    receipts = db.query(Receipt).filter(Receipt.customer_id == customer.id).order_by(Receipt.payment_date.desc()).all()
+    total_received = sum(float(r.amount) for r in receipts)
+    
+    # Installments breakdown
+    overdue_installments = []
+    future_installments = []
+    paid_installments = []
+    total_overdue = 0
+    total_future = 0
+    
+    for t in txns:
+        project = db.query(Project).filter(Project.id == t.project_id).first()
+        installments = db.query(Installment).filter(Installment.transaction_id == t.id).order_by(Installment.due_date).all()
+        
+        for i in installments:
+            paid = float(i.amount_paid or 0)
+            balance = float(i.amount) - paid
+            
+            inst_data = {
+                "id": str(i.id),
+                "installment_number": i.installment_number,
+                "due_date": str(i.due_date),
+                "amount": float(i.amount),
+                "amount_paid": paid,
+                "balance": balance,
+                "status": i.status,
+                "transaction_id": str(t.transaction_id),
+                "project_name": project.name if project else None,
+                "unit_number": t.unit_number
+            }
+            
+            if balance <= 0:
+                paid_installments.append(inst_data)
+            elif i.due_date <= today:
+                overdue_installments.append(inst_data)
+                total_overdue += balance
+            else:
+                future_installments.append(inst_data)
+                total_future += balance
+    
+    # Interactions
+    interactions = db.query(Interaction).filter(Interaction.customer_id == customer.id).order_by(Interaction.created_at.desc()).limit(20).all()
+    
+    return {
+        "customer": {
+            "id": str(customer.id),
+            "customer_id": customer.customer_id,
+            "name": customer.name,
+            "mobile": customer.mobile,
+            "email": customer.email,
+            "address": customer.address,
+            "cnic": customer.cnic,
+            "notes": customer.notes,
+            "created_at": str(customer.created_at) if customer.created_at else None
+        },
+        "financials": {
+            "total_sale": total_sale,
+            "total_received": total_received,
+            "total_outstanding": total_sale - total_received,
+            "total_overdue": total_overdue,
+            "future_receivable": total_future,
+            "transaction_count": len(txns)
+        },
+        "installments": {
+            "overdue": overdue_installments,
+            "future": future_installments,
+            "paid": paid_installments
+        },
+        "receipts": [{
+            "id": str(r.id),
+            "receipt_id": r.receipt_id,
+            "amount": float(r.amount),
+            "payment_date": str(r.payment_date),
+            "payment_method": r.payment_method,
+            "reference_number": r.reference_number,
+            "notes": r.notes
+        } for r in receipts],
+        "interactions": [{
+            "id": str(i.id),
+            "interaction_id": i.interaction_id,
+            "interaction_type": i.interaction_type,
+            "status": i.status,
+            "notes": i.notes,
+            "created_at": str(i.created_at),
+            "next_follow_up": str(i.next_follow_up) if i.next_follow_up else None,
+            "rep_name": db.query(CompanyRep).filter(CompanyRep.id == i.company_rep_id).first().name if i.company_rep_id else None
+        } for i in interactions]
+    }
+
+@app.get("/api/brokers/{broker_id}/details")
+def get_broker_details(broker_id: str, db: Session = Depends(get_db)):
+    """Comprehensive broker details for modal popup"""
+    # Find broker by ID or mobile
+    broker = db.query(Broker).filter(
+        (Broker.broker_id == broker_id) | (Broker.mobile == broker_id) | (Broker.id == broker_id)
+    ).first()
+    
+    if not broker:
+        raise HTTPException(status_code=404, detail="Broker not found")
+    
+    # Transactions
+    txns = db.query(Transaction).filter(Transaction.broker_id == broker.id).all()
+    total_sale = sum(float(t.total_value or 0) for t in txns)
+    
+    # Commission calculations
+    total_commission_earned = sum(float(t.total_value or 0) * float(t.broker_commission_rate or 0) / 100 for t in txns)
+    
+    # Commission paid
+    payments = db.query(Payment).filter(
+        Payment.broker_id == broker.id,
+        Payment.payment_type == "broker_commission"
+    ).order_by(Payment.payment_date.desc()).all()
+    
+    total_commission_paid = sum(float(p.amount) for p in payments if p.status == "completed")
+    
+    # Brokered transactions details
+    brokered_transactions = []
+    for t in txns:
+        project = db.query(Project).filter(Project.id == t.project_id).first()
+        customer = db.query(Customer).filter(Customer.id == t.customer_id).first()
+        commission = float(t.total_value or 0) * float(t.broker_commission_rate or 0) / 100
+        
+        brokered_transactions.append({
+            "transaction_id": str(t.transaction_id),
+            "booking_date": str(t.booking_date),
+            "project_name": project.name if project else None,
+            "customer_name": customer.name if customer else None,
+            "total_value": float(t.total_value),
+            "commission_rate": float(t.broker_commission_rate or 0),
+            "commission_amount": commission,
+            "status": t.status
+        })
+    
+    # Interactions
+    interactions = db.query(Interaction).filter(Interaction.broker_id == broker.id).order_by(Interaction.created_at.desc()).limit(20).all()
+    
+    return {
+        "broker": {
+            "id": str(broker.id),
+            "broker_id": broker.broker_id,
+            "name": broker.name,
+            "mobile": broker.mobile,
+            "email": broker.email,
+            "company": broker.company,
+            "address": broker.address,
+            "cnic": broker.cnic,
+            "commission_rate": float(broker.commission_rate or 0),
+            "bank_name": broker.bank_name,
+            "bank_account": broker.bank_account,
+            "bank_iban": broker.bank_iban,
+            "status": broker.status,
+            "notes": broker.notes,
+            "created_at": str(broker.created_at) if broker.created_at else None
+        },
+        "performance": {
+            "total_transactions": len(txns),
+            "total_sale_value": total_sale,
+            "commission": {
+                "rate": float(broker.commission_rate or 0),
+                "total_earned": total_commission_earned,
+                "total_paid": total_commission_paid,
+                "pending": total_commission_earned - total_commission_paid
+            }
+        },
+        "brokered_transactions": brokered_transactions,
+        "payments": [{
+            "id": str(p.id),
+            "payment_id": p.payment_id,
+            "amount": float(p.amount),
+            "payment_date": str(p.payment_date),
+            "payment_method": p.payment_method,
+            "status": p.status,
+            "reference_number": p.reference_number
+        } for p in payments],
+        "interactions": [{
+            "id": str(i.id),
+            "interaction_id": i.interaction_id,
+            "interaction_type": i.interaction_type,
+            "status": i.status,
+            "notes": i.notes,
+            "created_at": str(i.created_at),
+            "next_follow_up": str(i.next_follow_up) if i.next_follow_up else None,
+            "rep_name": db.query(CompanyRep).filter(CompanyRep.id == i.company_rep_id).first().name if i.company_rep_id else None
+        } for i in interactions]
+    }
+
+# ============================================
+# REPORTS API
+# ============================================
+@app.get("/api/reports/customers/detailed/{customer_id}")
+def get_customer_detailed_report(customer_id: str, db: Session = Depends(get_db)):
+    """Get detailed customer financial report"""
+    from reports import get_customer_detailed_report as get_report
+    report = get_report(customer_id, db)
+    if not report:
+        raise HTTPException(404, "Customer not found")
+    return report
+
+@app.get("/api/reports/customers/list")
+def get_customers_list_report(db: Session = Depends(get_db)):
+    """Get customer list with financials"""
+    from reports import get_customer_detailed_report as get_report
+    customers = db.query(Customer).all()
+    result = []
+    for c in customers:
+        report = get_report(str(c.id), db)
+        if report:
+            result.append({
+                "customer_id": report["customer"]["customer_id"],
+                "name": report["customer"]["name"],
+                "mobile": report["customer"]["mobile"],
+                "total_sale": report["financials"]["total_sale"],
+                "total_received": report["financials"]["total_received"],
+                "overdue": report["financials"]["overdue"],
+                "future_receivable": report["financials"]["future_receivable"],
+                "outstanding": report["financials"]["outstanding"],
+                "interaction_count": report["interactions"]["total_count"]
+            })
+    return result
+
+@app.get("/api/reports/projects/{project_id}")
+def get_project_report(project_id: str, db: Session = Depends(get_db)):
+    """Get project financial report"""
+    from reports import get_project_detailed_report as get_report
+    report = get_report(project_id, db)
+    if not report:
+        raise HTTPException(404, "Project not found")
+    return report
+
+@app.get("/api/reports/brokers/{broker_id}")
+def get_broker_report(broker_id: str, db: Session = Depends(get_db)):
+    """Get detailed broker report"""
+    from reports import get_broker_detailed_report as get_report
+    report = get_report(broker_id, db)
+    if not report:
+        raise HTTPException(404, "Broker not found")
+    return report
+
+@app.get("/api/reports/customers/pdf/{customer_id}")
+def get_customer_pdf(customer_id: str, db: Session = Depends(get_db)):
+    """Generate PDF report for customer"""
+    from reports import get_customer_detailed_report as get_report
+    from report_generator import generate_customer_pdf
+    report = get_report(customer_id, db)
+    if not report:
+        raise HTTPException(404, "Customer not found")
+    pdf_buffer = generate_customer_pdf(report)
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=customer_{report['customer']['customer_id']}_report.pdf"}
+    )
+
+@app.get("/api/reports/customers/excel")
+def get_customers_excel(db: Session = Depends(get_db)):
+    """Generate Excel report for all customers"""
+    from reports import get_customer_detailed_report as get_report
+    from report_generator import generate_customer_excel
+    from io import BytesIO
+    import zipfile
+    
+    customers = db.query(Customer).all()
+    zip_buffer = BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for c in customers:
+            report = get_report(str(c.id), db)
+            if report:
+                excel_buffer = generate_customer_excel(report)
+                zip_file.writestr(f"customer_{report['customer']['customer_id']}.xlsx", excel_buffer.getvalue())
+    
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=customers_report.zip"}
+    )
+
+@app.get("/api/reports/projects/pdf/{project_id}")
+def get_project_pdf(project_id: str, db: Session = Depends(get_db)):
+    """Generate PDF report for project"""
+    from reports import get_project_detailed_report as get_report
+    from report_generator import generate_project_pdf
+    report = get_report(project_id, db)
+    if not report:
+        raise HTTPException(404, "Project not found")
+    pdf_buffer = generate_project_pdf(report)
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=project_{report['project']['project_id']}_report.pdf"}
+    )
+
+@app.get("/api/reports/projects/excel")
+def get_projects_excel(db: Session = Depends(get_db)):
+    """Generate Excel report for all projects"""
+    from reports import get_project_detailed_report as get_report
+    from report_generator import generate_customer_excel  # Reuse customer format
+    from io import BytesIO
+    import zipfile
+    
+    projects = db.query(Project).all()
+    zip_buffer = BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for p in projects:
+            report = get_report(str(p.id), db)
+            if report:
+                # Convert project report to similar format
+                excel_buffer = generate_customer_excel({
+                    "customer": {"customer_id": report["project"]["project_id"], "name": report["project"]["name"]},
+                    "financials": report["financials"],
+                    "transactions": report["transactions"],
+                    "interactions": {"total_count": 0, "history": []}
+                })
+                zip_file.writestr(f"project_{report['project']['project_id']}.xlsx", excel_buffer.getvalue())
+    
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=projects_report.zip"}
+    )
+
+@app.get("/api/reports/brokers/pdf/{broker_id}")
+def get_broker_pdf(broker_id: str, db: Session = Depends(get_db)):
+    """Generate PDF report for broker"""
+    from reports import get_broker_detailed_report as get_report
+    from report_generator import generate_broker_pdf
+    report = get_report(broker_id, db)
+    if not report:
+        raise HTTPException(404, "Broker not found")
+    pdf_buffer = generate_broker_pdf(report)
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=broker_{report['broker']['broker_id']}_report.pdf"}
+    )
+
+@app.get("/api/reports/brokers/excel")
+def get_brokers_excel(db: Session = Depends(get_db)):
+    """Generate Excel report for all brokers"""
+    from reports import get_broker_detailed_report as get_report
+    from report_generator import generate_customer_excel  # Reuse format
+    from io import BytesIO
+    import zipfile
+    
+    brokers = db.query(Broker).all()
+    zip_buffer = BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for b in brokers:
+            report = get_report(str(b.id), db)
+            if report:
+                excel_buffer = generate_customer_excel({
+                    "customer": {"customer_id": report["broker"]["broker_id"], "name": report["broker"]["name"]},
+                    "financials": {"total_sale": report["financials"]["total_sale_value"], "total_received": 0, "overdue": 0, "future_receivable": 0, "outstanding": 0},
+                    "transactions": report["transactions"],
+                    "interactions": report["interactions"]
+                })
+                zip_file.writestr(f"broker_{report['broker']['broker_id']}.xlsx", excel_buffer.getvalue())
+    
+        zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=brokers_report.zip"}
+    )
+
+# ============================================
+# MEDIA API
+# ============================================
+import shutil
+from pathlib import Path
+
+MEDIA_ROOT = Path("media")
+MEDIA_ROOT.mkdir(exist_ok=True)
+for entity_type in ["transactions", "interactions", "projects", "receipts", "payments"]:
+    (MEDIA_ROOT / entity_type).mkdir(exist_ok=True)
+
+def get_file_type(filename: str) -> str:
+    """Determine file type from extension"""
+    ext = filename.lower().split('.')[-1] if '.' in filename else ''
+    if ext in ['pdf']: return 'pdf'
+    elif ext in ['xlsx', 'xls']: return 'excel'
+    elif ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']: return 'image'
+    elif ext in ['mp3', 'wav', 'm4a']: return 'audio'
+    elif ext in ['mp4', 'avi', 'mov', 'mkv']: return 'video'
+    else: return 'other'
+
+@app.post("/api/media/upload")
+async def upload_media(
+    entity_type: str,
+    entity_id: str,
+    file: UploadFile = File(...),
+    description: str = None,
+    uploaded_by_rep_id: str = None,
+    db: Session = Depends(get_db)
+):
+    """Upload media file"""
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment"]:
+        raise HTTPException(400, "Invalid entity_type")
+    
+    # Verify entity exists
+    entity = None
+    if entity_type == "transaction":
+        entity = db.query(Transaction).filter((Transaction.id == entity_id) | (Transaction.transaction_id == entity_id)).first()
+    elif entity_type == "interaction":
+        entity = db.query(Interaction).filter((Interaction.id == entity_id) | (Interaction.interaction_id == entity_id)).first()
+    elif entity_type == "project":
+        entity = db.query(Project).filter((Project.id == entity_id) | (Project.project_id == entity_id)).first()
+    elif entity_type == "receipt":
+        entity = db.query(Receipt).filter((Receipt.id == entity_id) | (Receipt.receipt_id == entity_id)).first()
+    elif entity_type == "payment":
+        entity = db.query(Payment).filter((Payment.id == entity_id) | (Payment.payment_id == entity_id)).first()
+    
+    if not entity:
+        raise HTTPException(404, f"{entity_type} not found")
+    
+    # Get rep if provided
+    rep = None
+    if uploaded_by_rep_id:
+        rep = db.query(CompanyRep).filter((CompanyRep.id == uploaded_by_rep_id) | (CompanyRep.rep_id == uploaded_by_rep_id)).first()
+    
+    # Save file
+    file_ext = file.filename.split('.')[-1] if '.' in file.filename else ''
+    unique_filename = f"{uuid.uuid4()}.{file_ext}"
+    file_path = MEDIA_ROOT / f"{entity_type}s" / unique_filename
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    file_size = file_path.stat().st_size
+    file_type = get_file_type(file.filename)
+    
+    # Create database record
+    media = MediaFile(
+        entity_type=entity_type,
+        entity_id=entity.id if hasattr(entity, 'id') else uuid.UUID(entity_id),
+        file_name=file.filename,
+        file_path=str(file_path),
+        file_type=file_type,
+        file_size=file_size,
+        uploaded_by_rep_id=rep.id if rep else None,
+        description=description
+    )
+    db.add(media); db.commit(); db.refresh(media)
+    
+    return {
+        "message": "File uploaded",
+        "id": str(media.id),
+        "file_id": media.file_id,
+        "file_name": media.file_name,
+        "file_size": media.file_size
+    }
+
+@app.get("/api/media/{entity_type}/{entity_id}")
+def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get_db)):
+    """List media files for an entity"""
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment"]:
+        raise HTTPException(400, "Invalid entity_type")
+    
+    # Get entity
+    entity = None
+    if entity_type == "transaction":
+        entity = db.query(Transaction).filter((Transaction.id == entity_id) | (Transaction.transaction_id == entity_id)).first()
+    elif entity_type == "interaction":
+        entity = db.query(Interaction).filter((Interaction.id == entity_id) | (Interaction.interaction_id == entity_id)).first()
+    elif entity_type == "project":
+        entity = db.query(Project).filter((Project.id == entity_id) | (Project.project_id == entity_id)).first()
+    elif entity_type == "receipt":
+        entity = db.query(Receipt).filter((Receipt.id == entity_id) | (Receipt.receipt_id == entity_id)).first()
+    elif entity_type == "payment":
+        entity = db.query(Payment).filter((Payment.id == entity_id) | (Payment.payment_id == entity_id)).first()
+    
+    if not entity:
+        raise HTTPException(404, f"{entity_type} not found")
+    
+    files = db.query(MediaFile).filter(
+        MediaFile.entity_type == entity_type,
+        MediaFile.entity_id == entity.id
+    ).order_by(MediaFile.created_at.desc()).all()
+    
+    result = []
+    for f in files:
+        rep = db.query(CompanyRep).filter(CompanyRep.id == f.uploaded_by_rep_id).first() if f.uploaded_by_rep_id else None
+        result.append({
+            "id": str(f.id),
+            "file_id": f.file_id,
+            "file_name": f.file_name,
+            "file_type": f.file_type,
+            "file_size": f.file_size,
+            "description": f.description,
+            "uploaded_by": rep.name if rep else None,
+            "created_at": str(f.created_at)
+        })
+    
+    return result
+
+@app.get("/api/media/{file_id}/download")
+def download_media_file(file_id: str, db: Session = Depends(get_db)):
+    """Download media file"""
+    media = db.query(MediaFile).filter((MediaFile.id == file_id) | (MediaFile.file_id == file_id)).first()
+    if not media:
+        raise HTTPException(404, "File not found")
+    
+    file_path = Path(media.file_path)
+    if not file_path.exists():
+        raise HTTPException(404, "File not found on disk")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=media.file_name,
+        media_type="application/octet-stream"
+    )
+
+@app.get("/api/media/{file_id}")
+def get_media_file_info(file_id: str, db: Session = Depends(get_db)):
+    """Get media file metadata"""
+    media = db.query(MediaFile).filter((MediaFile.id == file_id) | (MediaFile.file_id == file_id)).first()
+    if not media:
+        raise HTTPException(404, "File not found")
+    
+    rep = db.query(CompanyRep).filter(CompanyRep.id == media.uploaded_by_rep_id).first() if media.uploaded_by_rep_id else None
+    
+    return {
+        "id": str(media.id),
+        "file_id": media.file_id,
+        "entity_type": media.entity_type,
+        "entity_id": str(media.entity_id),
+        "file_name": media.file_name,
+        "file_type": media.file_type,
+        "file_size": media.file_size,
+        "description": media.description,
+        "uploaded_by": rep.name if rep else None,
+        "created_at": str(media.created_at)
+    }
+
+@app.delete("/api/media/{file_id}")
+def delete_media_file(file_id: str, db: Session = Depends(get_db)):
+    """Delete media file"""
+    media = db.query(MediaFile).filter((MediaFile.id == file_id) | (MediaFile.file_id == file_id)).first()
+    if not media:
+        raise HTTPException(404, "File not found")
+    
+    # Delete file from disk
+    file_path = Path(media.file_path)
+    if file_path.exists():
+        file_path.unlink()
+    
+    db.delete(media); db.commit()
+    return {"message": "File deleted"}
