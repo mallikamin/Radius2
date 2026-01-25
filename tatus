@@ -1,0 +1,5 @@
+[33m6fc91de[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m, [m[1;31morigin/master[m[33m, [m[1;31morigin/Projects[m[33m, [m[1;32mProjects[m[33m)[m Projects WIP
+[33m3f8b1fe[m Merge branch 'brokers' if it merges an updated upstream into a topic branch.
+[33m4b9fd29[m[33m ([m[1;31morigin/brokers[m[33m, [m[1;32mbrokers[m[33m)[m Ignore and remove python __pycache__ files
+[33mef22ffb[m Update brokers changes
+[33m8dee1bc[m Initial commit

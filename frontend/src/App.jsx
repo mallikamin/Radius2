@@ -13,8 +13,11 @@ export default function App() {
     { id: 'projects', label: 'Projects' },
     { id: 'inventory', label: 'Inventory' },
     { id: 'transactions', label: 'Transactions' },
+    { id: 'receipts', label: 'Receipts' },
+    { id: 'interactions', label: 'Interactions' },
     { id: 'customers', label: 'Customers' },
     { id: 'brokers', label: 'Brokers' },
+    { id: 'campaigns', label: 'Campaigns' },
     { id: 'settings', label: 'Settings' }
   ];
 
@@ -23,10 +26,10 @@ export default function App() {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <h1 className="text-xl font-semibold tracking-tight text-gray-900">Radius</h1>
-          <nav className="flex gap-1">
+          <nav className="flex gap-1 overflow-x-auto">
             {tabs.map(tab => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
+                className={`px-3 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
                 {tab.label}
               </button>
             ))}
@@ -37,8 +40,11 @@ export default function App() {
         {activeTab === 'projects' && <ProjectsView />}
         {activeTab === 'inventory' && <InventoryView />}
         {activeTab === 'transactions' && <TransactionsView />}
+        {activeTab === 'receipts' && <ReceiptsView />}
+        {activeTab === 'interactions' && <InteractionsView />}
         {activeTab === 'customers' && <CustomersView />}
         {activeTab === 'brokers' && <BrokersView />}
+        {activeTab === 'campaigns' && <CampaignsView />}
         {activeTab === 'settings' && <SettingsView />}
       </main>
     </div>
@@ -130,6 +136,7 @@ function ProjectsView() {
 function InventoryView() {
   const [inventory, setInventory] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [summary, setSummary] = useState(null);
   const [filter, setFilter] = useState({ project_id: '', status: '' });
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -142,12 +149,14 @@ function InventoryView() {
   useEffect(() => { loadData(); }, [filter]);
   const loadData = async () => {
     try {
-      const [invRes, projRes] = await Promise.all([
+      const [invRes, projRes, sumRes] = await Promise.all([
         api.get('/inventory', { params: filter }),
-        api.get('/projects')
+        api.get('/projects'),
+        api.get('/inventory/summary')
       ]);
       setInventory(invRes.data);
       setProjects(projRes.data);
+      setSummary(sumRes.data);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -174,6 +183,14 @@ function InventoryView() {
           <p className="text-sm text-gray-500 mt-1">{inventory.length} units</p></div>
         <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Unit</button>
       </div>
+
+      {summary && (
+        <div className="grid grid-cols-3 gap-4">
+          <SummaryCard label="Total Projects" value={summary.total_projects} />
+          <SummaryCard label="Available Units" value={summary.total_available} sub={formatCurrency(summary.available_value)} />
+          <SummaryCard label="Sold Units" value={summary.total_sold} sub={formatCurrency(summary.sold_value)} />
+        </div>
+      )}
 
       <div className="flex gap-4">
         <select value={filter.project_id} onChange={e => setFilter({...filter, project_id: e.target.value})} className="border rounded-lg px-3 py-2 text-sm">
@@ -371,20 +388,36 @@ function SellModal({ item, onClose, onSuccess }) {
 // ============================================
 function TransactionsView() {
   const [transactions, setTransactions] = useState([]);
-  const [inventory, setInventory] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [filter, setFilter] = useState({ project_id: '' });
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [selectedTxn, setSelectedTxn] = useState(null);
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); }, [filter]);
   const loadData = async () => {
     try {
-      const [txnRes, invRes] = await Promise.all([api.get('/transactions'), api.get('/inventory/available')]);
-      setTransactions(txnRes.data);
-      setInventory(invRes.data);
-    } catch (e) { console.error(e); }
+      // Only pass params if they have values
+      const params = {};
+      if (filter.project_id) params.project_id = filter.project_id;
+      
+      const [txnRes, projRes, sumRes] = await Promise.all([
+        api.get('/transactions'),
+        api.get('/projects'),
+        api.get('/transactions/summary', { params })
+      ]);
+      let txns = txnRes.data || [];
+      if (filter.project_id) {
+        const proj = projRes.data.find(p => p.id === filter.project_id);
+        if (proj) txns = txns.filter(t => t.project_name === proj.name);
+      }
+      setTransactions(txns);
+      setProjects(projRes.data || []);
+      setSummary(sumRes.data);
+    } catch (e) { console.error(e); setSummary({ total_transactions: 0, total_value: 0, this_month_count: 0, this_month_value: 0 }); }
     finally { setLoading(false); }
   };
 
@@ -405,27 +438,24 @@ function TransactionsView() {
       <div className="flex items-center justify-between">
         <div><h2 className="text-2xl font-semibold text-gray-900">Transactions</h2>
           <p className="text-sm text-gray-500 mt-1">{transactions.length} sales</p></div>
-        <button 
-          onClick={() => setShowModal(true)} 
-          disabled={inventory.length === 0}
-          className={`px-4 py-2 text-sm font-medium rounded-lg ${inventory.length > 0 ? 'bg-gray-900 text-white hover:bg-gray-800' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
-          title={inventory.length === 0 ? 'No available inventory' : 'Create new transaction'}
-        >
-          Add Transaction
-        </button>
+        <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Transaction</button>
       </div>
 
-      {inventory.length > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <div className="text-sm font-medium text-blue-800">Available Inventory: {inventory.length} units</div>
-          <div className="flex flex-wrap gap-2 mt-2">
-            {inventory.slice(0, 10).map(i => (
-              <span key={i.id} className="text-xs bg-white px-2 py-1 rounded border">{i.project_name} - {i.unit_number}</span>
-            ))}
-            {inventory.length > 10 && <span className="text-xs text-blue-600">+{inventory.length - 10} more</span>}
-          </div>
+      {summary && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <SummaryCard label="Total Transactions" value={summary.total_transactions} />
+          <SummaryCard label="Total Value" value={formatCurrency(summary.total_value)} />
+          <SummaryCard label="This Month" value={summary.this_month_count} />
+          <SummaryCard label="This Month Value" value={formatCurrency(summary.this_month_value)} />
         </div>
       )}
+
+      <div className="flex gap-4">
+        <select value={filter.project_id} onChange={e => setFilter({...filter, project_id: e.target.value})} className="border rounded-lg px-3 py-2 text-sm">
+          <option value="">All Projects</option>
+          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
 
       {loading ? <Loader /> : transactions.length === 0 ? <Empty msg="No transactions yet" /> : (
         <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
@@ -460,20 +490,25 @@ function TransactionsView() {
 
       <BulkImport entity="transactions" onImport={handleImport} importFile={importFile} setImportFile={setImportFile} importResult={importResult} />
 
-      {showModal && <NewTransactionModal inventory={inventory} onClose={() => setShowModal(false)} onSuccess={() => { setShowModal(false); loadData(); }} />}
+      {showModal && <NewTransactionModal onClose={() => setShowModal(false)} onSuccess={() => { setShowModal(false); loadData(); }} />}
       {selectedTxn && <TransactionDetailModal txn={selectedTxn} onClose={() => setSelectedTxn(null)} onUpdate={loadData} />}
     </div>
   );
 }
 
 // ============================================
-// NEW TRANSACTION MODAL
+// NEW TRANSACTION MODAL (Searchable, Scalable)
 // ============================================
-function NewTransactionModal({ inventory, onClose, onSuccess }) {
+function NewTransactionModal({ onClose, onSuccess }) {
+  const [projects, setProjects] = useState([]);
+  const [inventory, setInventory] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [brokers, setBrokers] = useState([]);
   const [reps, setReps] = useState([]);
+  const [selectedProject, setSelectedProject] = useState('');
   const [selectedInv, setSelectedInv] = useState(null);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [unitSearch, setUnitSearch] = useState('');
   const [form, setForm] = useState({
     customer_id: '', broker_id: '', company_rep_id: '',
     area_marla: '', rate_per_marla: '',
@@ -482,12 +517,39 @@ function NewTransactionModal({ inventory, onClose, onSuccess }) {
   });
 
   useEffect(() => {
-    api.get('/customers').then(r => setCustomers(r.data));
-    api.get('/brokers').then(r => setBrokers(r.data));
-    api.get('/company-reps').then(r => setReps(r.data));
+    Promise.all([
+      api.get('/projects'),
+      api.get('/inventory/available'),
+      api.get('/customers'),
+      api.get('/brokers'),
+      api.get('/company-reps')
+    ]).then(([projRes, invRes, custRes, brkRes, repRes]) => {
+      setProjects(projRes.data);
+      setInventory(invRes.data);
+      setCustomers(custRes.data);
+      setBrokers(brkRes.data);
+      setReps(repRes.data);
+    });
   }, []);
 
-  const selectInventory = (inv) => {
+  const filteredProjects = projects.filter(p => 
+    p.name.toLowerCase().includes(projectSearch.toLowerCase()) &&
+    inventory.some(i => i.project_id === p.id)
+  );
+
+  const filteredUnits = inventory.filter(i => 
+    i.project_id === selectedProject &&
+    (i.unit_number.toLowerCase().includes(unitSearch.toLowerCase()) || 
+     (i.block && i.block.toLowerCase().includes(unitSearch.toLowerCase())))
+  );
+
+  const selectProject = (projectId) => {
+    setSelectedProject(projectId);
+    setSelectedInv(null);
+    setUnitSearch('');
+  };
+
+  const selectUnit = (inv) => {
     setSelectedInv(inv);
     setForm({...form, area_marla: inv.area_marla, rate_per_marla: inv.rate_per_marla});
   };
@@ -497,6 +559,7 @@ function NewTransactionModal({ inventory, onClose, onSuccess }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!selectedInv) { alert('Select a unit'); return; }
+    if (!form.customer_id) { alert('Select a customer'); return; }
     try {
       await api.post('/transactions', { ...form, inventory_id: selectedInv.id });
       onSuccess();
@@ -506,20 +569,56 @@ function NewTransactionModal({ inventory, onClose, onSuccess }) {
   return (
     <Modal title="New Transaction" onClose={onClose} wide>
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div><label className="block text-xs font-medium text-gray-500 mb-2">Select Unit *</label>
-          <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto border rounded-lg p-2">
-            {inventory.map(i => (
-              <button key={i.id} type="button" onClick={() => selectInventory(i)}
-                className={`text-left p-2 rounded text-xs border ${selectedInv?.id === i.id ? 'bg-blue-50 border-blue-500' : 'hover:bg-gray-50'}`}>
-                <div className="font-medium">{i.project_name}</div>
-                <div>{i.unit_number} • {i.area_marla}M</div>
-              </button>
-            ))}
+        <div className="grid grid-cols-2 gap-4">
+          {/* Project Selection */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Project *</label>
+            <input type="text" placeholder="Search projects..." value={projectSearch}
+              onChange={e => setProjectSearch(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />
+            <div className="border rounded-lg max-h-32 overflow-y-auto">
+              {filteredProjects.length === 0 ? (
+                <div className="p-3 text-sm text-gray-400 text-center">No projects with available units</div>
+              ) : filteredProjects.map(p => (
+                <button key={p.id} type="button" onClick={() => selectProject(p.id)}
+                  className={`w-full text-left px-3 py-2 text-sm border-b last:border-0 ${selectedProject === p.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'}`}>
+                  <div className="font-medium">{p.name}</div>
+                  <div className="text-xs text-gray-500">{inventory.filter(i => i.project_id === p.id).length} units available</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Unit Selection */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Unit *</label>
+            <input type="text" placeholder="Search units..." value={unitSearch}
+              onChange={e => setUnitSearch(e.target.value)}
+              disabled={!selectedProject}
+              className="w-full border rounded-lg px-3 py-2 text-sm mb-2 disabled:bg-gray-100" />
+            <div className="border rounded-lg max-h-32 overflow-y-auto">
+              {!selectedProject ? (
+                <div className="p-3 text-sm text-gray-400 text-center">Select a project first</div>
+              ) : filteredUnits.length === 0 ? (
+                <div className="p-3 text-sm text-gray-400 text-center">No matching units</div>
+              ) : filteredUnits.map(i => (
+                <button key={i.id} type="button" onClick={() => selectUnit(i)}
+                  className={`w-full text-left px-3 py-2 text-sm border-b last:border-0 ${selectedInv?.id === i.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'}`}>
+                  <div className="font-medium">{i.unit_number} {i.block && `(${i.block})`}</div>
+                  <div className="text-xs text-gray-500">{i.area_marla} Marla • {formatCurrency(i.rate_per_marla)}/M</div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
         {selectedInv && (
           <>
+            <div className="bg-blue-50 rounded-lg p-3 text-sm">
+              <span className="font-medium">Selected:</span> {selectedInv.project_name} - {selectedInv.unit_number} 
+              ({selectedInv.area_marla} Marla @ {formatCurrency(selectedInv.rate_per_marla)}/M = {formatCurrency(selectedInv.total_value)})
+            </div>
+
             <div><label className="block text-xs font-medium text-gray-500 mb-1">Customer *</label>
               <select required value={form.customer_id} onChange={e => setForm({...form, customer_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
                 <option value="">Select Customer</option>
@@ -566,7 +665,7 @@ function NewTransactionModal({ inventory, onClose, onSuccess }) {
 
         <div className="flex justify-end gap-3 pt-4 border-t">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
-          <button type="submit" className="px-6 py-2 text-sm bg-gray-900 text-white rounded-lg">Create</button>
+          <button type="submit" disabled={!selectedInv} className="px-6 py-2 text-sm bg-gray-900 text-white rounded-lg disabled:bg-gray-300">Create</button>
         </div>
       </form>
     </Modal>
@@ -878,6 +977,730 @@ function BrokersView() {
 }
 
 // ============================================
+// RECEIPTS VIEW (McKinsey-style)
+// ============================================
+function ReceiptsView() {
+  const [receipts, setReceipts] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [customers, setCustomers] = useState([]);
+  const [reps, setReps] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [customerTransactions, setCustomerTransactions] = useState([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [form, setForm] = useState({
+    customer_id: '', transaction_id: '', amount: '',
+    payment_method: 'cash', reference_number: '', payment_date: new Date().toISOString().split('T')[0],
+    notes: '', created_by_rep_id: '', allocations: []
+  });
+
+  useEffect(() => { loadData(); }, []);
+  const loadData = async () => {
+    try {
+      const [rcpRes, sumRes, custRes, repRes] = await Promise.all([
+        api.get('/receipts', { params: { limit: 50 } }).catch(() => ({ data: [] })),
+        api.get('/receipts/summary').catch(() => ({ data: { total_receipts: 0, total_amount: 0, today_count: 0, today_amount: 0, month_count: 0, month_amount: 0, by_method: {} } })),
+        api.get('/customers').catch(() => ({ data: [] })),
+        api.get('/company-reps').catch(() => ({ data: [] }))
+      ]);
+      setReceipts(rcpRes.data || []);
+      setSummary(sumRes.data);
+      setCustomers(custRes.data || []);
+      setReps(repRes.data || []);
+    } catch (e) { 
+      console.error(e); 
+      setSummary({ total_receipts: 0, total_amount: 0, today_count: 0, today_amount: 0, month_count: 0, month_amount: 0, by_method: {} });
+    }
+    finally { setLoading(false); }
+  };
+
+  const selectCustomer = async (customer) => {
+    setSelectedCustomer(customer);
+    setForm({...form, customer_id: customer.id, transaction_id: '', allocations: []});
+    try {
+      const res = await api.get(`/receipts/customer/${customer.id}/transactions`);
+      setCustomerTransactions(res.data || []);
+    } catch (e) { setCustomerTransactions([]); }
+  };
+
+  const selectTransaction = (txn) => {
+    setForm({...form, transaction_id: txn.id, allocations: []});
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.customer_id) { alert('Select a customer'); return; }
+    if (!form.amount || parseFloat(form.amount) <= 0) { alert('Enter valid amount'); return; }
+    try {
+      await api.post('/receipts', form);
+      setShowModal(false);
+      setForm({ customer_id: '', transaction_id: '', amount: '', payment_method: 'cash', reference_number: '', payment_date: new Date().toISOString().split('T')[0], notes: '', created_by_rep_id: '', allocations: [] });
+      setSelectedCustomer(null);
+      setCustomerTransactions([]);
+      setCustomerSearch('');
+      loadData();
+    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+  };
+
+  const filteredCustomers = customers.filter(c =>
+    c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
+    c.mobile.includes(customerSearch) ||
+    c.customer_id.toLowerCase().includes(customerSearch.toLowerCase())
+  );
+
+  const selectedTxn = customerTransactions.find(t => t.id === form.transaction_id);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div><h2 className="text-2xl font-semibold text-gray-900">Receipts</h2>
+          <p className="text-sm text-gray-500 mt-1">Payment collection & allocation</p></div>
+        <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Record Receipt</button>
+      </div>
+
+      {summary && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <SummaryCard label="Total Receipts" value={summary.total_receipts} />
+            <SummaryCard label="Total Collected" value={formatCurrency(summary.total_amount)} />
+            <SummaryCard label="Today" value={summary.today_count} sub={formatCurrency(summary.today_amount)} />
+            <SummaryCard label="This Month" value={summary.month_count} sub={formatCurrency(summary.month_amount)} />
+          </div>
+          <div className="grid grid-cols-4 gap-4">
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Cash</div>
+              <div className="text-lg font-semibold text-green-600">{formatCurrency(summary.by_method?.cash || 0)}</div>
+            </div>
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Cheque</div>
+              <div className="text-lg font-semibold text-blue-600">{formatCurrency(summary.by_method?.cheque || 0)}</div>
+            </div>
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Bank Transfer</div>
+              <div className="text-lg font-semibold text-purple-600">{formatCurrency(summary.by_method?.bank_transfer || 0)}</div>
+            </div>
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Online</div>
+              <div className="text-lg font-semibold text-orange-600">{formatCurrency(summary.by_method?.online || 0)}</div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {loading ? <Loader /> : receipts.length === 0 ? <Empty msg="No receipts recorded" /> : (
+        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+          <table className="w-full">
+            <thead><tr className="border-b border-gray-100">
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Receipt</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Customer</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Project / Unit</th>
+              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Amount</th>
+              <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Method</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Date</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-50">
+              {receipts.map(r => (
+                <tr key={r.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-mono text-gray-900">{r.receipt_id}</div>
+                    {r.reference_number && <div className="text-xs text-gray-400">Ref: {r.reference_number}</div>}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-medium">{r.customer_name}</div>
+                    <div className="text-xs text-gray-400">{r.customer_id}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    {r.project_name ? (
+                      <><div className="text-sm">{r.project_name}</div><div className="text-xs text-gray-500">{r.unit_number}</div></>
+                    ) : <span className="text-sm text-gray-400">-</span>}
+                  </td>
+                  <td className="px-6 py-4 text-right text-sm font-semibold text-green-600">{formatCurrency(r.amount)}</td>
+                  <td className="px-6 py-4 text-center">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      r.payment_method === 'cash' ? 'bg-green-50 text-green-700' :
+                      r.payment_method === 'cheque' ? 'bg-blue-50 text-blue-700' :
+                      r.payment_method === 'bank_transfer' ? 'bg-purple-50 text-purple-700' : 'bg-orange-50 text-orange-700'
+                    }`}>{r.payment_method}</span>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{r.payment_date}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showModal && (
+        <Modal title="Record Receipt" onClose={() => { setShowModal(false); setSelectedCustomer(null); setCustomerTransactions([]); setCustomerSearch(''); }} wide>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Customer Selection */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Customer *</label>
+              <input type="text" placeholder="Search by name, mobile or ID..." value={customerSearch}
+                onChange={e => { setCustomerSearch(e.target.value); setSelectedCustomer(null); }}
+                className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />
+              {customerSearch && !selectedCustomer && (
+                <div className="border rounded-lg max-h-32 overflow-y-auto">
+                  {filteredCustomers.length === 0 ? (
+                    <div className="p-3 text-sm text-gray-400 text-center">No customers found</div>
+                  ) : filteredCustomers.slice(0, 5).map(c => (
+                    <button key={c.id} type="button" onClick={() => { selectCustomer(c); setCustomerSearch(c.name); }}
+                      className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:bg-gray-50">
+                      <div className="font-medium">{c.name}</div>
+                      <div className="text-xs text-gray-500">{c.customer_id} • {c.mobile}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {selectedCustomer && (
+                <div className="bg-blue-50 rounded-lg p-3 text-sm">
+                  <span className="font-medium">Selected:</span> {selectedCustomer.name} ({selectedCustomer.mobile})
+                </div>
+              )}
+            </div>
+
+            {/* Transaction Selection (for multi-purchase customers) */}
+            {selectedCustomer && customerTransactions.length > 0 && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Allocate to Transaction</label>
+                <div className="border rounded-lg max-h-40 overflow-y-auto">
+                  {customerTransactions.map(t => (
+                    <button key={t.id} type="button" onClick={() => selectTransaction(t)}
+                      className={`w-full text-left px-3 py-2 text-sm border-b last:border-0 ${form.transaction_id === t.id ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <div className="font-medium">{t.project_name} - {t.unit_number}</div>
+                          <div className="text-xs text-gray-500">{t.transaction_id}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-semibold text-amber-600">{formatCurrency(t.balance)}</div>
+                          <div className="text-xs text-gray-400">pending</div>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Show pending installments if transaction selected */}
+            {selectedTxn && (
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs font-medium text-gray-500 mb-2">Pending Installments</div>
+                <div className="space-y-1">
+                  {selectedTxn.installments.map(i => (
+                    <div key={i.id} className="flex justify-between text-sm">
+                      <span>#{i.number} - Due {i.due_date}</span>
+                      <span className="text-amber-600">{formatCurrency(i.balance)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Amount *" type="number" required value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} />
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
+                <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="cash">💵 Cash</option>
+                  <option value="cheque">📝 Cheque</option>
+                  <option value="bank_transfer">🏦 Bank Transfer</option>
+                  <option value="online">💳 Online</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Reference # (Cheque/Transaction ID)" value={form.reference_number} onChange={e => setForm({...form, reference_number: e.target.value})} />
+              <Input label="Payment Date" type="date" value={form.payment_date} onChange={e => setForm({...form, payment_date: e.target.value})} />
+            </div>
+
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Received By</label>
+              <select value={form.created_by_rep_id} onChange={e => setForm({...form, created_by_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                <option value="">Select Rep</option>
+                {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </div>
+
+            <Input label="Notes" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} />
+
+            <div className="flex justify-end gap-3 pt-4 border-t">
+              <button type="button" onClick={() => { setShowModal(false); setSelectedCustomer(null); setCustomerTransactions([]); setCustomerSearch(''); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="submit" className="px-6 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">Record Receipt</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// INTERACTIONS VIEW (McKinsey-style dashboard)
+// ============================================
+function InteractionsView() {
+  const [interactions, setInteractions] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [reps, setReps] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [brokers, setBrokers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState({
+    company_rep_id: '', customer_id: '', broker_id: '',
+    interaction_type: 'call', status: '', notes: '', next_follow_up: ''
+  });
+
+  useEffect(() => { loadData(); }, []);
+  const loadData = async () => {
+    try {
+      const [intRes, sumRes, repRes, custRes, brkRes] = await Promise.all([
+        api.get('/interactions', { params: { limit: 50 } }),
+        api.get('/interactions/summary'),
+        api.get('/company-reps'),
+        api.get('/customers'),
+        api.get('/brokers')
+      ]);
+      setInteractions(intRes.data);
+      setSummary(sumRes.data);
+      setReps(repRes.data);
+      setCustomers(custRes.data);
+      setBrokers(brkRes.data);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post('/interactions', form);
+      setShowModal(false);
+      setForm({ company_rep_id: '', customer_id: '', broker_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '' });
+      loadData();
+    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div><h2 className="text-2xl font-semibold text-gray-900">Interactions</h2>
+          <p className="text-sm text-gray-500 mt-1">Track rep communications</p></div>
+        <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Log Interaction</button>
+      </div>
+
+      {summary && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <SummaryCard label="Total Interactions" value={summary.total_interactions} />
+            <SummaryCard label="Total Calls" value={summary.total_calls} />
+            <SummaryCard label="Messages" value={summary.total_messages} />
+            <SummaryCard label="WhatsApp" value={summary.total_whatsapp} />
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-white rounded-2xl shadow-sm border p-5">
+              <div className="text-xs font-medium text-gray-400 uppercase">Today</div>
+              <div className="mt-2 text-3xl font-semibold text-gray-900">{summary.today}</div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border p-5">
+              <div className="text-xs font-medium text-gray-400 uppercase">This Week</div>
+              <div className="mt-2 text-3xl font-semibold text-gray-900">{summary.this_week}</div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border p-5">
+              <div className="text-xs font-medium text-gray-400 uppercase">This Month</div>
+              <div className="mt-2 text-3xl font-semibold text-gray-900">{summary.this_month}</div>
+            </div>
+          </div>
+          {summary.pending_followups > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="text-sm font-medium text-amber-800">⚠️ {summary.pending_followups} pending follow-ups due</div>
+            </div>
+          )}
+        </>
+      )}
+
+      {loading ? <Loader /> : interactions.length === 0 ? <Empty msg="No interactions logged" /> : (
+        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+          <table className="w-full">
+            <thead><tr className="border-b border-gray-100">
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">ID</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Rep</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Contact</th>
+              <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Type</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Follow-up</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Date</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-50">
+              {interactions.map(i => (
+                <tr key={i.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 text-sm font-mono text-gray-500">{i.interaction_id}</td>
+                  <td className="px-6 py-4 text-sm">{i.rep_name}</td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-medium">{i.customer_name || i.broker_name}</div>
+                    <div className="text-xs text-gray-400">{i.customer_id ? 'Customer' : 'Broker'}</div>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      i.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
+                      i.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' : 'bg-gray-100'
+                    }`}>{i.interaction_type}</span>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{i.status || '-'}</td>
+                  <td className="px-6 py-4 text-sm">{i.next_follow_up || '-'}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{new Date(i.created_at).toLocaleDateString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showModal && (
+        <Modal title="Log Interaction" onClose={() => setShowModal(false)}>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Company Rep *</label>
+              <select required value={form.company_rep_id} onChange={e => setForm({...form, company_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                <option value="">Select Rep</option>
+                {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
+                <select value={form.customer_id} onChange={e => setForm({...form, customer_id: e.target.value, broker_id: e.target.value ? '' : form.broker_id})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select Customer</option>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.mobile})</option>)}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Or Broker</label>
+                <select value={form.broker_id} onChange={e => setForm({...form, broker_id: e.target.value, customer_id: e.target.value ? '' : form.customer_id})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select Broker</option>
+                  {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
+                <select required value={form.interaction_type} onChange={e => setForm({...form, interaction_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="call">📞 Call</option>
+                  <option value="message">💬 Message</option>
+                  <option value="whatsapp">📱 WhatsApp</option>
+                </select>
+              </div>
+              <Input label="Status" value={form.status} onChange={e => setForm({...form, status: e.target.value})} placeholder="e.g., Interested, Not available" />
+            </div>
+            <Input label="Notes" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} />
+            <Input label="Next Follow-up" type="date" value={form.next_follow_up} onChange={e => setForm({...form, next_follow_up: e.target.value})} />
+            <div className="flex justify-end gap-3 pt-4">
+              <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Log</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// CAMPAIGNS VIEW (Lead Management)
+// ============================================
+function CampaignsView() {
+  const [campaigns, setCampaigns] = useState([]);
+  const [leads, setLeads] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [reps, setReps] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCampaignModal, setShowCampaignModal] = useState(false);
+  const [showLeadModal, setShowLeadModal] = useState(false);
+  const [selectedCampaign, setSelectedCampaign] = useState(null);
+  const [campaignForm, setCampaignForm] = useState({ name: '', source: 'facebook', start_date: '', budget: '', notes: '' });
+  const [leadForm, setLeadForm] = useState({ name: '', mobile: '', email: '', assigned_rep_id: '', lead_type: 'prospect', notes: '' });
+  const [importFile, setImportFile] = useState(null);
+  const [importResult, setImportResult] = useState(null);
+
+  useEffect(() => { loadData(); }, []);
+  const loadData = async () => {
+    try {
+      const [cmpRes, sumRes, repRes] = await Promise.all([
+        api.get('/campaigns').catch(() => ({ data: [] })),
+        api.get('/campaigns/summary').catch(() => ({ data: { total_campaigns: 0, active_campaigns: 0, total_leads: 0, converted_leads: 0, total_budget: 0, conversion_rate: 0 } })),
+        api.get('/company-reps').catch(() => ({ data: [] }))
+      ]);
+      setCampaigns(cmpRes.data || []);
+      setSummary(sumRes.data);
+      setReps(repRes.data || []);
+    } catch (e) { console.error(e); setSummary({ total_campaigns: 0, active_campaigns: 0, total_leads: 0, converted_leads: 0, total_budget: 0, conversion_rate: 0 }); }
+    finally { setLoading(false); }
+  };
+
+  const loadLeads = async (campaign) => {
+    setSelectedCampaign(campaign);
+    try {
+      const res = await api.get('/leads', { params: { campaign_id: campaign.id } });
+      setLeads(res.data || []);
+    } catch (e) { console.error(e); setLeads([]); }
+  };
+
+  const handleCampaignSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post('/campaigns', campaignForm);
+      setShowCampaignModal(false);
+      setCampaignForm({ name: '', source: 'facebook', start_date: '', budget: '', notes: '' });
+      loadData();
+    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+  };
+
+  const handleLeadSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post('/leads', { ...leadForm, campaign_id: selectedCampaign?.id });
+      setShowLeadModal(false);
+      setLeadForm({ name: '', mobile: '', email: '', assigned_rep_id: '', notes: '' });
+      if (selectedCampaign) loadLeads(selectedCampaign);
+      loadData();
+    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+  };
+
+  const handleImport = async () => {
+    if (!importFile || !selectedCampaign) return;
+    const fd = new FormData(); fd.append('file', importFile);
+    try {
+      const res = await api.post(`/leads/bulk-import?campaign_id=${selectedCampaign.id}`, fd);
+      setImportResult(res.data);
+      setImportFile(null);
+      loadLeads(selectedCampaign);
+      loadData();
+    } catch (e) { setImportResult({ success: 0, errors: [e.message] }); }
+  };
+
+  const updateLeadStatus = async (lead, status) => {
+    try {
+      await api.put(`/leads/${lead.id}`, { status });
+      if (selectedCampaign) loadLeads(selectedCampaign);
+    } catch (e) { alert('Error updating lead'); }
+  };
+
+  const assignRep = async (lead, repId) => {
+    try {
+      await api.put(`/leads/${lead.id}`, { assigned_rep_id: repId || null });
+      if (selectedCampaign) loadLeads(selectedCampaign);
+    } catch (e) { alert('Error assigning rep'); }
+  };
+
+  const convertLead = async (lead, convertTo) => {
+    if (!confirm(`Convert "${lead.name}" to ${convertTo}? This will create a new ${convertTo} record.`)) return;
+    try {
+      await api.post(`/leads/${lead.id}/convert`, { convert_to: convertTo });
+      if (selectedCampaign) loadLeads(selectedCampaign);
+      loadData();
+      alert(`Lead converted to ${convertTo} successfully!`);
+    } catch (e) { alert(e.response?.data?.detail || 'Error converting lead'); }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div><h2 className="text-2xl font-semibold text-gray-900">Campaigns</h2>
+          <p className="text-sm text-gray-500 mt-1">Manage ad campaigns and leads</p></div>
+        <button onClick={() => setShowCampaignModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">New Campaign</button>
+      </div>
+
+      {summary && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <SummaryCard label="Total Campaigns" value={summary.total_campaigns} />
+          <SummaryCard label="Active" value={summary.active_campaigns} />
+          <SummaryCard label="Total Leads" value={summary.total_leads} />
+          <SummaryCard label="Conversion Rate" value={`${summary.conversion_rate}%`} />
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Campaigns List */}
+        <div className="lg:col-span-1">
+          <div className="bg-white rounded-2xl shadow-sm border p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Campaigns</h3>
+            {loading ? <Loader /> : campaigns.length === 0 ? (
+              <div className="text-center py-8 text-gray-400 text-sm">No campaigns</div>
+            ) : (
+              <div className="space-y-2">
+                {campaigns.map(c => (
+                  <button key={c.id} onClick={() => loadLeads(c)}
+                    className={`w-full text-left p-3 rounded-lg border ${selectedCampaign?.id === c.id ? 'bg-blue-50 border-blue-500' : 'hover:bg-gray-50'}`}>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-medium text-sm">{c.name}</div>
+                        <div className="text-xs text-gray-500">{c.source} • {c.start_date}</div>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded-full text-xs ${c.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100'}`}>{c.status}</span>
+                    </div>
+                    <div className="flex gap-4 mt-2 text-xs">
+                      <span className="text-gray-500">Leads: <strong>{c.lead_stats.total}</strong></span>
+                      <span className="text-green-600">Converted: <strong>{c.lead_stats.converted}</strong></span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Leads for Selected Campaign */}
+        <div className="lg:col-span-2">
+          <div className="bg-white rounded-2xl shadow-sm border p-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-900">
+                {selectedCampaign ? `Leads - ${selectedCampaign.name}` : 'Select a campaign'}
+              </h3>
+              {selectedCampaign && (
+                <button onClick={() => setShowLeadModal(true)} className="text-sm text-blue-600 hover:text-blue-800">+ Add Lead</button>
+              )}
+            </div>
+            
+            {selectedCampaign && (
+              <div className="flex items-center gap-4 mb-4 p-3 bg-gray-50 rounded-lg">
+                <input type="file" accept=".csv" onChange={e => setImportFile(e.target.files[0])} className="text-xs" />
+                {importFile && <button onClick={handleImport} className="text-sm bg-gray-900 text-white px-3 py-1 rounded">Import</button>}
+                <a href="#" onClick={async (e) => { e.preventDefault(); const res = await api.get('/leads/template/download', { responseType: 'blob' }); const url = window.URL.createObjectURL(new Blob([res.data])); const a = document.createElement('a'); a.href = url; a.download = 'leads_template.csv'; a.click(); }} className="text-xs text-gray-500 hover:text-gray-700">Download Template</a>
+              </div>
+            )}
+            
+            {importResult && (
+              <div className={`mb-4 p-3 rounded-lg text-sm ${importResult.success > 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                {importResult.success > 0 ? `✓ Imported ${importResult.success} leads` : 'Import failed'}
+              </div>
+            )}
+
+            {!selectedCampaign ? (
+              <div className="text-center py-12 text-gray-400 text-sm">← Select a campaign to view leads</div>
+            ) : leads.length === 0 ? (
+              <div className="text-center py-12 text-gray-400 text-sm">No leads in this campaign</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="border-b">
+                    <th className="text-left py-2 px-2 text-xs text-gray-500">Lead</th>
+                    <th className="text-left py-2 px-2 text-xs text-gray-500">Contact</th>
+                    <th className="text-left py-2 px-2 text-xs text-gray-500">Rep</th>
+                    <th className="text-left py-2 px-2 text-xs text-gray-500">Type</th>
+                    <th className="text-left py-2 px-2 text-xs text-gray-500">Status</th>
+                    <th className="text-right py-2 px-2 text-xs text-gray-500">Actions</th>
+                  </tr></thead>
+                  <tbody>
+                    {leads.map(l => (
+                      <tr key={l.id} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="py-2 px-2">
+                          <div className="font-medium">{l.name}</div>
+                          <div className="text-xs text-gray-400">{l.lead_id}</div>
+                        </td>
+                        <td className="py-2 px-2 text-gray-600">{l.mobile || l.email || '-'}</td>
+                        <td className="py-2 px-2">
+                          <select value={l.rep_id || ''} onChange={e => assignRep(l, e.target.value)} className="text-xs rounded px-1 py-0.5 border">
+                            <option value="">Unassigned</option>
+                            {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                          </select>
+                        </td>
+                        <td className="py-2 px-2">
+                          <span className={`px-2 py-0.5 rounded-full text-xs ${
+                            l.lead_type === 'customer' ? 'bg-blue-50 text-blue-700' :
+                            l.lead_type === 'broker' ? 'bg-purple-50 text-purple-700' : 'bg-gray-100'
+                          }`}>{l.lead_type || 'prospect'}</span>
+                        </td>
+                        <td className="py-2 px-2">
+                          <select value={l.status} onChange={e => updateLeadStatus(l, e.target.value)}
+                            className={`text-xs rounded px-2 py-1 border-0 ${
+                              l.status === 'converted' ? 'bg-green-50 text-green-700' :
+                              l.status === 'lost' ? 'bg-red-50 text-red-700' :
+                              l.status === 'qualified' ? 'bg-blue-50 text-blue-700' : 'bg-gray-100'
+                            }`}>
+                            <option value="new">New</option>
+                            <option value="contacted">Contacted</option>
+                            <option value="qualified">Qualified</option>
+                            <option value="converted">Converted</option>
+                            <option value="lost">Lost</option>
+                          </select>
+                        </td>
+                        <td className="py-2 px-2 text-right">
+                          {l.status !== 'converted' && (
+                            <div className="flex gap-1 justify-end">
+                              <button onClick={() => convertLead(l, 'customer')} className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="Convert to Customer">→ Customer</button>
+                              <button onClick={() => convertLead(l, 'broker')} className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded hover:bg-purple-100" title="Convert to Broker">→ Broker</button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {showCampaignModal && (
+        <Modal title="New Campaign" onClose={() => setShowCampaignModal(false)}>
+          <form onSubmit={handleCampaignSubmit} className="space-y-4">
+            <Input label="Campaign Name" required value={campaignForm.name} onChange={e => setCampaignForm({...campaignForm, name: e.target.value})} />
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
+                <select value={campaignForm.source} onChange={e => setCampaignForm({...campaignForm, source: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="facebook">Facebook</option>
+                  <option value="google">Google</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="referral">Referral</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <Input label="Start Date" type="date" value={campaignForm.start_date} onChange={e => setCampaignForm({...campaignForm, start_date: e.target.value})} />
+            </div>
+            <Input label="Budget (PKR)" type="number" value={campaignForm.budget} onChange={e => setCampaignForm({...campaignForm, budget: e.target.value})} />
+            <Input label="Notes" value={campaignForm.notes} onChange={e => setCampaignForm({...campaignForm, notes: e.target.value})} />
+            <div className="flex justify-end gap-3 pt-4">
+              <button type="button" onClick={() => setShowCampaignModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Create</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {showLeadModal && (
+        <Modal title="Add Lead" onClose={() => setShowLeadModal(false)}>
+          <form onSubmit={handleLeadSubmit} className="space-y-4">
+            <Input label="Name" required value={leadForm.name} onChange={e => setLeadForm({...leadForm, name: e.target.value})} />
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Mobile" value={leadForm.mobile} onChange={e => setLeadForm({...leadForm, mobile: e.target.value})} />
+              <Input label="Email" type="email" value={leadForm.email} onChange={e => setLeadForm({...leadForm, email: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Lead Type</label>
+                <select value={leadForm.lead_type} onChange={e => setLeadForm({...leadForm, lead_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="prospect">Prospect</option>
+                  <option value="customer">Potential Customer</option>
+                  <option value="broker">Potential Broker</option>
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Assign to Rep</label>
+                <select value={leadForm.assigned_rep_id} onChange={e => setLeadForm({...leadForm, assigned_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Unassigned</option>
+                  {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <Input label="Notes" value={leadForm.notes} onChange={e => setLeadForm({...leadForm, notes: e.target.value})} />
+            <div className="flex justify-end gap-3 pt-4">
+              <button type="button" onClick={() => setShowLeadModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Add</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============================================
 // SETTINGS VIEW (Company Reps)
 // ============================================
 function SettingsView() {
@@ -970,11 +1793,12 @@ function SettingsView() {
 // ============================================
 // SHARED COMPONENTS
 // ============================================
-function SummaryCard({ label, value }) {
+function SummaryCard({ label, value, sub }) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border p-5">
       <div className="text-xs font-medium text-gray-400 uppercase">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-gray-900">{value}</div>
+      {sub && <div className="text-sm text-gray-500 mt-1">{sub}</div>}
     </div>
   );
 }
