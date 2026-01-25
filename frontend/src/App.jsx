@@ -31,7 +31,8 @@ export default function App() {
     { id: 'interactions', label: 'Interactions' },
     { id: 'customers', label: 'Customers' },
     { id: 'brokers', label: 'Brokers' },
-    { id: 'campaigns', label: 'Campaigns' }
+    { id: 'campaigns', label: 'Campaigns' },
+    { id: 'media', label: 'Media Library' }
   ];
   
   // All tabs for reference
@@ -127,6 +128,7 @@ export default function App() {
         {activeTab === 'customers' && <CustomersView />}
         {activeTab === 'brokers' && <BrokersView />}
         {activeTab === 'campaigns' && <CampaignsView />}
+        {activeTab === 'media' && <MediaLibraryView />}
         {activeTab === 'settings' && <SettingsView />}
       </main>
     </div>
@@ -140,6 +142,7 @@ function ProjectsView() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [selectedProject, setSelectedProject] = useState(null);
   const [form, setForm] = useState({ name: '', location: '', description: '' });
 
   useEffect(() => { loadProjects(); }, []);
@@ -166,7 +169,7 @@ function ProjectsView() {
       {loading ? <Loader /> : projects.length === 0 ? <Empty msg="No projects yet" /> : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {projects.map(p => (
-            <div key={p.id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+            <div key={p.id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => setSelectedProject(p)}>
               <div className="p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div>
@@ -208,7 +211,46 @@ function ProjectsView() {
           </form>
         </Modal>
       )}
+
+      {selectedProject && <ProjectDetailModal project={selectedProject} onClose={() => setSelectedProject(null)} onUpdate={loadProjects} />}
     </div>
+  );
+}
+
+// ============================================
+// PROJECT DETAIL MODAL
+// ============================================
+function ProjectDetailModal({ project, onClose, onUpdate }) {
+  return (
+    <Modal title={`Project ${project.project_id}`} onClose={onClose} wide>
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-6">
+          <div><div className="text-xs text-gray-400">Project Name</div><div className="font-medium text-lg">{project.name}</div></div>
+          <div><div className="text-xs text-gray-400">Location</div><div className="font-medium">{project.location || '-'}</div></div>
+          <div><div className="text-xs text-gray-400">Status</div><div className="font-medium">
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+              project.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100'
+            }`}>{project.status || 'active'}</span>
+          </div></div>
+          <div><div className="text-xs text-gray-400">Total Units</div><div className="font-medium">{project.stats?.total_units || 0}</div></div>
+          <div><div className="text-xs text-gray-400">Available</div><div className="font-semibold text-green-600">{project.stats?.available || 0}</div></div>
+          <div><div className="text-xs text-gray-400">Sold</div><div className="font-semibold text-blue-600">{project.stats?.sold || 0}</div></div>
+        </div>
+        {project.description && (
+          <div className="border-t pt-4">
+            <div className="text-xs text-gray-400 mb-1">Description</div>
+            <div className="text-sm">{project.description}</div>
+          </div>
+        )}
+        <div className="border-t pt-4">
+          <MediaManager 
+            entityType="project" 
+            entityId={project.id || project.project_id} 
+            onUpload={onUpdate} 
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -856,6 +898,14 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
             </tbody>
           </table>
         </div>
+
+        <div className="border-t pt-4">
+          <MediaManager 
+            entityType="transaction" 
+            entityId={txn.id || txn.transaction_id} 
+            onUpload={onUpdate} 
+          />
+        </div>
       </div>
     </Modal>
   );
@@ -1120,6 +1170,7 @@ function ReceiptsView() {
   const [reps, setReps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [selectedReceipt, setSelectedReceipt] = useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [customerTransactions, setCustomerTransactions] = useState([]);
   const [customerSearch, setCustomerSearch] = useState('');
@@ -1235,7 +1286,7 @@ function ReceiptsView() {
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {receipts.map(r => (
-                <tr key={r.id} className="hover:bg-gray-50">
+                <tr key={r.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setSelectedReceipt(r)}>
                   <td className="px-6 py-4">
                     <div className="text-sm font-mono text-gray-900">{r.receipt_id}</div>
                     {r.reference_number && <div className="text-xs text-gray-400">Ref: {r.reference_number}</div>}
@@ -1366,7 +1417,42 @@ function ReceiptsView() {
           </form>
         </Modal>
       )}
+
+      {selectedReceipt && <ReceiptDetailModal receipt={selectedReceipt} onClose={() => setSelectedReceipt(null)} onUpdate={loadData} />}
     </div>
+  );
+}
+
+// ============================================
+// RECEIPT DETAIL MODAL
+// ============================================
+function ReceiptDetailModal({ receipt, onClose, onUpdate }) {
+  return (
+    <Modal title={`Receipt ${receipt.receipt_id}`} onClose={onClose} wide>
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-6">
+          <div><div className="text-xs text-gray-400">Customer</div><div className="font-medium">{receipt.customer_name}</div></div>
+          <div><div className="text-xs text-gray-400">Amount</div><div className="font-semibold text-lg text-green-600">{formatCurrency(receipt.amount)}</div></div>
+          <div><div className="text-xs text-gray-400">Payment Method</div><div className="font-medium">{receipt.payment_method}</div></div>
+          <div><div className="text-xs text-gray-400">Payment Date</div><div className="font-medium">{receipt.payment_date}</div></div>
+          {receipt.reference_number && <div><div className="text-xs text-gray-400">Reference Number</div><div className="font-medium">{receipt.reference_number}</div></div>}
+          {receipt.project_name && <div><div className="text-xs text-gray-400">Project / Unit</div><div className="font-medium">{receipt.project_name} - {receipt.unit_number}</div></div>}
+        </div>
+        {receipt.notes && (
+          <div className="border-t pt-4">
+            <div className="text-xs text-gray-400 mb-1">Notes</div>
+            <div className="text-sm">{receipt.notes}</div>
+          </div>
+        )}
+        <div className="border-t pt-4">
+          <MediaManager 
+            entityType="receipt" 
+            entityId={receipt.id || receipt.receipt_id} 
+            onUpload={onUpdate} 
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1381,6 +1467,7 @@ function InteractionsView() {
   const [brokers, setBrokers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [selectedInteraction, setSelectedInteraction] = useState(null);
   const [form, setForm] = useState({
     company_rep_id: '', customer_id: '', broker_id: '',
     interaction_type: 'call', status: '', notes: '', next_follow_up: ''
@@ -1467,7 +1554,7 @@ function InteractionsView() {
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {interactions.map(i => (
-                <tr key={i.id} className="hover:bg-gray-50">
+                <tr key={i.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setSelectedInteraction(i)}>
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{i.interaction_id}</td>
                   <td className="px-6 py-4 text-sm">{i.rep_name}</td>
                   <td className="px-6 py-4">
@@ -1532,7 +1619,48 @@ function InteractionsView() {
           </form>
         </Modal>
       )}
+
+      {selectedInteraction && <InteractionDetailModal interaction={selectedInteraction} onClose={() => setSelectedInteraction(null)} onUpdate={loadData} />}
     </div>
+  );
+}
+
+// ============================================
+// INTERACTION DETAIL MODAL
+// ============================================
+function InteractionDetailModal({ interaction, onClose, onUpdate }) {
+  return (
+    <Modal title={`Interaction ${interaction.interaction_id}`} onClose={onClose} wide>
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-6">
+          <div><div className="text-xs text-gray-400">Company Rep</div><div className="font-medium">{interaction.rep_name}</div></div>
+          <div><div className="text-xs text-gray-400">Contact</div><div className="font-medium">{interaction.customer_name || interaction.broker_name || '-'}</div></div>
+          <div><div className="text-xs text-gray-400">Contact Type</div><div className="font-medium">{interaction.customer_id ? 'Customer' : 'Broker'}</div></div>
+          <div><div className="text-xs text-gray-400">Interaction Type</div><div className="font-medium">
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+              interaction.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
+              interaction.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' : 'bg-gray-100'
+            }`}>{interaction.interaction_type}</span>
+          </div></div>
+          <div><div className="text-xs text-gray-400">Status</div><div className="font-medium">{interaction.status || '-'}</div></div>
+          <div><div className="text-xs text-gray-400">Date</div><div className="font-medium">{new Date(interaction.created_at).toLocaleDateString()}</div></div>
+          {interaction.next_follow_up && <div><div className="text-xs text-gray-400">Next Follow-up</div><div className="font-medium">{interaction.next_follow_up}</div></div>}
+        </div>
+        {interaction.notes && (
+          <div className="border-t pt-4">
+            <div className="text-xs text-gray-400 mb-1">Notes</div>
+            <div className="text-sm">{interaction.notes}</div>
+          </div>
+        )}
+        <div className="border-t pt-4">
+          <MediaManager 
+            entityType="interaction" 
+            entityId={interaction.id || interaction.interaction_id} 
+            onUpload={onUpdate} 
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1846,6 +1974,7 @@ function PaymentsView() {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [selectedPayment, setSelectedPayment] = useState(null);
   const [filter, setFilter] = useState({ payment_type: '', status: '', broker_id: '', rep_id: '', creditor_id: '' });
   const [form, setForm] = useState({
     payment_type: 'broker_commission', payee_type: 'broker',
@@ -2029,7 +2158,7 @@ function PaymentsView() {
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {payments.map(p => (
-                <tr key={p.id} className="hover:bg-gray-50">
+                <tr key={p.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setSelectedPayment(p)}>
                   <td className="px-6 py-4">
                     <div className="text-sm font-mono text-gray-900">{p.payment_id}</div>
                     {p.reference_number && <div className="text-xs text-gray-400">Ref: {p.reference_number}</div>}
@@ -2152,7 +2281,48 @@ function PaymentsView() {
           </form>
         </Modal>
       )}
+
+      {selectedPayment && <PaymentDetailModal payment={selectedPayment} onClose={() => setSelectedPayment(null)} onUpdate={loadData} />}
     </div>
+  );
+}
+
+// ============================================
+// PAYMENT DETAIL MODAL
+// ============================================
+function PaymentDetailModal({ payment, onClose, onUpdate }) {
+  return (
+    <Modal title={`Payment ${payment.payment_id}`} onClose={onClose} wide>
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-6">
+          <div><div className="text-xs text-gray-400">Payee</div><div className="font-medium">{payment.broker_name || payment.rep_name || payment.creditor_name || '-'}</div></div>
+          <div><div className="text-xs text-gray-400">Amount</div><div className="font-semibold text-lg text-red-600">{formatCurrency(payment.amount)}</div></div>
+          <div><div className="text-xs text-gray-400">Payment Type</div><div className="font-medium">{payment.payment_type.replace('_', ' ')}</div></div>
+          <div><div className="text-xs text-gray-400">Payment Method</div><div className="font-medium">{payment.payment_method || '-'}</div></div>
+          <div><div className="text-xs text-gray-400">Payment Date</div><div className="font-medium">{payment.payment_date}</div></div>
+          <div><div className="text-xs text-gray-400">Status</div><div className="font-medium">
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+              payment.status === 'completed' ? 'bg-green-50 text-green-700' :
+              payment.status === 'pending' ? 'bg-amber-50 text-amber-700' : 'bg-gray-100'
+            }`}>{payment.status}</span>
+          </div></div>
+          {payment.reference_number && <div><div className="text-xs text-gray-400">Reference Number</div><div className="font-medium">{payment.reference_number}</div></div>}
+        </div>
+        {payment.notes && (
+          <div className="border-t pt-4">
+            <div className="text-xs text-gray-400 mb-1">Notes</div>
+            <div className="text-sm">{payment.notes}</div>
+          </div>
+        )}
+        <div className="border-t pt-4">
+          <MediaManager 
+            entityType="payment" 
+            entityId={payment.id || payment.payment_id} 
+            onUpload={onUpdate} 
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2795,6 +2965,217 @@ function SettingsView() {
             </div>
           </form>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// MEDIA LIBRARY VIEW
+// ============================================
+function MediaLibraryView() {
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [filters, setFilters] = useState({
+    entity_type: '',
+    file_type: '',
+    search: ''
+  });
+
+  useEffect(() => {
+    loadFiles();
+  }, [filters]);
+
+  const loadFiles = async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (filters.entity_type) params.entity_type = filters.entity_type;
+      if (filters.file_type) params.file_type = filters.file_type;
+      if (filters.search) params.search = filters.search;
+      
+      const res = await api.get('/media/library', { params });
+      console.log('Media Library response:', res.data);
+      setFiles(res.data.files || []);
+      setTotal(res.data.total || 0);
+    } catch (e) {
+      console.error('Error loading media library:', e);
+      console.error('Error response:', e.response?.data);
+      setFiles([]);
+      setTotal(0);
+    }
+    finally {
+      setLoading(false);
+    }
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+  };
+
+  const getFileIcon = (fileType) => {
+    switch(fileType) {
+      case 'pdf': return '📄';
+      case 'excel': return '📊';
+      case 'image': return '🖼️';
+      case 'video': return '🎥';
+      case 'audio': return '🎵';
+      default: return '📎';
+    }
+  };
+
+  const handleDownload = (fileId, fileName) => {
+    window.open(`/api/media/${fileId}/download`, '_blank');
+  };
+
+  const handleDelete = async (fileId) => {
+    if (!confirm('Delete this file?')) return;
+    try {
+      await api.delete(`/media/${fileId}`);
+      loadFiles();
+    } catch (e) {
+      alert('Error deleting file');
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">Media Library</h2>
+          <p className="text-sm text-gray-500 mt-1">Search and manage all attachments, documents, and media files</p>
+        </div>
+        <div className="text-sm text-gray-600">
+          {total} {total === 1 ? 'file' : 'files'}
+        </div>
+      </div>
+
+      {/* Search and Filters */}
+      <div className="bg-white rounded-xl border p-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-gray-500 mb-1">Search Files</label>
+            <input
+              type="text"
+              placeholder="Search by file name or description..."
+              value={filters.search}
+              onChange={e => setFilters({...filters, search: e.target.value})}
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Entity Type</label>
+            <select
+              value={filters.entity_type}
+              onChange={e => setFilters({...filters, entity_type: e.target.value})}
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="">All Types</option>
+              <option value="receipt">Receipts</option>
+              <option value="payment">Payments</option>
+              <option value="transaction">Transactions</option>
+              <option value="project">Projects</option>
+              <option value="interaction">Interactions</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">File Type</label>
+            <select
+              value={filters.file_type}
+              onChange={e => setFilters({...filters, file_type: e.target.value})}
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="">All Files</option>
+              <option value="pdf">PDF</option>
+              <option value="excel">Excel</option>
+              <option value="image">Images</option>
+              <option value="video">Videos</option>
+              <option value="audio">Audio</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Files Grid */}
+      {loading ? (
+        <Loader />
+      ) : files.length === 0 ? (
+        <Empty msg={filters.search || filters.entity_type || filters.file_type ? "No files match your filters" : "No files uploaded yet"} />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {files.map(file => (
+            <div key={file.id} className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md transition-shadow">
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <span className="text-2xl">{getFileIcon(file.file_type)}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate" title={file.file_name}>
+                      {file.file_name}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {formatFileSize(file.file_size)} • {file.file_type}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {file.description && (
+                <div className="text-xs text-gray-600 mb-3 line-clamp-2">{file.description}</div>
+              )}
+
+              <div className="space-y-2 mb-3">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className={`px-2 py-0.5 rounded-full ${
+                    file.entity_type === 'receipt' ? 'bg-green-50 text-green-700' :
+                    file.entity_type === 'payment' ? 'bg-red-50 text-red-700' :
+                    file.entity_type === 'transaction' ? 'bg-blue-50 text-blue-700' :
+                    file.entity_type === 'project' ? 'bg-purple-50 text-purple-700' :
+                    'bg-gray-50 text-gray-700'
+                  }`}>
+                    {file.entity_type}
+                  </span>
+                  {file.entity_ref && (
+                    <span className="text-gray-500 font-mono">{file.entity_ref}</span>
+                  )}
+                </div>
+                {file.entity_name && (
+                  <div className="text-xs text-gray-600 truncate" title={file.entity_name}>
+                    {file.entity_name}
+                  </div>
+                )}
+                {file.uploaded_by && (
+                  <div className="text-xs text-gray-400">
+                    Uploaded by {file.uploaded_by}
+                  </div>
+                )}
+                <div className="text-xs text-gray-400">
+                  {new Date(file.created_at).toLocaleDateString('en-PK', { year: 'numeric', month: 'short', day: 'numeric' })}
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t">
+                <button
+                  onClick={() => handleDownload(file.file_id, file.file_name)}
+                  className="flex-1 px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors"
+                >
+                  Download
+                </button>
+                <button
+                  onClick={() => handleDelete(file.file_id)}
+                  className="px-3 py-1.5 text-xs bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

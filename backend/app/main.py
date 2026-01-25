@@ -2,7 +2,7 @@
 Radius CRM v3 - Complete Backend
 Customers, Brokers, Projects, Inventory, Transactions
 """
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, text
@@ -2682,7 +2682,7 @@ def get_brokers_excel(db: Session = Depends(get_db)):
 import shutil
 from pathlib import Path
 
-MEDIA_ROOT = Path("media")
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "media"))
 MEDIA_ROOT.mkdir(exist_ok=True)
 for entity_type in ["transactions", "interactions", "projects", "receipts", "payments"]:
     (MEDIA_ROOT / entity_type).mkdir(exist_ok=True)
@@ -2697,13 +2697,132 @@ def get_file_type(filename: str) -> str:
     elif ext in ['mp4', 'avi', 'mov', 'mkv']: return 'video'
     else: return 'other'
 
+@app.get("/api/media/library")
+def get_media_library(
+    entity_type: str = Query(None),
+    file_type: str = Query(None),
+    search: str = Query(None),
+    limit: int = Query(100),
+    offset: int = Query(0),
+    db: Session = Depends(get_db)
+):
+    """Get all media files with search and filters"""
+    try:
+        query = db.query(MediaFile)
+        
+        # Apply filters
+        if entity_type:
+            query = query.filter(MediaFile.entity_type == entity_type)
+        if file_type:
+            query = query.filter(MediaFile.file_type == file_type)
+        if search:
+            search_term = f"%{search.lower()}%"
+            query = query.filter(
+                (func.lower(MediaFile.file_name).like(search_term)) |
+                (func.lower(MediaFile.description).like(search_term))
+            )
+        
+        # Get total count
+        total = query.count()
+        
+        # Apply pagination and ordering
+        files = query.order_by(MediaFile.created_at.desc()).offset(offset).limit(limit).all()
+        
+        # Build response with entity information
+        result = []
+        for f in files:
+            # Get entity details
+            entity_name = None
+            entity_ref = None
+            
+            if f.entity_type == "transaction":
+                entity = db.query(Transaction).filter(Transaction.id == f.entity_id).first()
+                if entity:
+                    customer = db.query(Customer).filter(Customer.id == entity.customer_id).first() if entity.customer_id else None
+                    project = db.query(Project).filter(Project.id == entity.project_id).first() if entity.project_id else None
+                    entity_name = f"{(customer.name if customer else 'N/A')} - {(project.name if project else 'N/A')}"
+                    entity_ref = entity.transaction_id
+            elif f.entity_type == "receipt":
+                entity = db.query(Receipt).filter(Receipt.id == f.entity_id).first()
+                if entity:
+                    customer = db.query(Customer).filter(Customer.id == entity.customer_id).first() if entity.customer_id else None
+                    entity_name = f"Receipt for {customer.name if customer else 'N/A'}"
+                    entity_ref = entity.receipt_id
+            elif f.entity_type == "payment":
+                entity = db.query(Payment).filter(Payment.id == f.entity_id).first()
+                if entity:
+                    if entity.broker_id:
+                        broker = db.query(Broker).filter(Broker.id == entity.broker_id).first()
+                        entity_name = f"Payment to {broker.name if broker else 'N/A'}"
+                    elif entity.company_rep_id:
+                        rep = db.query(CompanyRep).filter(CompanyRep.id == entity.company_rep_id).first()
+                        entity_name = f"Payment to {rep.name if rep else 'N/A'}"
+                    elif entity.creditor_id:
+                        creditor = db.query(Creditor).filter(Creditor.id == entity.creditor_id).first()
+                        entity_name = f"Payment to {creditor.name if creditor else 'N/A'}"
+                    else:
+                        entity_name = "Payment"
+                    entity_ref = entity.payment_id
+            elif f.entity_type == "project":
+                try:
+                    entity = db.query(Project).filter(Project.id == f.entity_id).first()
+                    if entity:
+                        entity_name = entity.name
+                        entity_ref = entity.project_id
+                except Exception as e:
+                    # If lookup fails, still return the file but without entity info
+                    entity_name = None
+                    entity_ref = None
+            elif f.entity_type == "interaction":
+                entity = db.query(Interaction).filter(Interaction.id == f.entity_id).first()
+                if entity:
+                    if entity.customer_id:
+                        customer = db.query(Customer).filter(Customer.id == entity.customer_id).first()
+                        entity_name = f"Interaction with {customer.name if customer else 'N/A'}"
+                    elif entity.broker_id:
+                        broker = db.query(Broker).filter(Broker.id == entity.broker_id).first()
+                        entity_name = f"Interaction with {broker.name if broker else 'N/A'}"
+                    else:
+                        entity_name = "Interaction"
+                    entity_ref = entity.interaction_id
+            
+            # Get uploader info
+            rep = db.query(CompanyRep).filter(CompanyRep.id == f.uploaded_by_rep_id).first() if f.uploaded_by_rep_id else None
+            
+            result.append({
+                "id": str(f.id),
+                "file_id": f.file_id,
+                "file_name": f.file_name,
+                "file_type": f.file_type,
+                "file_size": f.file_size,
+                "description": f.description,
+                "entity_type": f.entity_type,
+                "entity_id": str(f.entity_id),
+                "entity_name": entity_name,
+                "entity_ref": entity_ref,
+                "uploaded_by": rep.name if rep else None,
+                "created_at": str(f.created_at)
+            })
+        
+        return {
+            "total": total,
+            "files": result,
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"Error in get_media_library: {error_detail}")
+        raise HTTPException(status_code=500, detail=f"Error loading media library: {str(e)}")
+
 @app.post("/api/media/upload")
 async def upload_media(
-    entity_type: str,
-    entity_id: str,
+    entity_type: str = Form(...),
+    entity_id: str = Form(...),
     file: UploadFile = File(...),
-    description: str = None,
-    uploaded_by_rep_id: str = None,
+    description: str = Form(None),
+    uploaded_by_rep_id: str = Form(None),
     db: Session = Depends(get_db)
 ):
     """Upload media file"""
@@ -2742,10 +2861,28 @@ async def upload_media(
     file_size = file_path.stat().st_size
     file_type = get_file_type(file.filename)
     
+    # Generate file_id from sequence
+    try:
+        file_id_result = db.execute(text("SELECT nextval('media_file_id_seq')")).scalar()
+        file_id = f"MED-{str(file_id_result).zfill(5)}"
+    except Exception:
+        # Fallback if sequence doesn't exist yet
+        file_id_result = db.execute(text("SELECT COUNT(*) + 1 FROM media_files")).scalar()
+        file_id = f"MED-{str(file_id_result).zfill(5)}"
+    
     # Create database record
+    # Ensure entity_id is a UUID object
+    if isinstance(entity.id, uuid.UUID):
+        entity_uuid = entity.id
+    elif isinstance(entity.id, str):
+        entity_uuid = uuid.UUID(entity.id)
+    else:
+        entity_uuid = uuid.UUID(str(entity.id))
+    
     media = MediaFile(
+        file_id=file_id,
         entity_type=entity_type,
-        entity_id=entity.id if hasattr(entity, 'id') else uuid.UUID(entity_id),
+        entity_id=entity_uuid,
         file_name=file.filename,
         file_path=str(file_path),
         file_type=file_type,
@@ -2762,6 +2899,34 @@ async def upload_media(
         "file_name": media.file_name,
         "file_size": media.file_size
     }
+
+@app.get("/api/media/{file_id}/download")
+def download_media_file(file_id: str, db: Session = Depends(get_db)):
+    """Download media file"""
+    # Try to match by file_id (string) first, or by id (UUID) if file_id is a valid UUID
+    try:
+        # Check if file_id is a valid UUID
+        file_id_uuid = uuid.UUID(file_id)
+        # If it's a UUID, try matching both id and file_id
+        media = db.query(MediaFile).filter(
+            (MediaFile.id == file_id_uuid) | (MediaFile.file_id == file_id)
+        ).first()
+    except (ValueError, TypeError):
+        # If not a valid UUID, only match by file_id (string)
+        media = db.query(MediaFile).filter(MediaFile.file_id == file_id).first()
+    
+    if not media:
+        raise HTTPException(404, "File not found")
+    
+    file_path = Path(media.file_path)
+    if not file_path.exists():
+        raise HTTPException(404, "File not found on disk")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=media.file_name,
+        media_type="application/octet-stream"
+    )
 
 @app.get("/api/media/{entity_type}/{entity_id}")
 def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get_db)):
@@ -2806,27 +2971,21 @@ def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get
     
     return result
 
-@app.get("/api/media/{file_id}/download")
-def download_media_file(file_id: str, db: Session = Depends(get_db)):
-    """Download media file"""
-    media = db.query(MediaFile).filter((MediaFile.id == file_id) | (MediaFile.file_id == file_id)).first()
-    if not media:
-        raise HTTPException(404, "File not found")
-    
-    file_path = Path(media.file_path)
-    if not file_path.exists():
-        raise HTTPException(404, "File not found on disk")
-    
-    return FileResponse(
-        path=str(file_path),
-        filename=media.file_name,
-        media_type="application/octet-stream"
-    )
-
 @app.get("/api/media/{file_id}")
 def get_media_file_info(file_id: str, db: Session = Depends(get_db)):
     """Get media file metadata"""
-    media = db.query(MediaFile).filter((MediaFile.id == file_id) | (MediaFile.file_id == file_id)).first()
+    # Try to match by file_id (string) first, or by id (UUID) if file_id is a valid UUID
+    try:
+        # Check if file_id is a valid UUID
+        file_id_uuid = uuid.UUID(file_id)
+        # If it's a UUID, try matching both id and file_id
+        media = db.query(MediaFile).filter(
+            (MediaFile.id == file_id_uuid) | (MediaFile.file_id == file_id)
+        ).first()
+    except (ValueError, TypeError):
+        # If not a valid UUID, only match by file_id (string)
+        media = db.query(MediaFile).filter(MediaFile.file_id == file_id).first()
+    
     if not media:
         raise HTTPException(404, "File not found")
     
@@ -2848,7 +3007,18 @@ def get_media_file_info(file_id: str, db: Session = Depends(get_db)):
 @app.delete("/api/media/{file_id}")
 def delete_media_file(file_id: str, db: Session = Depends(get_db)):
     """Delete media file"""
-    media = db.query(MediaFile).filter((MediaFile.id == file_id) | (MediaFile.file_id == file_id)).first()
+    # Try to match by file_id (string) first, or by id (UUID) if file_id is a valid UUID
+    try:
+        # Check if file_id is a valid UUID
+        file_id_uuid = uuid.UUID(file_id)
+        # If it's a UUID, try matching both id and file_id
+        media = db.query(MediaFile).filter(
+            (MediaFile.id == file_id_uuid) | (MediaFile.file_id == file_id)
+        ).first()
+    except (ValueError, TypeError):
+        # If not a valid UUID, only match by file_id (string)
+        media = db.query(MediaFile).filter(MediaFile.file_id == file_id).first()
+    
     if not media:
         raise HTTPException(404, "File not found")
     
