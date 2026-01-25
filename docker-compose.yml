@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: sitara_v3_db
+    environment:
+      POSTGRES_USER: sitara
+      POSTGRES_PASSWORD: sitara123
+      POSTGRES_DB: sitara_crm
+    volumes:
+      - sitara_v3_postgres:/var/lib/postgresql/data
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sitara -d sitara_crm"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: sitara_v3_backend
+    environment:
+      DATABASE_URL: postgresql://sitara:sitara123@db:5432/sitara_crm
+      SECRET_KEY: sitara-secret-key-2024-change-in-prod
+    ports:
+      - "8002:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+
+  frontend:
+    build: ./frontend
+    container_name: sitara_v3_frontend
+    ports:
+      - "5174:5173"
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      - backend
+
+volumes:
+  sitara_v3_postgres:
