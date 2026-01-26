@@ -146,13 +146,26 @@ export default function App() {
     }
   }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    delete api.defaults.headers.common['Authorization'];
-    setUser(null);
-  };
-  
+  // Close dropdown when clicking outside - MUST be before conditional returns
+  useEffect(() => {
+    if (!showMoreMenu) return;
+    
+    const handleClickOutside = (event) => {
+      const target = event.target;
+      const menuElement = document.querySelector('.more-menu-container');
+      const buttonElement = document.querySelector('.more-menu-button');
+      
+      if (menuElement && buttonElement && 
+          !menuElement.contains(target) && 
+          !buttonElement.contains(target)) {
+        setShowMoreMenu(false);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showMoreMenu]);
+
   // Show login if not authenticated
   if (!user) {
     return <LoginView onLogin={setUser} />;
@@ -204,26 +217,6 @@ export default function App() {
   // All tabs for reference
   const allTabs = [...primaryTabs, ...financialTabs, ...managementTabs];
   if (canAccess('settings')) allTabs.push({ id: 'settings', label: 'Settings' });
-
-  // Close dropdown when clicking outside - MUST be before conditional returns
-  useEffect(() => {
-    if (!showMoreMenu) return;
-    
-    const handleClickOutside = (event) => {
-      const target = event.target;
-      const menuElement = document.querySelector('.more-menu-container');
-      const buttonElement = document.querySelector('.more-menu-button');
-      
-      if (menuElement && buttonElement && 
-          !menuElement.contains(target) && 
-          !buttonElement.contains(target)) {
-        setShowMoreMenu(false);
-      }
-    };
-    
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showMoreMenu]);
   
   // Show loading while checking auth, then show login if not authenticated
   // ALL HOOKS MUST BE ABOVE THIS POINT
@@ -314,6 +307,7 @@ export default function App() {
         {activeTab === 'customers' && <CustomersView />}
         {activeTab === 'brokers' && <BrokersView />}
         {activeTab === 'campaigns' && <CampaignsView />}
+        {activeTab === 'media' && <MediaView />}
         {activeTab === 'settings' && <SettingsView />}
       </main>
     </div>
@@ -327,6 +321,8 @@ function ProjectsView() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [selectedProject, setSelectedProject] = useState(null);
   const [form, setForm] = useState({ name: '', location: '', description: '' });
 
   useEffect(() => { loadProjects(); }, []);
@@ -342,6 +338,17 @@ function ProjectsView() {
     catch (e) { alert(e.response?.data?.detail || 'Error'); }
   };
 
+  const handleProjectClick = async (projectId) => {
+    try {
+      const res = await api.get(`/projects/${projectId}`);
+      setSelectedProject(res.data);
+      setShowDetailModal(true);
+    } catch (e) {
+      console.error('Error loading project details:', e);
+      alert('Error loading project details');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -353,7 +360,11 @@ function ProjectsView() {
       {loading ? <Loader /> : projects.length === 0 ? <Empty msg="No projects yet" /> : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {projects.map(p => (
-            <div key={p.id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+            <div 
+              key={p.id} 
+              onClick={() => handleProjectClick(p.id)}
+              className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
+            >
               <div className="p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div>
@@ -393,6 +404,44 @@ function ProjectsView() {
               <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Create</button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {showDetailModal && selectedProject && (
+        <Modal title={`Project: ${selectedProject.name}`} onClose={() => { setShowDetailModal(false); setSelectedProject(null); }}>
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Project ID</label>
+                <div className="text-sm text-gray-900">{selectedProject.project_id}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Location</label>
+                <div className="text-sm text-gray-900">{selectedProject.location || '-'}</div>
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
+                <div className="text-sm text-gray-900">{selectedProject.description || '-'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+                <div className="text-sm text-gray-900">{selectedProject.status || 'active'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Inventory Units</label>
+                <div className="text-sm text-gray-900">{selectedProject.inventory?.length || 0}</div>
+              </div>
+            </div>
+
+            {/* Media Attachments */}
+            <div className="border-t pt-4">
+              <MediaManager 
+                entityType="project" 
+                entityId={selectedProject.id || selectedProject.project_id}
+                onUpload={() => {}}
+              />
+            </div>
+          </div>
         </Modal>
       )}
     </div>
@@ -761,7 +810,7 @@ function TransactionsView() {
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {transactions.map(t => (
-                <tr key={t.id} className="hover:bg-gray-50">
+                <tr key={t.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => viewDetails(t)}>
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{t.transaction_id}</td>
                   <td className="px-6 py-4">
                     <div className="text-sm font-medium">
@@ -787,7 +836,7 @@ function TransactionsView() {
                   <td className="px-6 py-4 text-sm text-right text-green-600">{formatCurrency(t.total_paid)}</td>
                   <td className="px-6 py-4 text-sm text-right text-amber-600">{formatCurrency(t.balance)}</td>
                   <td className="px-6 py-4 text-center"><span className={`px-2 py-1 rounded-full text-xs font-medium ${t.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{t.status}</span></td>
-                  <td className="px-6 py-4 text-right"><button onClick={() => viewDetails(t)} className="text-sm text-blue-600 hover:text-blue-800">View</button></td>
+                  <td className="px-6 py-4 text-right"><button onClick={(e) => { e.stopPropagation(); viewDetails(t); }} className="text-sm text-blue-600 hover:text-blue-800">View</button></td>
                 </tr>
               ))}
             </tbody>
@@ -1042,6 +1091,15 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Media Attachments */}
+        <div className="border-t pt-4">
+          <MediaManager 
+            entityType="transaction" 
+            entityId={txn.id || txn.transaction_id}
+            onUpload={() => {}}
+          />
         </div>
       </div>
     </Modal>
@@ -1307,6 +1365,8 @@ function ReceiptsView() {
   const [reps, setReps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [selectedReceipt, setSelectedReceipt] = useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [customerTransactions, setCustomerTransactions] = useState([]);
   const [customerSearch, setCustomerSearch] = useState('');
@@ -1422,7 +1482,7 @@ function ReceiptsView() {
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {receipts.map(r => (
-                <tr key={r.id} className="hover:bg-gray-50">
+                <tr key={r.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedReceipt(r); setShowDetailModal(true); }}>
                   <td className="px-6 py-4">
                     <div className="text-sm font-mono text-gray-900">{r.receipt_id}</div>
                     {r.reference_number && <div className="text-xs text-gray-400">Ref: {r.reference_number}</div>}
@@ -1553,7 +1613,81 @@ function ReceiptsView() {
           </form>
         </Modal>
       )}
+
+      {showDetailModal && selectedReceipt && (
+        <ReceiptDetailModal 
+          receipt={selectedReceipt} 
+          onClose={() => { setShowDetailModal(false); setSelectedReceipt(null); }} 
+        />
+      )}
     </div>
+  );
+}
+
+// ============================================
+// RECEIPT DETAIL MODAL
+// ============================================
+function ReceiptDetailModal({ receipt, onClose }) {
+  return (
+    <Modal title={`Receipt: ${receipt.receipt_id}`} onClose={onClose} wide>
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Receipt ID</label>
+            <div className="text-sm text-gray-900">{receipt.receipt_id}</div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
+            <div className="text-sm text-gray-900">{receipt.customer_name || '-'}</div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Project / Unit</label>
+            <div className="text-sm text-gray-900">
+              {receipt.project_name ? `${receipt.project_name} - ${receipt.unit_number}` : '-'}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Amount</label>
+            <div className="text-sm font-semibold text-green-600">{formatCurrency(receipt.amount)}</div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
+            <div className="text-sm">
+              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                receipt.payment_method === 'cash' ? 'bg-green-50 text-green-700' :
+                receipt.payment_method === 'cheque' ? 'bg-blue-50 text-blue-700' :
+                receipt.payment_method === 'bank_transfer' ? 'bg-purple-50 text-purple-700' : 'bg-orange-50 text-orange-700'
+              }`}>{receipt.payment_method}</span>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payment Date</label>
+            <div className="text-sm text-gray-900">{receipt.payment_date || '-'}</div>
+          </div>
+          {receipt.reference_number && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Reference Number</label>
+              <div className="text-sm text-gray-900">{receipt.reference_number}</div>
+            </div>
+          )}
+          {receipt.notes && (
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+              <div className="text-sm text-gray-900">{receipt.notes}</div>
+            </div>
+          )}
+        </div>
+
+        {/* Media Attachments */}
+        <div className="border-t pt-4">
+          <MediaManager 
+            entityType="receipt" 
+            entityId={receipt.id || receipt.receipt_id}
+            onUpload={() => {}}
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2033,6 +2167,8 @@ function PaymentsView() {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [selectedPayment, setSelectedPayment] = useState(null);
   const [filter, setFilter] = useState({ payment_type: '', status: '', broker_id: '', rep_id: '', creditor_id: '' });
   const [form, setForm] = useState({
     payment_type: 'broker_commission', payee_type: 'broker',
@@ -2216,7 +2352,7 @@ function PaymentsView() {
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {payments.map(p => (
-                <tr key={p.id} className="hover:bg-gray-50">
+                <tr key={p.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedPayment(p); setShowDetailModal(true); }}>
                   <td className="px-6 py-4">
                     <div className="text-sm font-mono text-gray-900">{p.payment_id}</div>
                     {p.reference_number && <div className="text-xs text-gray-400">Ref: {p.reference_number}</div>}
@@ -2339,7 +2475,82 @@ function PaymentsView() {
           </form>
         </Modal>
       )}
+
+      {showDetailModal && selectedPayment && (
+        <PaymentDetailModal 
+          payment={selectedPayment} 
+          onClose={() => { setShowDetailModal(false); setSelectedPayment(null); }} 
+        />
+      )}
     </div>
+  );
+}
+
+// ============================================
+// PAYMENT DETAIL MODAL
+// ============================================
+function PaymentDetailModal({ payment, onClose }) {
+  return (
+    <Modal title={`Payment: ${payment.payment_id}`} onClose={onClose} wide>
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payment ID</label>
+            <div className="text-sm text-gray-900">{payment.payment_id}</div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payment Type</label>
+            <div className="text-sm text-gray-900">{payment.payment_type?.replace('_', ' ') || '-'}</div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payee</label>
+            <div className="text-sm text-gray-900">{payment.broker_name || payment.rep_name || payment.creditor_name || '-'}</div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Amount</label>
+            <div className="text-sm font-semibold text-red-600">{formatCurrency(payment.amount)}</div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
+            <div className="text-sm text-gray-900">{payment.payment_method || '-'}</div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <div className="text-sm">
+              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                payment.status === 'completed' ? 'bg-green-50 text-green-700' :
+                payment.status === 'pending' ? 'bg-amber-50 text-amber-700' : 'bg-gray-100'
+              }`}>{payment.status}</span>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payment Date</label>
+            <div className="text-sm text-gray-900">{payment.payment_date || '-'}</div>
+          </div>
+          {payment.reference_number && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Reference Number</label>
+              <div className="text-sm text-gray-900">{payment.reference_number}</div>
+            </div>
+          )}
+          {payment.notes && (
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+              <div className="text-sm text-gray-900">{payment.notes}</div>
+            </div>
+          )}
+        </div>
+
+        {/* Media Attachments */}
+        <div className="border-t pt-4">
+          <MediaManager 
+            entityType="payment" 
+            entityId={payment.id || payment.payment_id}
+            onUpload={() => {}}
+          />
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2982,6 +3193,213 @@ function SettingsView() {
             </div>
           </form>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// MEDIA LIBRARY VIEW
+// ============================================
+function MediaView() {
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [entityTypeFilter, setEntityTypeFilter] = useState('');
+  const [fileTypeFilter, setFileTypeFilter] = useState('');
+
+  useEffect(() => {
+    loadFiles();
+  }, [search, entityTypeFilter, fileTypeFilter]);
+
+  const loadFiles = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (search) params.append('search', search);
+      if (entityTypeFilter) params.append('entity_type', entityTypeFilter);
+      if (fileTypeFilter) params.append('file_type', fileTypeFilter);
+      
+      const res = await api.get(`/media/library?${params.toString()}`);
+      setFiles(res.data.files || []);
+    } catch (e) {
+      console.error('Error loading media:', e);
+      setFiles([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (fileId) => {
+    if (!confirm('Delete this file?')) return;
+    try {
+      await api.delete(`/media/${fileId}`);
+      loadFiles();
+    } catch (e) {
+      alert('Error deleting file');
+    }
+  };
+
+  const handleDownload = (fileId, fileName) => {
+    window.open(`/api/media/${fileId}/download`, '_blank');
+  };
+
+  const getFileIcon = (fileType) => {
+    switch (fileType) {
+      case 'pdf': return '📄';
+      case 'image': return '🖼️';
+      case 'video': return '🎥';
+      case 'audio': return '🎵';
+      default: return '📎';
+    }
+  };
+
+  const getEntityTypeLabel = (type) => {
+    const labels = {
+      project: 'Project',
+      customer: 'Customer',
+      broker: 'Broker',
+      interaction: 'Interaction',
+      receipt: 'Receipt',
+      payment: 'Payment'
+    };
+    return labels[type] || type;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">Media Library</h2>
+          <p className="text-sm text-gray-500 mt-1">Manage all uploaded files and attachments</p>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white rounded-xl border p-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Search</label>
+            <input
+              type="text"
+              placeholder="Search files..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full border rounded-md px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Entity Type</label>
+            <select
+              value={entityTypeFilter}
+              onChange={(e) => setEntityTypeFilter(e.target.value)}
+              className="w-full border rounded-md px-3 py-2 text-sm"
+            >
+              <option value="">All Types</option>
+              <option value="project">Project</option>
+              <option value="customer">Customer</option>
+              <option value="broker">Broker</option>
+              <option value="interaction">Interaction</option>
+              <option value="receipt">Receipt</option>
+              <option value="payment">Payment</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">File Type</label>
+            <select
+              value={fileTypeFilter}
+              onChange={(e) => setFileTypeFilter(e.target.value)}
+              className="w-full border rounded-md px-3 py-2 text-sm"
+            >
+              <option value="">All Files</option>
+              <option value="image">Images</option>
+              <option value="pdf">PDFs</option>
+              <option value="video">Videos</option>
+              <option value="audio">Audio</option>
+              <option value="document">Documents</option>
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              onClick={() => {
+                setSearch('');
+                setEntityTypeFilter('');
+                setFileTypeFilter('');
+              }}
+              className="w-full px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md border"
+            >
+              Clear Filters
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Files List */}
+      {loading ? (
+        <div className="bg-white rounded-xl border p-8 text-center">
+          <div className="text-gray-400">Loading media files...</div>
+        </div>
+      ) : files.length === 0 ? (
+        <div className="bg-white rounded-xl border p-8 text-center">
+          <div className="text-gray-400">No media files found</div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">File</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Entity</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Uploaded</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {files.map((file) => (
+                  <tr key={file.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">{getFileIcon(file.file_type)}</span>
+                        <span className="text-sm text-gray-900">{file.file_name}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-gray-600">
+                        {getEntityTypeLabel(file.entity_type)} #{file.entity_id}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-gray-600">{file.description || '-'}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-gray-500">
+                        {file.created_at ? new Date(file.created_at).toLocaleDateString() : '-'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleDownload(file.file_id, file.file_name)}
+                          className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                        >
+                          Download
+                        </button>
+                        <button
+                          onClick={() => handleDelete(file.file_id)}
+                          className="text-red-600 hover:text-red-800 text-sm font-medium"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   );

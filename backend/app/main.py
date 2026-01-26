@@ -288,7 +288,20 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        # Ensure password is a string
+        if not isinstance(plain_password, str):
+            plain_password = str(plain_password)
+        # Truncate password to 72 bytes if necessary (bcrypt limit)
+        password_bytes = plain_password.encode('utf-8')
+        if len(password_bytes) > 72:
+            plain_password = password_bytes[:72].decode('utf-8', errors='ignore')
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception as e:
+        # Log the error for debugging but still return False for security
+        import logging
+        logging.error(f"Password verification error: {str(e)}")
+        return False
 
 def get_password_hash(password):
     return pwd_context.hash(password)
@@ -330,7 +343,7 @@ def require_role(allowed_roles: List[str]):
 # ============================================
 app = FastAPI(title="Radius CRM", version="3.0.0")
 # CORS Configuration - Update with your office server domain
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5174,http://localhost:5173,http://localhost:3000").split(",")
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5180,http://localhost:5174,http://localhost:5173,http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -2996,11 +3009,17 @@ async def upload_media(
     unique_filename = f"{uuid.uuid4()}.{file_ext}"
     file_path = MEDIA_ROOT / f"{entity_type}s" / unique_filename
     
+    # Ensure directory exists
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
     file_size = file_path.stat().st_size
     file_type = get_file_type(file.filename)
+    
+    # Store absolute path to avoid resolution issues
+    file_path_absolute = file_path.resolve()
     
     # Generate file_id from sequence
     try:
@@ -3025,7 +3044,7 @@ async def upload_media(
         entity_type=entity_type,
         entity_id=entity_uuid,
         file_name=file.filename,
-        file_path=str(file_path),
+        file_path=str(file_path_absolute),
         file_type=file_type,
         file_size=file_size,
         uploaded_by_rep_id=rep.id if rep else None,
@@ -3059,9 +3078,51 @@ def download_media_file(file_id: str, db: Session = Depends(get_db)):
     if not media:
         raise HTTPException(404, "File not found")
     
-    file_path = Path(media.file_path)
+    # Resolve file path - handle both absolute and relative paths
+    file_path_str = media.file_path
+    
+    # Normalize path separators
+    file_path_str = file_path_str.replace('\\', '/')
+    
+    # Try multiple resolution strategies
+    file_path = None
+    
+    # Strategy 1: If it's already an absolute path and exists
+    test_path = Path(file_path_str)
+    if test_path.is_absolute() and test_path.exists():
+        file_path = test_path
+    
+    # Strategy 2: Try relative to MEDIA_ROOT (most common for old files)
+    if not file_path or not file_path.exists():
+        # Remove 'media/' prefix if present
+        if file_path_str.startswith('media/'):
+            relative_part = file_path_str[6:]  # Remove 'media/' prefix
+            file_path = MEDIA_ROOT / relative_part
+        else:
+            # Use as-is relative to MEDIA_ROOT
+            file_path = MEDIA_ROOT / file_path_str
+    
+    # Strategy 3: Try relative to current working directory
     if not file_path.exists():
-        raise HTTPException(404, "File not found on disk")
+        file_path = Path.cwd() / file_path_str
+    
+    # Strategy 4: Try as absolute path from root
+    if not file_path.exists() and not test_path.is_absolute():
+        # Try making it absolute from MEDIA_ROOT
+        if not file_path_str.startswith(str(MEDIA_ROOT)):
+            file_path = MEDIA_ROOT / file_path_str.lstrip('/')
+    
+    if not file_path.exists():
+        # Last attempt: try resolving MEDIA_ROOT and building path
+        media_root_abs = MEDIA_ROOT.resolve()
+        if file_path_str.startswith('media/'):
+            relative_part = file_path_str[6:]
+            file_path = media_root_abs / relative_part
+        else:
+            file_path = media_root_abs / file_path_str.lstrip('/')
+    
+    if not file_path.exists():
+        raise HTTPException(404, f"File not found on disk. Tried: {file_path}. Stored path: {file_path_str}. MEDIA_ROOT: {MEDIA_ROOT}")
     
     return FileResponse(
         path=str(file_path),
