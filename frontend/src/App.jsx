@@ -2867,6 +2867,8 @@ function ReportsView() {
   const [brokerReport, setBrokerReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [reportType, setReportType] = useState('customer');
+  const [expandedTransactions, setExpandedTransactions] = useState(new Set());
+  const [expandedInventory, setExpandedInventory] = useState(false);
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
@@ -2885,26 +2887,41 @@ function ReportsView() {
 
   const loadCustomerReport = async (customerId) => {
     try {
+      setLoading(true);
       const res = await api.get(`/reports/customers/detailed/${customerId}`);
       setCustomerReport(res.data);
       setSelectedCustomer(customerId);
-    } catch (e) { alert('Error loading report'); }
+    } catch (e) { 
+      alert('Error loading report: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadProjectReport = async (projectId) => {
     try {
+      setLoading(true);
       const res = await api.get(`/reports/projects/${projectId}`);
       setProjectReport(res.data);
       setSelectedProject(projectId);
-    } catch (e) { alert('Error loading report'); }
+    } catch (e) { 
+      alert('Error loading report: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadBrokerReport = async (brokerId) => {
     try {
+      setLoading(true);
       const res = await api.get(`/reports/brokers/${brokerId}`);
       setBrokerReport(res.data);
       setSelectedBroker(brokerId);
-    } catch (e) { alert('Error loading report'); }
+    } catch (e) { 
+      alert('Error loading report: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const downloadPDF = async (type, id) => {
@@ -2970,136 +2987,846 @@ function ReportsView() {
       </div>
 
       {reportType === 'customer' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white rounded-2xl shadow-sm border p-6">
-            <h3 className="text-lg font-semibold mb-4">Select Customer</h3>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {customers.map(c => (
-                <button key={c.id} onClick={() => loadCustomerReport(c.id)}
-                  className={`w-full text-left p-3 rounded-lg border ${selectedCustomer === c.id ? 'bg-blue-50 border-blue-200' : 'hover:bg-gray-50'}`}>
-                  <div className="font-medium">{c.name}</div>
-                  <div className="text-xs text-gray-500">{c.customer_id} • {c.mobile}</div>
-                </button>
-              ))}
-            </div>
-            <div className="mt-4 pt-4 border-t">
-              <button onClick={() => downloadExcel('customer')} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
-                📊 Download All Customers (Excel)
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div className="bg-white rounded-lg border p-4">
+              <h3 className="text-sm font-medium text-gray-600 mb-2">Select Customer</h3>
+              <div className="space-y-1 max-h-96 overflow-y-auto">
+                {customers.map(c => (
+                  <button key={c.id} onClick={() => loadCustomerReport(c.id)}
+                    className={`w-full text-left p-2 rounded text-xs ${selectedCustomer === c.id ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'}`}>
+                    <div className="font-medium">{c.name}</div>
+                    <div className="text-gray-500">{c.customer_id}</div>
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => downloadExcel('customer')} className="mt-3 w-full px-3 py-2 bg-gray-800 text-white rounded text-xs font-medium hover:bg-gray-900">
+                Export All (Excel)
               </button>
             </div>
-          </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border p-6">
-            <h3 className="text-lg font-semibold mb-4">Report Preview</h3>
             {customerReport ? (
-              <div className="space-y-4">
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <div className="text-sm font-medium mb-2">Financial Summary</div>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div>Total Sale: <span className="font-semibold">{formatCurrency(customerReport.financials.total_sale)}</span></div>
-                    <div>Total Received: <span className="font-semibold">{formatCurrency(customerReport.financials.total_received)}</span></div>
-                    <div>Overdue: <span className="font-semibold text-red-600">{formatCurrency(customerReport.financials.overdue)}</span></div>
-                    <div>Future Receivable: <span className="font-semibold">{formatCurrency(customerReport.financials.future_receivable)}</span></div>
+              <div className="lg:col-span-3 space-y-4">
+                {/* Report Header */}
+                <div className="bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg border border-gray-700 p-6 text-white">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold mb-1">{customerReport.report_header?.title || 'Customer Detailed Financial Report'}</h2>
+                      <div className="text-sm text-gray-300">
+                        Generated via <span className="font-semibold text-white">Radius CRM</span>
+                        {customerReport.report_header?.generated_at && (
+                          <span className="ml-4">• {new Date(customerReport.report_header.generated_at).toLocaleString()}</span>
+                        )}
+                      </div>
+                    </div>
+                    <button onClick={() => downloadPDF('customer', customerReport.customer.customer_id)} 
+                      className="px-4 py-2 bg-white text-gray-900 rounded text-sm font-medium hover:bg-gray-100">
+                      Export PDF
+                    </button>
                   </div>
                 </div>
-                <div className="text-sm">
-                  <div>Transactions: {customerReport.transactions.length}</div>
-                  <div>Interactions: {customerReport.interactions.total_count}</div>
+
+                {/* Customer Info Header */}
+                <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h3 className="text-xl font-semibold text-gray-900">{customerReport.customer.name}</h3>
+                      <div className="text-sm text-gray-600 mt-1">
+                        {customerReport.customer.customer_id} • {customerReport.customer.mobile}
+                        {customerReport.customer.email && ` • ${customerReport.customer.email}`}
+                      </div>
+                      {customerReport.customer.address && (
+                        <div className="text-sm text-gray-500 mt-1">{customerReport.customer.address}</div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <button onClick={() => downloadPDF('customer', customerReport.customer.customer_id)} className="w-full px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
-                  📄 Download PDF
-                </button>
+
+                {/* Financial Summary Cards */}
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Total Sale</div>
+                    <div className="text-2xl font-semibold text-gray-900">{formatCurrency(customerReport.financials.total_sale)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Total Received</div>
+                    <div className="text-2xl font-semibold text-green-700">{formatCurrency(customerReport.financials.total_received)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Overdue</div>
+                    <div className="text-2xl font-semibold text-red-600">{formatCurrency(customerReport.financials.overdue)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Future Receivable</div>
+                    <div className="text-2xl font-semibold text-blue-600">{formatCurrency(customerReport.financials.future_receivable)}</div>
+                  </div>
+                </div>
+
+                {/* Transactions Table */}
+                <div className="bg-white rounded-lg border">
+                  <div className="p-4 border-b">
+                    <h4 className="font-semibold text-gray-900">Transactions ({customerReport.transactions.length})</h4>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Transaction ID</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Project</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Unit</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Area (Marla)</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Total Value</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Received</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Balance</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {customerReport.transactions.map((txn, idx) => (
+                          <React.Fragment key={idx}>
+                            <tr className="hover:bg-gray-50">
+                              <td className="px-4 py-3 font-mono text-xs">{txn.transaction_id}</td>
+                              <td className="px-4 py-3">{txn.project_name || '-'}</td>
+                              <td className="px-4 py-3">{txn.unit_number || '-'}</td>
+                              <td className="px-4 py-3 text-right">{txn.area_marla.toFixed(2)}</td>
+                              <td className="px-4 py-3 text-right font-medium">{formatCurrency(txn.total_value)}</td>
+                              <td className="px-4 py-3 text-right text-green-700">{formatCurrency(txn.received)}</td>
+                              <td className="px-4 py-3 text-right">{formatCurrency(txn.balance)}</td>
+                              <td className="px-4 py-3">
+                                <button onClick={() => {
+                                  const newExpanded = new Set(expandedTransactions);
+                                  if (newExpanded.has(idx)) newExpanded.delete(idx);
+                                  else newExpanded.add(idx);
+                                  setExpandedTransactions(newExpanded);
+                                }} className="text-gray-600 hover:text-gray-900">
+                                  {expandedTransactions.has(idx) ? '▼' : '▶'}
+                                </button>
+                              </td>
+                            </tr>
+                            {expandedTransactions.has(idx) && txn.installments && (
+                              <tr>
+                                <td colSpan="8" className="px-4 py-3 bg-gray-50">
+                                  <div className="text-xs">
+                                    <div className="font-semibold mb-2">Installments:</div>
+                                    <table className="w-full">
+                                      <thead>
+                                        <tr className="border-b">
+                                          <th className="text-left py-1">#</th>
+                                          <th className="text-left py-1">Due Date</th>
+                                          <th className="text-right py-1">Amount</th>
+                                          <th className="text-right py-1">Paid</th>
+                                          <th className="text-right py-1">Balance</th>
+                                          <th className="text-left py-1">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {txn.installments.map((inst, i) => (
+                                          <tr key={i} className={inst.is_overdue ? 'text-red-600' : ''}>
+                                            <td className="py-1">{inst.number}</td>
+                                            <td className="py-1">{inst.due_date}</td>
+                                            <td className="text-right py-1">{formatCurrency(inst.amount)}</td>
+                                            <td className="text-right py-1">{formatCurrency(inst.paid)}</td>
+                                            <td className="text-right py-1 font-medium">{formatCurrency(inst.balance)}</td>
+                                            <td className="py-1">
+                                              <span className={`px-2 py-0.5 rounded text-xs ${inst.is_overdue ? 'bg-red-100 text-red-700' : 'bg-gray-100'}`}>
+                                                {inst.status}
+                                              </span>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Interactions History */}
+                <div className="bg-white rounded-lg border">
+                  <div className="p-4 border-b">
+                    <h4 className="font-semibold text-gray-900">Interactions History ({customerReport.interactions.total_count})</h4>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Type</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Rep</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Notes</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Next Follow-up</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {customerReport.interactions.history.map((interaction, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-xs">{new Date(interaction.date).toLocaleDateString()}</td>
+                            <td className="px-4 py-3">{interaction.type}</td>
+                            <td className="px-4 py-3">{interaction.rep_name || '-'}</td>
+                            <td className="px-4 py-3">
+                              <span className="px-2 py-0.5 rounded text-xs bg-gray-100">{interaction.status}</span>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-600">{interaction.notes || '-'}</td>
+                            <td className="px-4 py-3 text-xs">{interaction.next_follow_up ? new Date(interaction.next_follow_up).toLocaleDateString() : '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Installment Schedule */}
+                {customerReport.installment_schedule && customerReport.installment_schedule.length > 0 && (
+                  <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
+                    <div className="p-4 border-b border-gray-200 bg-gray-50">
+                      <h4 className="font-semibold text-gray-900">Complete Installment Schedule</h4>
+                      <p className="text-xs text-gray-600 mt-1">All installments with due dates, balances, and receipt allocations</p>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">#</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Project</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Due Date</th>
+                            <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Amount</th>
+                            <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Paid</th>
+                            <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Balance</th>
+                            <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Days Outstanding</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Receipts</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {customerReport.installment_schedule.map((inst, idx) => (
+                            <tr key={idx} className={`hover:bg-gray-50 ${inst.is_overdue ? 'bg-red-50' : ''}`}>
+                              <td className="px-4 py-3 font-medium">{inst.number}</td>
+                              <td className="px-4 py-3 text-xs text-gray-600">{inst.project_name || '-'}</td>
+                              <td className="px-4 py-3">{inst.due_date ? new Date(inst.due_date).toLocaleDateString() : '-'}</td>
+                              <td className="px-4 py-3 text-right">{formatCurrency(inst.amount)}</td>
+                              <td className="px-4 py-3 text-right text-green-700">{formatCurrency(inst.paid)}</td>
+                              <td className={`px-4 py-3 text-right font-medium ${inst.is_overdue ? 'text-red-600' : 'text-gray-900'}`}>
+                                {formatCurrency(inst.balance)}
+                              </td>
+                              <td className={`px-4 py-3 text-right ${inst.days_outstanding > 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                                {inst.days_outstanding !== null ? `${inst.days_outstanding} days` : '-'}
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className={`px-2 py-0.5 rounded text-xs ${
+                                  inst.is_overdue ? 'bg-red-100 text-red-700' : 
+                                  inst.status === 'paid' ? 'bg-green-100 text-green-700' : 
+                                  'bg-gray-100 text-gray-700'
+                                }`}>
+                                  {inst.status}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3">
+                                {inst.receipt_allocations && inst.receipt_allocations.length > 0 ? (
+                                  <div className="text-xs">
+                                    {inst.receipt_allocations.map((rec, rIdx) => (
+                                      <div key={rIdx} className="text-gray-600">
+                                        {rec.receipt_id}: {formatCurrency(rec.amount)}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Unallocated Receipts */}
+                {customerReport.unallocated_receipts && customerReport.unallocated_receipts.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                    <h4 className="font-semibold text-amber-900 mb-3">Unallocated Receipts</h4>
+                    <p className="text-xs text-amber-700 mb-3">These receipts need to be allocated to installments</p>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-amber-100 border-b border-amber-200">
+                          <tr>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-amber-900">Receipt ID</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-amber-900">Payment Date</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-amber-900">Method</th>
+                            <th className="px-4 py-2 text-right text-xs font-semibold text-amber-900">Total Amount</th>
+                            <th className="px-4 py-2 text-right text-xs font-semibold text-amber-900">Allocated</th>
+                            <th className="px-4 py-2 text-right text-xs font-semibold text-amber-900">Unallocated</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-amber-200">
+                          {customerReport.unallocated_receipts.map((rec, idx) => (
+                            <tr key={idx} className="hover:bg-amber-100">
+                              <td className="px-4 py-2 font-mono text-xs">{rec.receipt_id}</td>
+                              <td className="px-4 py-2 text-xs">{rec.payment_date ? new Date(rec.payment_date).toLocaleDateString() : '-'}</td>
+                              <td className="px-4 py-2 text-xs">{rec.payment_method || '-'}</td>
+                              <td className="px-4 py-2 text-right font-medium">{formatCurrency(rec.total_amount)}</td>
+                              <td className="px-4 py-2 text-right text-green-700">{formatCurrency(rec.allocated_amount)}</td>
+                              <td className="px-4 py-2 text-right font-semibold text-amber-700">{formatCurrency(rec.unallocated_amount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Receipts Summary */}
+                {customerReport.receipts && (
+                  <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+                    <h4 className="font-semibold text-gray-900 mb-3">Receipts Summary</h4>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <div className="text-gray-600">Total Receipts: <span className="font-semibold">{customerReport.receipts.total_count}</span></div>
+                        <div className="text-gray-600 mt-1">Total Amount: <span className="font-semibold">{formatCurrency(customerReport.receipts.total_amount)}</span></div>
+                      </div>
+                      <div>
+                        <div className="text-gray-600 mb-1">By Payment Method:</div>
+                        {Object.entries(customerReport.receipts.by_method || {}).map(([method, amount]) => (
+                          <div key={method} className="text-xs text-gray-600">
+                            {method}: {formatCurrency(amount)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="text-gray-400 text-center py-8">Select a customer to view report</div>
+              <div className="lg:col-span-3 bg-white rounded-lg border p-12 text-center text-gray-400">
+                {loading ? 'Loading report...' : 'Select a customer to view detailed report'}
+              </div>
             )}
           </div>
         </div>
       )}
 
       {reportType === 'project' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white rounded-2xl shadow-sm border p-6">
-            <h3 className="text-lg font-semibold mb-4">Select Project</h3>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {projects.map(p => (
-                <button key={p.id} onClick={() => loadProjectReport(p.id)}
-                  className={`w-full text-left p-3 rounded-lg border ${selectedProject === p.id ? 'bg-blue-50 border-blue-200' : 'hover:bg-gray-50'}`}>
-                  <div className="font-medium">{p.name}</div>
-                  <div className="text-xs text-gray-500">{p.project_id} • {p.location}</div>
-                </button>
-              ))}
-            </div>
-            <div className="mt-4 pt-4 border-t">
-              <button onClick={() => downloadExcel('project')} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
-                📊 Download All Projects (Excel)
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div className="bg-white rounded-lg border p-4">
+              <h3 className="text-sm font-medium text-gray-600 mb-2">Select Project</h3>
+              <div className="space-y-1 max-h-96 overflow-y-auto">
+                {projects.map(p => (
+                  <button key={p.id} onClick={() => loadProjectReport(p.id)}
+                    className={`w-full text-left p-2 rounded text-xs ${selectedProject === p.id ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'}`}>
+                    <div className="font-medium">{p.name}</div>
+                    <div className="text-gray-500">{p.project_id}</div>
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => downloadExcel('project')} className="mt-3 w-full px-3 py-2 bg-gray-800 text-white rounded text-xs font-medium hover:bg-gray-900">
+                Export All (Excel)
               </button>
             </div>
-          </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border p-6">
-            <h3 className="text-lg font-semibold mb-4">Report Preview</h3>
             {projectReport ? (
-              <div className="space-y-4">
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <div className="text-sm font-medium mb-2">Financial Summary</div>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div>Total Sale: <span className="font-semibold">{formatCurrency(projectReport.financials.total_sale)}</span></div>
-                    <div>Total Received: <span className="font-semibold">{formatCurrency(projectReport.financials.total_received)}</span></div>
-                    <div>Available Units: <span className="font-semibold">{projectReport.inventory.available_units}</span></div>
-                    <div>Sold Units: <span className="font-semibold">{projectReport.inventory.sold_units}</span></div>
+              <div className="lg:col-span-3 space-y-4">
+                {/* Report Header */}
+                <div className="bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg border border-gray-700 p-6 text-white">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold mb-1">{projectReport.report_header?.title || 'Project Financial Report'}</h2>
+                      <div className="text-sm text-gray-300">
+                        Generated via <span className="font-semibold text-white">Radius CRM</span>
+                        {projectReport.report_header?.generated_at && (
+                          <span className="ml-4">• {new Date(projectReport.report_header.generated_at).toLocaleString()}</span>
+                        )}
+                      </div>
+                    </div>
+                    <button onClick={() => downloadPDF('project', projectReport.project.project_id)} 
+                      className="px-4 py-2 bg-white text-gray-900 rounded text-sm font-medium hover:bg-gray-100">
+                      Export PDF
+                    </button>
                   </div>
                 </div>
-                <button onClick={() => downloadPDF('project', projectReport.project.project_id)} className="w-full px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
-                  📄 Download PDF
-                </button>
+
+                {/* Project Info Header */}
+                <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h3 className="text-xl font-semibold text-gray-900">{projectReport.project.name}</h3>
+                      <div className="text-sm text-gray-600 mt-1">
+                        {projectReport.project.project_id} • {projectReport.project.location}
+                      </div>
+                      {projectReport.project.description && (
+                        <div className="text-sm text-gray-500 mt-2">{projectReport.project.description}</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Financial Summary Cards */}
+                <div className="grid grid-cols-5 gap-4">
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Total Sale</div>
+                    <div className="text-xl font-semibold text-gray-900">{formatCurrency(projectReport.financials.total_sale)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Total Received</div>
+                    <div className="text-xl font-semibold text-green-700">{formatCurrency(projectReport.financials.total_received)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Overdue</div>
+                    <div className="text-xl font-semibold text-red-600">{formatCurrency(projectReport.financials.overdue)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Future Receivable</div>
+                    <div className="text-xl font-semibold text-blue-600">{formatCurrency(projectReport.financials.future_receivable)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Outstanding</div>
+                    <div className="text-xl font-semibold text-gray-900">{formatCurrency(projectReport.financials.outstanding)}</div>
+                  </div>
+                </div>
+
+                {/* Inventory Summary */}
+                <div className="bg-white rounded-lg border p-4">
+                  <h4 className="font-semibold text-gray-900 mb-3">Inventory Summary</h4>
+                  <div className="grid grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <div className="text-gray-600">Total Units: <span className="font-semibold">{projectReport.inventory.total_units}</span></div>
+                      <div className="text-gray-600 mt-1">Available: <span className="font-semibold text-green-700">{projectReport.inventory.available_units}</span></div>
+                      <div className="text-gray-600 mt-1">Sold: <span className="font-semibold">{projectReport.inventory.sold_units}</span></div>
+                    </div>
+                    <div>
+                      <div className="text-gray-600">Total Marlas: <span className="font-semibold">{projectReport.inventory.total_marlas.toFixed(2)}</span></div>
+                      <div className="text-gray-600 mt-1">Available: <span className="font-semibold text-green-700">{projectReport.inventory.available_marlas.toFixed(2)}</span></div>
+                      <div className="text-gray-600 mt-1">Sold: <span className="font-semibold">{projectReport.inventory.sold_marlas.toFixed(2)}</span></div>
+                    </div>
+                    <div>
+                      <div className="text-gray-600">Total Value: <span className="font-semibold">{formatCurrency(projectReport.inventory.total_value)}</span></div>
+                      <div className="text-gray-600 mt-1">Available Value: <span className="font-semibold text-green-700">{formatCurrency(projectReport.inventory.available_value)}</span></div>
+                      <div className="text-gray-600 mt-1">Sold Value: <span className="font-semibold">{formatCurrency(projectReport.inventory.sold_value)}</span></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Marla-wise Breakdown */}
+                {projectReport.inventory.marla_wise_breakdown && (
+                  <div className="bg-white rounded-lg border">
+                    <div className="p-4 border-b flex items-center justify-between">
+                      <h4 className="font-semibold text-gray-900">Marla-wise Inventory Breakdown</h4>
+                      <button onClick={() => setExpandedInventory(!expandedInventory)} className="text-xs text-gray-600 hover:text-gray-900">
+                        {expandedInventory ? 'Hide' : 'Show'} Details
+                      </button>
+                    </div>
+                    {expandedInventory && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Marla Range</th>
+                              <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Total Units</th>
+                              <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Available</th>
+                              <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Sold</th>
+                              <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Total Marlas</th>
+                              <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Total Value</th>
+                              <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Available Value</th>
+                              <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Sold Value</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {projectReport.inventory.marla_wise_breakdown.map((range, idx) => (
+                              <tr key={idx} className="hover:bg-gray-50">
+                                <td className="px-4 py-3 font-medium">{range.range}</td>
+                                <td className="px-4 py-3 text-right">{range.total_units}</td>
+                                <td className="px-4 py-3 text-right text-green-700">{range.available_units}</td>
+                                <td className="px-4 py-3 text-right">{range.sold_units}</td>
+                                <td className="px-4 py-3 text-right">{range.total_marlas.toFixed(2)}</td>
+                                <td className="px-4 py-3 text-right">{formatCurrency(range.total_value)}</td>
+                                <td className="px-4 py-3 text-right text-green-700">{formatCurrency(range.available_value)}</td>
+                                <td className="px-4 py-3 text-right">{formatCurrency(range.sold_value)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Inventory Details */}
+                <div className="bg-white rounded-lg border">
+                  <div className="p-4 border-b">
+                    <h4 className="font-semibold text-gray-900">Inventory Details ({projectReport.inventory.details.length})</h4>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Unit Number</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Type</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Block</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Area (Marla)</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Rate/Marla</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Total Value</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {projectReport.inventory.details.map((item, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="px-4 py-3">{item.unit_number || '-'}</td>
+                            <td className="px-4 py-3">{item.unit_type || '-'}</td>
+                            <td className="px-4 py-3">{item.block || '-'}</td>
+                            <td className="px-4 py-3 text-right">{item.area_marla.toFixed(2)}</td>
+                            <td className="px-4 py-3 text-right">{formatCurrency(item.rate_per_marla)}</td>
+                            <td className="px-4 py-3 text-right font-medium">{formatCurrency(item.total_value)}</td>
+                            <td className="px-4 py-3">
+                              <span className={`px-2 py-0.5 rounded text-xs ${item.status === 'available' ? 'bg-green-100 text-green-700' : 'bg-gray-100'}`}>
+                                {item.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Customer-wise Top Receivables */}
+                {projectReport.customer_receivables && projectReport.customer_receivables.length > 0 && (
+                  <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
+                    <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+                      <h4 className="font-semibold text-gray-900 text-lg">Customer-wise Top Receivables</h4>
+                      <p className="text-xs text-gray-600 mt-1">Grouped by customer with installment schedules - For CFO/COO Review</p>
+                    </div>
+                    <div className="divide-y divide-gray-200">
+                      {projectReport.customer_receivables.map((customer, idx) => (
+                        <div key={idx} className="p-4 hover:bg-gray-50">
+                          <div className="flex items-start justify-between mb-3">
+                            <div>
+                              <h5 className="font-semibold text-gray-900">{customer.customer_name}</h5>
+                              <div className="text-xs text-gray-600 mt-1">
+                                {customer.customer_id} • {customer.mobile}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-xs text-gray-600">Total Outstanding</div>
+                              <div className="text-lg font-bold text-red-600">{formatCurrency(customer.total_outstanding)}</div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                Overdue: {formatCurrency(customer.total_overdue)} • Future: {formatCurrency(customer.total_future)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-3 overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead className="bg-gray-100 border-b">
+                                <tr>
+                                  <th className="px-3 py-2 text-left font-semibold text-gray-700">#</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-gray-700">Unit</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-gray-700">Due Date</th>
+                                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Amount</th>
+                                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Paid</th>
+                                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Balance</th>
+                                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Days Outstanding</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-gray-700">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {customer.installments.map((inst, iIdx) => (
+                                  <tr key={iIdx} className={inst.is_overdue ? 'bg-red-50' : ''}>
+                                    <td className="px-3 py-2">{inst.installment_number}</td>
+                                    <td className="px-3 py-2 text-gray-600">{inst.unit_number || '-'}</td>
+                                    <td className="px-3 py-2">{inst.due_date ? new Date(inst.due_date).toLocaleDateString() : '-'}</td>
+                                    <td className="px-3 py-2 text-right">{formatCurrency(inst.amount)}</td>
+                                    <td className="px-3 py-2 text-right text-green-700">{formatCurrency(inst.paid)}</td>
+                                    <td className={`px-3 py-2 text-right font-medium ${inst.is_overdue ? 'text-red-600' : 'text-gray-900'}`}>
+                                      {formatCurrency(inst.balance)}
+                                    </td>
+                                    <td className={`px-3 py-2 text-right ${inst.days_outstanding > 0 ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                                      {inst.days_outstanding !== null ? `${inst.days_outstanding} days` : '-'}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      <span className={`px-2 py-0.5 rounded text-xs ${
+                                        inst.is_overdue ? 'bg-red-100 text-red-700' : 
+                                        'bg-gray-100 text-gray-700'
+                                      }`}>
+                                        {inst.is_overdue ? 'Overdue' : 'Pending'}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Transactions Table */}
+                <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
+                  <div className="p-4 border-b border-gray-200">
+                    <h4 className="font-semibold text-gray-900">All Transactions ({projectReport.transactions.length})</h4>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Transaction ID</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Customer</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Broker</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Unit</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Area (Marla)</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Total Value</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Received</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {projectReport.transactions.map((txn, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 font-mono text-xs">{txn.transaction_id}</td>
+                            <td className="px-4 py-3">{txn.customer_name || '-'}</td>
+                            <td className="px-4 py-3">{txn.broker_name || '-'}</td>
+                            <td className="px-4 py-3">{txn.unit_number || '-'}</td>
+                            <td className="px-4 py-3 text-right">{txn.area_marla.toFixed(2)}</td>
+                            <td className="px-4 py-3 text-right font-medium">{formatCurrency(txn.total_value)}</td>
+                            <td className="px-4 py-3 text-right text-green-700">{formatCurrency(txn.received)}</td>
+                            <td className="px-4 py-3 text-right">{formatCurrency(txn.balance)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             ) : (
-              <div className="text-gray-400 text-center py-8">Select a project to view report</div>
+              <div className="lg:col-span-3 bg-white rounded-lg border p-12 text-center text-gray-400">
+                {loading ? 'Loading report...' : 'Select a project to view detailed report'}
+              </div>
             )}
           </div>
         </div>
       )}
 
       {reportType === 'broker' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white rounded-2xl shadow-sm border p-6">
-            <h3 className="text-lg font-semibold mb-4">Select Broker</h3>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {brokers.map(b => (
-                <button key={b.id} onClick={() => loadBrokerReport(b.id)}
-                  className={`w-full text-left p-3 rounded-lg border ${selectedBroker === b.id ? 'bg-blue-50 border-blue-200' : 'hover:bg-gray-50'}`}>
-                  <div className="font-medium">{b.name}</div>
-                  <div className="text-xs text-gray-500">{b.broker_id} • {b.mobile}</div>
-                </button>
-              ))}
-            </div>
-            <div className="mt-4 pt-4 border-t">
-              <button onClick={() => downloadExcel('broker')} className="w-full px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
-                📊 Download All Brokers (Excel)
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div className="bg-white rounded-lg border p-4">
+              <h3 className="text-sm font-medium text-gray-600 mb-2">Select Broker</h3>
+              <div className="space-y-1 max-h-96 overflow-y-auto">
+                {brokers.map(b => (
+                  <button key={b.id} onClick={() => loadBrokerReport(b.id)}
+                    className={`w-full text-left p-2 rounded text-xs ${selectedBroker === b.id ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'}`}>
+                    <div className="font-medium">{b.name}</div>
+                    <div className="text-gray-500">{b.broker_id}</div>
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => downloadExcel('broker')} className="mt-3 w-full px-3 py-2 bg-gray-800 text-white rounded text-xs font-medium hover:bg-gray-900">
+                Export All (Excel)
               </button>
             </div>
-          </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border p-6">
-            <h3 className="text-lg font-semibold mb-4">Report Preview</h3>
             {brokerReport ? (
-              <div className="space-y-4">
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <div className="text-sm font-medium mb-2">Commission Summary</div>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div>Total Earned: <span className="font-semibold">{formatCurrency(brokerReport.commission.total_earned)}</span></div>
-                    <div>Total Paid: <span className="font-semibold">{formatCurrency(brokerReport.commission.total_paid)}</span></div>
-                    <div>Pending: <span className="font-semibold text-amber-600">{formatCurrency(brokerReport.commission.pending)}</span></div>
-                    <div>Transactions: <span className="font-semibold">{brokerReport.financials.total_transactions}</span></div>
+              <div className="lg:col-span-3 space-y-4">
+                {/* Report Header */}
+                <div className="bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg border border-gray-700 p-6 text-white">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold mb-1">{brokerReport.report_header?.title || 'Broker Detailed Report'}</h2>
+                      <div className="text-sm text-gray-300">
+                        Generated via <span className="font-semibold text-white">Radius CRM</span>
+                        {brokerReport.report_header?.generated_at && (
+                          <span className="ml-4">• {new Date(brokerReport.report_header.generated_at).toLocaleString()}</span>
+                        )}
+                      </div>
+                    </div>
+                    <button onClick={() => downloadPDF('broker', brokerReport.broker.broker_id)} 
+                      className="px-4 py-2 bg-white text-gray-900 rounded text-sm font-medium hover:bg-gray-100">
+                      Export PDF
+                    </button>
                   </div>
                 </div>
-                <button onClick={() => downloadPDF('broker', brokerReport.broker.broker_id)} className="w-full px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
-                  📄 Download PDF
-                </button>
+
+                {/* Broker Info Header */}
+                <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h3 className="text-xl font-semibold text-gray-900">{brokerReport.broker.name}</h3>
+                      <div className="text-sm text-gray-600 mt-1">
+                        {brokerReport.broker.broker_id} • {brokerReport.broker.mobile}
+                        {brokerReport.broker.email && ` • ${brokerReport.broker.email}`}
+                      </div>
+                      {brokerReport.broker.company && (
+                        <div className="text-sm text-gray-500 mt-1">Company: {brokerReport.broker.company}</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Commission Summary Cards */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Total Commission Earned</div>
+                    <div className="text-2xl font-semibold text-gray-900">{formatCurrency(brokerReport.commission.total_earned)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Total Commission Paid</div>
+                    <div className="text-2xl font-semibold text-green-700">{formatCurrency(brokerReport.commission.total_paid)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Pending Commission</div>
+                    <div className="text-2xl font-semibold text-amber-600">{formatCurrency(brokerReport.commission.pending)}</div>
+                  </div>
+                </div>
+
+                {/* Financial Summary Cards */}
+                <div className="grid grid-cols-5 gap-4">
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Total Sale Value</div>
+                    <div className="text-xl font-semibold text-gray-900">{formatCurrency(brokerReport.financials.total_sale_value)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Total Received</div>
+                    <div className="text-xl font-semibold text-green-700">{formatCurrency(brokerReport.financials.total_received)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Due</div>
+                    <div className="text-xl font-semibold text-red-600">{formatCurrency(brokerReport.financials.due)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Future Receivable</div>
+                    <div className="text-xl font-semibold text-blue-600">{formatCurrency(brokerReport.financials.future_receivable)}</div>
+                  </div>
+                  <div className="bg-white rounded-lg border p-4">
+                    <div className="text-xs text-gray-600 mb-1">Transactions</div>
+                    <div className="text-xl font-semibold text-gray-900">{brokerReport.financials.total_transactions}</div>
+                  </div>
+                </div>
+
+                {/* Transactions Table */}
+                <div className="bg-white rounded-lg border">
+                  <div className="p-4 border-b">
+                    <h4 className="font-semibold text-gray-900">Transactions ({brokerReport.transactions.length})</h4>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Transaction ID</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Customer</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Project</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Unit</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Sale Value</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Commission Rate</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Commission Earned</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Commission Paid</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Commission Pending</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {brokerReport.transactions.map((txn, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 font-mono text-xs">{txn.transaction_id}</td>
+                            <td className="px-4 py-3">{txn.customer_name || '-'}</td>
+                            <td className="px-4 py-3">{txn.project_name || '-'}</td>
+                            <td className="px-4 py-3">{txn.unit_number || '-'}</td>
+                            <td className="px-4 py-3 text-right font-medium">{formatCurrency(txn.total_value)}</td>
+                            <td className="px-4 py-3 text-right">{txn.commission_rate.toFixed(2)}%</td>
+                            <td className="px-4 py-3 text-right font-medium">{formatCurrency(txn.commission_earned)}</td>
+                            <td className="px-4 py-3 text-right text-green-700">{formatCurrency(txn.commission_paid)}</td>
+                            <td className="px-4 py-3 text-right text-amber-600 font-medium">{formatCurrency(txn.commission_pending)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Payment History */}
+                {brokerReport.payments && brokerReport.payments.length > 0 && (
+                  <div className="bg-white rounded-lg border">
+                    <div className="p-4 border-b">
+                      <h4 className="font-semibold text-gray-900">Commission Payment History ({brokerReport.payments.length})</h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 border-b">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Payment ID</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Transaction ID</th>
+                            <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">Amount</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Method</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Approved By</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Reference</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {brokerReport.payments.map((payment, idx) => (
+                            <tr key={idx} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 font-mono text-xs">{payment.payment_id}</td>
+                              <td className="px-4 py-3 text-xs">{payment.payment_date ? new Date(payment.payment_date).toLocaleDateString() : '-'}</td>
+                              <td className="px-4 py-3 font-mono text-xs">{payment.transaction_id || '-'}</td>
+                              <td className="px-4 py-3 text-right font-medium">{formatCurrency(payment.amount)}</td>
+                              <td className="px-4 py-3">{payment.payment_method || '-'}</td>
+                              <td className="px-4 py-3">{payment.approved_by || '-'}</td>
+                              <td className="px-4 py-3 text-xs text-gray-600">{payment.reference_number || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Interactions History */}
+                {brokerReport.interactions && brokerReport.interactions.history && brokerReport.interactions.history.length > 0 && (
+                  <div className="bg-white rounded-lg border">
+                    <div className="p-4 border-b">
+                      <h4 className="font-semibold text-gray-900">Interactions History ({brokerReport.interactions.total_count})</h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 border-b">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Type</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Rep</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Notes</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Next Follow-up</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {brokerReport.interactions.history.map((interaction, idx) => (
+                            <tr key={idx} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 text-xs">{new Date(interaction.date).toLocaleDateString()}</td>
+                              <td className="px-4 py-3">{interaction.type}</td>
+                              <td className="px-4 py-3">{interaction.rep_name || '-'}</td>
+                              <td className="px-4 py-3">
+                                <span className="px-2 py-0.5 rounded text-xs bg-gray-100">{interaction.status}</span>
+                              </td>
+                              <td className="px-4 py-3 text-xs text-gray-600">{interaction.notes || '-'}</td>
+                              <td className="px-4 py-3 text-xs">{interaction.next_follow_up ? new Date(interaction.next_follow_up).toLocaleDateString() : '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="text-gray-400 text-center py-8">Select a broker to view report</div>
+              <div className="lg:col-span-3 bg-white rounded-lg border p-12 text-center text-gray-400">
+                {loading ? 'Loading report...' : 'Select a broker to view detailed report'}
+              </div>
             )}
           </div>
         </div>

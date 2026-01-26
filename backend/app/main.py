@@ -2653,182 +2653,278 @@ def get_broker_details(broker_id: str, db: Session = Depends(get_db)):
 @app.get("/api/reports/customers/detailed/{customer_id}")
 def get_customer_detailed_report(customer_id: str, db: Session = Depends(get_db)):
     """Get detailed customer financial report"""
-    from reports import get_customer_detailed_report as get_report
-    report = get_report(customer_id, db)
-    if not report:
-        raise HTTPException(404, "Customer not found")
-    return report
+    try:
+        try:
+            from app.reports import get_customer_detailed_report as get_report
+        except ImportError:
+            from reports import get_customer_detailed_report as get_report
+        report = get_report(customer_id, db)
+        if not report:
+            raise HTTPException(status_code=404, detail="Customer not found")
+        return report
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
 
 @app.get("/api/reports/customers/list")
 def get_customers_list_report(db: Session = Depends(get_db)):
     """Get customer list with financials"""
-    from reports import get_customer_detailed_report as get_report
-    customers = db.query(Customer).all()
-    result = []
-    for c in customers:
-        report = get_report(str(c.id), db)
-        if report:
-            result.append({
-                "customer_id": report["customer"]["customer_id"],
-                "name": report["customer"]["name"],
-                "mobile": report["customer"]["mobile"],
-                "total_sale": report["financials"]["total_sale"],
-                "total_received": report["financials"]["total_received"],
-                "overdue": report["financials"]["overdue"],
-                "future_receivable": report["financials"]["future_receivable"],
-                "outstanding": report["financials"]["outstanding"],
-                "interaction_count": report["interactions"]["total_count"]
-            })
-    return result
+    try:
+        try:
+            from app.reports import get_customer_detailed_report as get_report
+        except ImportError:
+            from reports import get_customer_detailed_report as get_report
+        customers = db.query(Customer).all()
+        result = []
+        for c in customers:
+            try:
+                report = get_report(str(c.id), db)
+                if report:
+                    result.append({
+                        "customer_id": report["customer"]["customer_id"],
+                        "name": report["customer"]["name"],
+                        "mobile": report["customer"]["mobile"],
+                        "total_sale": report["financials"]["total_sale"],
+                        "total_received": report["financials"]["total_received"],
+                        "overdue": report["financials"]["overdue"],
+                        "future_receivable": report["financials"]["future_receivable"],
+                        "outstanding": report["financials"]["outstanding"],
+                        "interaction_count": report["interactions"]["total_count"]
+                    })
+            except Exception:
+                continue  # Skip customers with errors
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating customer list: {str(e)}")
 
 @app.get("/api/reports/projects/{project_id}")
 def get_project_report(project_id: str, db: Session = Depends(get_db)):
     """Get project financial report"""
-    from reports import get_project_detailed_report as get_report
-    report = get_report(project_id, db)
-    if not report:
-        raise HTTPException(404, "Project not found")
-    return report
+    try:
+        try:
+            from app.reports import get_project_detailed_report as get_report
+        except ImportError:
+            from reports import get_project_detailed_report as get_report
+        report = get_report(project_id, db)
+        if not report:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return report
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
 
 @app.get("/api/reports/brokers/{broker_id}")
 def get_broker_report(broker_id: str, db: Session = Depends(get_db)):
     """Get detailed broker report"""
-    from reports import get_broker_detailed_report as get_report
-    report = get_report(broker_id, db)
-    if not report:
-        raise HTTPException(404, "Broker not found")
-    return report
+    try:
+        try:
+            from app.reports import get_broker_detailed_report as get_report
+        except ImportError:
+            from reports import get_broker_detailed_report as get_report
+        report = get_report(broker_id, db)
+        if not report:
+            raise HTTPException(status_code=404, detail="Broker not found")
+        return report
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
 
 @app.get("/api/reports/customers/pdf/{customer_id}")
 def get_customer_pdf(customer_id: str, db: Session = Depends(get_db)):
     """Generate PDF report for customer"""
-    from reports import get_customer_detailed_report as get_report
-    from report_generator import generate_customer_pdf
-    report = get_report(customer_id, db)
-    if not report:
-        raise HTTPException(404, "Customer not found")
-    pdf_buffer = generate_customer_pdf(report)
-    return StreamingResponse(
-        pdf_buffer,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=customer_{report['customer']['customer_id']}_report.pdf"}
-    )
+    try:
+        try:
+            from app.reports import get_customer_detailed_report as get_report
+            from app.report_generator import generate_customer_pdf
+        except ImportError:
+            from reports import get_customer_detailed_report as get_report
+            from report_generator import generate_customer_pdf
+        report = get_report(customer_id, db)
+        if not report:
+            raise HTTPException(status_code=404, detail="Customer not found")
+        pdf_buffer = generate_customer_pdf(report)
+        return StreamingResponse(
+            pdf_buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=customer_{report['customer']['customer_id']}_report.pdf"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
 
 @app.get("/api/reports/customers/excel")
 def get_customers_excel(db: Session = Depends(get_db)):
     """Generate Excel report for all customers"""
-    from reports import get_customer_detailed_report as get_report
-    from report_generator import generate_customer_excel
-    from io import BytesIO
-    import zipfile
-    
-    customers = db.query(Customer).all()
-    zip_buffer = BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for c in customers:
-            report = get_report(str(c.id), db)
-            if report:
-                excel_buffer = generate_customer_excel(report)
-                zip_file.writestr(f"customer_{report['customer']['customer_id']}.xlsx", excel_buffer.getvalue())
-    
-    zip_buffer.seek(0)
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=customers_report.zip"}
-    )
+    try:
+        try:
+            from app.reports import get_customer_detailed_report as get_report
+            from app.report_generator import generate_customer_excel
+        except ImportError:
+            from reports import get_customer_detailed_report as get_report
+            from report_generator import generate_customer_excel
+        from io import BytesIO
+        import zipfile
+        
+        customers = db.query(Customer).all()
+        zip_buffer = BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for c in customers:
+                try:
+                    report = get_report(str(c.id), db)
+                    if report:
+                        excel_buffer = generate_customer_excel(report)
+                        zip_file.writestr(f"customer_{report['customer']['customer_id']}.xlsx", excel_buffer.getvalue())
+                except Exception:
+                    continue  # Skip customers with errors
+        
+        zip_buffer.seek(0)
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=customers_report.zip"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating Excel: {str(e)}")
 
 @app.get("/api/reports/projects/pdf/{project_id}")
 def get_project_pdf(project_id: str, db: Session = Depends(get_db)):
     """Generate PDF report for project"""
-    from reports import get_project_detailed_report as get_report
-    from report_generator import generate_project_pdf
-    report = get_report(project_id, db)
-    if not report:
-        raise HTTPException(404, "Project not found")
-    pdf_buffer = generate_project_pdf(report)
-    return StreamingResponse(
-        pdf_buffer,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=project_{report['project']['project_id']}_report.pdf"}
-    )
+    try:
+        try:
+            from app.reports import get_project_detailed_report as get_report
+            from app.report_generator import generate_project_pdf
+        except ImportError:
+            from reports import get_project_detailed_report as get_report
+            from report_generator import generate_project_pdf
+        report = get_report(project_id, db)
+        if not report:
+            raise HTTPException(status_code=404, detail="Project not found")
+        pdf_buffer = generate_project_pdf(report)
+        return StreamingResponse(
+            pdf_buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=project_{report['project']['project_id']}_report.pdf"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
 
 @app.get("/api/reports/projects/excel")
 def get_projects_excel(db: Session = Depends(get_db)):
     """Generate Excel report for all projects"""
-    from reports import get_project_detailed_report as get_report
-    from report_generator import generate_customer_excel  # Reuse customer format
-    from io import BytesIO
-    import zipfile
-    
-    projects = db.query(Project).all()
-    zip_buffer = BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for p in projects:
-            report = get_report(str(p.id), db)
-            if report:
-                # Convert project report to similar format
-                excel_buffer = generate_customer_excel({
-                    "customer": {"customer_id": report["project"]["project_id"], "name": report["project"]["name"]},
-                    "financials": report["financials"],
-                    "transactions": report["transactions"],
-                    "interactions": {"total_count": 0, "history": []}
-                })
-                zip_file.writestr(f"project_{report['project']['project_id']}.xlsx", excel_buffer.getvalue())
-    
-    zip_buffer.seek(0)
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=projects_report.zip"}
-    )
+    try:
+        try:
+            from app.reports import get_project_detailed_report as get_report
+            from app.report_generator import generate_customer_excel  # Reuse customer format
+        except ImportError:
+            from reports import get_project_detailed_report as get_report
+            from report_generator import generate_customer_excel  # Reuse customer format
+        from io import BytesIO
+        import zipfile
+        
+        projects = db.query(Project).all()
+        zip_buffer = BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for p in projects:
+                try:
+                    report = get_report(str(p.id), db)
+                    if report:
+                        # Convert project report to similar format
+                        excel_buffer = generate_customer_excel({
+                            "customer": {"customer_id": report["project"]["project_id"], "name": report["project"]["name"]},
+                            "financials": report["financials"],
+                            "transactions": report["transactions"],
+                            "interactions": {"total_count": 0, "history": []}
+                        })
+                        zip_file.writestr(f"project_{report['project']['project_id']}.xlsx", excel_buffer.getvalue())
+                except Exception:
+                    continue  # Skip projects with errors
+        
+        zip_buffer.seek(0)
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=projects_report.zip"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating Excel: {str(e)}")
 
 @app.get("/api/reports/brokers/pdf/{broker_id}")
 def get_broker_pdf(broker_id: str, db: Session = Depends(get_db)):
     """Generate PDF report for broker"""
-    from reports import get_broker_detailed_report as get_report
-    from report_generator import generate_broker_pdf
-    report = get_report(broker_id, db)
-    if not report:
-        raise HTTPException(404, "Broker not found")
-    pdf_buffer = generate_broker_pdf(report)
-    return StreamingResponse(
-        pdf_buffer,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=broker_{report['broker']['broker_id']}_report.pdf"}
-    )
+    try:
+        try:
+            from app.reports import get_broker_detailed_report as get_report
+            from app.report_generator import generate_broker_pdf
+        except ImportError:
+            from reports import get_broker_detailed_report as get_report
+            from report_generator import generate_broker_pdf
+        report = get_report(broker_id, db)
+        if not report:
+            raise HTTPException(status_code=404, detail="Broker not found")
+        pdf_buffer = generate_broker_pdf(report)
+        return StreamingResponse(
+            pdf_buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=broker_{report['broker']['broker_id']}_report.pdf"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
 
 @app.get("/api/reports/brokers/excel")
 def get_brokers_excel(db: Session = Depends(get_db)):
     """Generate Excel report for all brokers"""
-    from reports import get_broker_detailed_report as get_report
-    from report_generator import generate_customer_excel  # Reuse format
-    from io import BytesIO
-    import zipfile
-    
-    brokers = db.query(Broker).all()
-    zip_buffer = BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for b in brokers:
-            report = get_report(str(b.id), db)
-            if report:
-                excel_buffer = generate_customer_excel({
-                    "customer": {"customer_id": report["broker"]["broker_id"], "name": report["broker"]["name"]},
-                    "financials": {"total_sale": report["financials"]["total_sale_value"], "total_received": 0, "overdue": 0, "future_receivable": 0, "outstanding": 0},
-                    "transactions": report["transactions"],
-                    "interactions": report["interactions"]
-                })
-                zip_file.writestr(f"broker_{report['broker']['broker_id']}.xlsx", excel_buffer.getvalue())
-    
+    try:
+        try:
+            from app.reports import get_broker_detailed_report as get_report
+            from app.report_generator import generate_customer_excel  # Reuse format
+        except ImportError:
+            from reports import get_broker_detailed_report as get_report
+            from report_generator import generate_customer_excel  # Reuse format
+        from io import BytesIO
+        import zipfile
+        
+        brokers = db.query(Broker).all()
+        zip_buffer = BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for b in brokers:
+                try:
+                    report = get_report(str(b.id), db)
+                    if report:
+                        excel_buffer = generate_customer_excel({
+                            "customer": {"customer_id": report["broker"]["broker_id"], "name": report["broker"]["name"]},
+                            "financials": {
+                                "total_sale": report["financials"]["total_sale_value"],
+                                "total_received": report["financials"].get("total_received", 0),
+                                "overdue": report["financials"].get("due", 0),
+                                "future_receivable": report["financials"].get("future_receivable", 0),
+                                "outstanding": report["financials"].get("outstanding", 0)
+                            },
+                            "transactions": report["transactions"],
+                            "interactions": report["interactions"]
+                        })
+                        zip_file.writestr(f"broker_{report['broker']['broker_id']}.xlsx", excel_buffer.getvalue())
+                except Exception:
+                    continue  # Skip brokers with errors
+        
         zip_buffer.seek(0)
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=brokers_report.zip"}
-    )
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=brokers_report.zip"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating Excel: {str(e)}")
 
 # ============================================
 # MEDIA API
