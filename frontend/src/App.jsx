@@ -5,11 +5,177 @@ const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
 
 // ============================================
+// AUTHENTICATION - LOGIN VIEW
+// ============================================
+function LoginView({ onLogin }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+      const res = await api.post('/auth/login', formData);
+      localStorage.setItem('token', res.data.access_token);
+      localStorage.setItem('user', JSON.stringify(res.data.user));
+      api.defaults.headers.common['Authorization'] = `Bearer ${res.data.access_token}`;
+      onLogin(res.data.user);
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-lg p-8">
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">Radius CRM</h1>
+        <p className="text-gray-600 mb-8">Sign in to your account</p>
+        
+        {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>}
+        
+        <form onSubmit={handleLogin} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Username / Email / Mobile</label>
+            <input
+              type="text"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              required
+              className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
+              placeholder="Enter your rep_id (e.g., REP-0002)"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              required
+              className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
+              placeholder="Enter your password"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-gray-900 text-white py-2 px-4 rounded-lg font-medium hover:bg-gray-800 disabled:opacity-50"
+          >
+            {loading ? 'Signing in...' : 'Sign in'}
+          </button>
+        </form>
+        
+        <p className="mt-6 text-xs text-gray-500 text-center">
+          First time? Use your rep_id as username and any password
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // MAIN APP
 // ============================================
 export default function App() {
+  const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('projects');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  
+  // Check for existing login on mount - MUST be before any conditional returns
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const savedUser = localStorage.getItem('user');
+    if (token && savedUser) {
+      try {
+        const userData = JSON.parse(savedUser);
+        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        // Verify token is still valid
+        api.get('/auth/me').then(res => {
+          setUser(res.data);
+          setCheckingAuth(false);
+        }).catch(() => {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setCheckingAuth(false);
+        });
+      } catch (e) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setCheckingAuth(false);
+      }
+    } else {
+      setCheckingAuth(false);
+    }
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    delete api.defaults.headers.common['Authorization'];
+    setUser(null);
+  };
+  
+  // Check for existing login on mount
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const savedUser = localStorage.getItem('user');
+    if (token && savedUser) {
+      try {
+        const userData = JSON.parse(savedUser);
+        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        // Verify token is still valid
+        api.get('/auth/me').then(res => {
+          setUser(res.data);
+        }).catch(() => {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+        });
+      } catch (e) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
+    }
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    delete api.defaults.headers.common['Authorization'];
+    setUser(null);
+  };
+  
+  // Show login if not authenticated
+  if (!user) {
+    return <LoginView onLogin={setUser} />;
+  }
+  
+  // Role-based access control
+  const canAccess = (tabId) => {
+    if (!user) return false;
+    const role = user.role || 'user';
+    
+    // Admin can access everything
+    if (role === 'admin') return true;
+    
+    // Role-based access rules
+    const roleAccess = {
+      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'settings'],
+      manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'media'],
+      user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'media'],
+      viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'media']
+    };
+    
+    return roleAccess[role]?.includes(tabId) || false;
+  };
   
   // Primary tabs - always visible
   const primaryTabs = [
@@ -17,27 +183,29 @@ export default function App() {
     { id: 'projects', label: 'Projects' },
     { id: 'inventory', label: 'Inventory' },
     { id: 'transactions', label: 'Transactions' }
-  ];
+  ].filter(tab => canAccess(tab.id));
   
   // Financial menu items
   const financialTabs = [
     { id: 'receipts', label: 'Receipts' },
     { id: 'payments', label: 'Payments' },
     { id: 'reports', label: 'Reports' }
-  ];
+  ].filter(tab => canAccess(tab.id));
   
   // Management menu items
   const managementTabs = [
     { id: 'interactions', label: 'Interactions' },
     { id: 'customers', label: 'Customers' },
     { id: 'brokers', label: 'Brokers' },
-    { id: 'campaigns', label: 'Campaigns' }
-  ];
+    { id: 'campaigns', label: 'Campaigns' },
+    { id: 'media', label: 'Media Library' }
+  ].filter(tab => canAccess(tab.id));
   
   // All tabs for reference
-  const allTabs = [...primaryTabs, ...financialTabs, ...managementTabs, { id: 'settings', label: 'Settings' }];
+  const allTabs = [...primaryTabs, ...financialTabs, ...managementTabs];
+  if (canAccess('settings')) allTabs.push({ id: 'settings', label: 'Settings' });
 
-  // Close dropdown when clicking outside
+  // Close dropdown when clicking outside - MUST be before conditional returns
   useEffect(() => {
     if (!showMoreMenu) return;
     
@@ -56,6 +224,16 @@ export default function App() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showMoreMenu]);
+  
+  // Show loading while checking auth, then show login if not authenticated
+  // ALL HOOKS MUST BE ABOVE THIS POINT
+  if (checkingAuth) {
+    return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><div className="text-gray-600">Loading...</div></div>;
+  }
+  
+  if (!user) {
+    return <LoginView onLogin={setUser} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#fafafa]">
@@ -63,6 +241,15 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <h1 className="text-xl font-semibold tracking-tight text-gray-900">Radius</h1>
           <nav className="flex items-center gap-2">
+            <div className="text-sm text-gray-600 mr-4">
+              {user.name} <span className="text-gray-400">({user.role})</span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+            >
+              Logout
+            </button>
             {/* Primary tabs */}
             <div className="flex gap-1">
               {primaryTabs.map(tab => (
