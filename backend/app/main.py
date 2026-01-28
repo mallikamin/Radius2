@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from sqlalchemy.sql import func
 from pydantic import BaseModel
@@ -85,6 +85,11 @@ class Project(Base):
     location = Column(String(255))
     description = Column(Text)
     status = Column(String(20), default="active")
+    # Vector-specific fields (optional - for linked projects)
+    map_pdf_base64 = Column(Text, nullable=True)
+    map_name = Column(String(255), nullable=True)
+    map_size = Column(JSONB, nullable=True)
+    vector_metadata = Column(JSONB, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -113,6 +118,10 @@ class Inventory(Base):
     status = Column(String(20), default="available")
     factor_details = Column(Text)
     notes = Column(Text)
+    # Vector-specific fields (plot coordinates for map rendering)
+    plot_coordinates = Column(JSONB, nullable=True)  # {x, y, width, height}
+    plot_offset = Column(JSONB, nullable=True)  # {offset_x, offset_y, rotation}
+    is_manual_plot = Column(String(10), default="false")  # "true" or "false" as string for compatibility
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -276,6 +285,131 @@ class MediaFile(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 # ============================================
+# VECTOR MODELS
+# ============================================
+class VectorProject(Base):
+    __tablename__ = "vector_projects"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    map_name = Column(String(255), nullable=True)
+    map_pdf_base64 = Column(Text, nullable=True)
+    map_size = Column(JSONB, nullable=True)  # {width, height}
+    linked_project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True)  # Optional link to Radius project
+    vector_metadata = Column(JSONB, nullable=True)  # Vector-specific settings
+    system_branches = Column(JSONB, nullable=True)  # System-generated branches (sales, inventory) as JSON
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class VectorAnnotation(Base):
+    __tablename__ = "vector_annotations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False)
+    annotation_id = Column(String(100), nullable=False)  # Changed from INTEGER to VARCHAR to support timestamp-based IDs
+    note = Column(Text, nullable=True)
+    category = Column(String(100), nullable=True)
+    color = Column(String(50), nullable=True)
+    font_size = Column(Integer, nullable=True)
+    rotation = Column(Integer, default=0)
+    plot_ids = Column(JSONB, nullable=True)  # Array of plot IDs
+    plot_nums = Column(JSONB, nullable=True)  # Array of plot numbers
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class VectorShape(Base):
+    __tablename__ = "vector_shapes"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False)
+    shape_id = Column(String(100), nullable=False)
+    type = Column(String(50), nullable=True)
+    x = Column(Integer, nullable=True)
+    y = Column(Integer, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    color = Column(String(50), nullable=True)
+    data = Column(JSONB, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class VectorLabel(Base):
+    __tablename__ = "vector_labels"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False)
+    label_id = Column(String(100), nullable=False)
+    text = Column(Text, nullable=True)
+    x = Column(Integer, nullable=True)
+    y = Column(Integer, nullable=True)
+    size = Column(Integer, nullable=True)
+    color = Column(String(50), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class VectorLegend(Base):
+    __tablename__ = "vector_legend"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False, unique=True)
+    visible = Column(String(10), default="true")  # "true" or "false" as string
+    minimized = Column(String(10), default="false")  # "true" or "false" as string
+    position = Column(String(50), nullable=True)
+    manual_entries = Column(JSONB, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class VectorBranch(Base):
+    __tablename__ = "vector_branches"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    timestamp = Column(DateTime, nullable=True)
+    anno_count = Column(Integer, nullable=True)
+    data = Column(JSONB, nullable=True)  # {annos, labels, shapes, plotOffsets, plotRotations}
+    created_at = Column(DateTime, server_default=func.now())
+
+class VectorCreatorNote(Base):
+    __tablename__ = "vector_creator_notes"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False)
+    timestamp = Column(DateTime, server_default=func.now())
+    note = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+class VectorChangeLog(Base):
+    __tablename__ = "vector_change_log"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False)
+    timestamp = Column(DateTime, server_default=func.now())
+    action = Column(Text, nullable=True)
+    details = Column(JSONB, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+class VectorProjectBackup(Base):
+    __tablename__ = "vector_project_backups"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False)
+    backup_data = Column(JSONB, nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+class VectorBackupSettings(Base):
+    __tablename__ = "vector_backup_settings"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    frequency = Column(String(100), default="0 2 * * *")  # Default: Daily at 2 AM (cron format)
+    enabled = Column(String(10), default="true")  # "true" or "false" as string
+    last_run = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class VectorReconciliation(Base):
+    __tablename__ = "vector_reconciliation"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("vector_projects.id", ondelete="CASCADE"), nullable=False)
+    linked_project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    sync_status = Column(String(50), nullable=True)  # linked, synced, needs-reconciliation
+    discrepancies = Column(JSONB, nullable=True)  # Store reconciliation discrepancies
+    last_sync_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+# ============================================
 # AUTHENTICATION SETUP
 # ============================================
 # SECRET_KEY for JWT tokens - MUST be set in production via environment variable
@@ -317,19 +451,38 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
-    token = credentials.credentials
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
+        token = credentials.credentials
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id: str = payload.get("sub")
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+        except JWTError as e:
+            print(f"JWT Error in get_current_user: {str(e)}")
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    
-    user = db.query(CompanyRep).filter((CompanyRep.id == user_id) | (CompanyRep.rep_id == user_id)).first()
-    if user is None or user.status != "active":
-        raise HTTPException(status_code=401, detail="User not found or inactive")
-    return user
+        
+        try:
+            user = db.query(CompanyRep).filter((CompanyRep.id == user_id) | (CompanyRep.rep_id == user_id)).first()
+            if user is None:
+                print(f"User not found for ID: {user_id}")
+                raise HTTPException(status_code=401, detail="User not found")
+            if user.status != "active":
+                print(f"User {user_id} is not active, status: {user.status}")
+                raise HTTPException(status_code=401, detail="User not active")
+            return user
+        except Exception as e:
+            print(f"Database error in get_current_user: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Unexpected error in get_current_user: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Authentication error: {str(e)}")
 
 def require_role(allowed_roles: List[str]):
     def role_checker(current_user: CompanyRep = Depends(get_current_user)):
@@ -337,6 +490,126 @@ def require_role(allowed_roles: List[str]):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return current_user
     return role_checker
+
+# ============================================
+# VECTOR UTILITY FUNCTIONS
+# ============================================
+def normalize_plot_number(plot_num: str) -> str:
+    """Normalize plot/unit number for matching"""
+    if not plot_num:
+        return ""
+    # Remove spaces, convert to uppercase
+    normalized = plot_num.strip().upper()
+    # Remove common separators and replace with standard format
+    normalized = normalized.replace("-", "").replace("_", "").replace(".", "").replace(" ", "")
+    return normalized
+
+def extract_numeric_parts(text: str) -> List[int]:
+    """Extract numeric parts from text"""
+    import re
+    return [int(x) for x in re.findall(r'\d+', text)]
+
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """Calculate Levenshtein distance between two strings"""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+def calculate_similarity(str1: str, str2: str) -> float:
+    """Calculate similarity score between two strings (0-1)"""
+    if not str1 or not str2:
+        return 0.0
+    
+    # Normalize both strings
+    norm1 = normalize_plot_number(str1)
+    norm2 = normalize_plot_number(str2)
+    
+    # Exact match after normalization
+    if norm1 == norm2:
+        return 1.0
+    
+    # Extract numeric parts
+    nums1 = extract_numeric_parts(norm1)
+    nums2 = extract_numeric_parts(norm2)
+    
+    # If numeric parts match, high similarity
+    if nums1 and nums2 and nums1 == nums2:
+        return 0.9
+    
+    # Calculate Levenshtein distance
+    max_len = max(len(norm1), len(norm2))
+    if max_len == 0:
+        return 1.0
+    
+    distance = levenshtein_distance(norm1, norm2)
+    similarity = 1.0 - (distance / max_len)
+    
+    # Boost similarity if numeric parts are similar
+    if nums1 and nums2:
+        num_similarity = len(set(nums1) & set(nums2)) / max(len(set(nums1)), len(set(nums2)), 1)
+        similarity = max(similarity, num_similarity * 0.8)
+    
+    return max(0.0, min(1.0, similarity))
+
+def smart_match_plot_numbers(vector_plots: List[str], radius_units: List[str], threshold: float = 0.5) -> List[dict]:
+    """
+    Smart match plot numbers from Vector to unit numbers from Radius Inventory.
+    Returns list of matches with confidence scores.
+    
+    Args:
+        vector_plots: List of plot numbers from Vector
+        radius_units: List of unit numbers from Radius Inventory
+        threshold: Minimum confidence score (0-1) for a match
+    
+    Returns:
+        List of dicts with keys: vector_plot, radius_unit, confidence, auto_match
+    """
+    matches = []
+    used_radius_units = set()
+    
+    for v_plot in vector_plots:
+        best_match = None
+        best_score = 0.0
+        
+        for r_unit in radius_units:
+            if r_unit in used_radius_units:
+                continue
+            
+            score = calculate_similarity(v_plot, r_unit)
+            if score > best_score and score >= threshold:
+                best_score = score
+                best_match = r_unit
+        
+        if best_match:
+            matches.append({
+                "vector_plot": v_plot,
+                "radius_unit": best_match,
+                "confidence": round(best_score, 3),
+                "auto_match": best_score >= 0.8  # High confidence = auto-match
+            })
+            used_radius_units.add(best_match)
+        else:
+            # No match found
+            matches.append({
+                "vector_plot": v_plot,
+                "radius_unit": None,
+                "confidence": 0.0,
+                "auto_match": False
+            })
+    
+    return matches
 
 # ============================================
 # FASTAPI APP
@@ -359,50 +632,82 @@ def root():
 @app.post("/api/auth/login")
 def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     """Login endpoint - returns JWT token"""
-    # Find user by rep_id, email, or mobile
-    user = db.query(CompanyRep).filter(
-        (CompanyRep.rep_id == username) | 
-        (CompanyRep.email == username) | 
-        (CompanyRep.mobile == username)
-    ).first()
-    
-    if not user or user.status != "active":
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    
-    # Check if password is set, if not allow first-time login with any password
-    if not user.password_hash:
-        # Set password on first login
-        user.password_hash = get_password_hash(password)
-        db.commit()
-    elif not verify_password(password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    
-    # Create access token
-    access_token = create_access_token(data={"sub": str(user.id), "role": user.role})
-    
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "rep_id": user.rep_id,
-            "name": user.name,
-            "email": user.email,
-            "role": user.role
-        }
-    }
+    try:
+        # Find user by rep_id, email, or mobile
+        user = db.query(CompanyRep).filter(
+            (CompanyRep.rep_id == username) | 
+            (CompanyRep.email == username) | 
+            (CompanyRep.mobile == username)
+        ).first()
+        
+        if not user:
+            print(f"Login attempt: User not found for username: {username}")
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+        if user.status != "active":
+            print(f"Login attempt: User {username} is not active, status: {user.status}")
+            raise HTTPException(status_code=401, detail="User account is not active")
+        
+        # Check if password is set, if not allow first-time login with any password
+        if not user.password_hash:
+            # Set password on first login
+            user.password_hash = get_password_hash(password)
+            db.commit()
+        elif not verify_password(password, user.password_hash):
+            print(f"Login attempt: Invalid password for user: {username}")
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+        # Create access token
+        try:
+            access_token = create_access_token(data={"sub": str(user.id), "role": user.role})
+        except Exception as e:
+            print(f"Error creating access token: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(status_code=500, detail="Error creating access token")
+        
+        try:
+            return {
+                "access_token": access_token,
+                "token_type": "bearer",
+                "user": {
+                    "id": str(user.id),
+                    "rep_id": user.rep_id,
+                    "name": user.name,
+                    "email": user.email if hasattr(user, 'email') else None,
+                    "role": user.role if hasattr(user, 'role') else 'user'
+                }
+            }
+        except Exception as e:
+            print(f"Error building login response: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=f"Error building response: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Unexpected error in login: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
 
 @app.get("/api/auth/me")
 def get_current_user_info(current_user: CompanyRep = Depends(get_current_user)):
     """Get current logged-in user info"""
-    return {
-        "id": str(current_user.id),
-        "rep_id": current_user.rep_id,
-        "name": current_user.name,
-        "email": current_user.email,
-        "role": current_user.role,
-        "mobile": current_user.mobile
-    }
+    try:
+        return {
+            "id": str(current_user.id),
+            "rep_id": current_user.rep_id,
+            "name": current_user.name,
+            "email": current_user.email if hasattr(current_user, 'email') else None,
+            "role": current_user.role if hasattr(current_user, 'role') else 'user',
+            "mobile": current_user.mobile if hasattr(current_user, 'mobile') else None
+        }
+    except Exception as e:
+        import traceback
+        print(f"ERROR in /api/auth/me: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error getting user info: {str(e)}")
 
 @app.post("/api/auth/change-password")
 def change_password(
@@ -699,25 +1004,34 @@ async def bulk_import_brokers(file: UploadFile = File(...), db: Session = Depend
 # ============================================
 @app.get("/api/projects")
 def list_projects(db: Session = Depends(get_db)):
-    projects = db.query(Project).order_by(Project.created_at.desc()).all()
-    result = []
-    for p in projects:
-        inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
-        available = [i for i in inventory if i.status == "available"]
-        sold = [i for i in inventory if i.status == "sold"]
-        total_area = sum(float(i.area_marla) for i in inventory)
-        avg_rate = sum(float(i.rate_per_marla) for i in inventory) / len(inventory) if inventory else 0
-        result.append({
-            "id": str(p.id), "project_id": p.project_id, "name": p.name,
-            "location": p.location, "description": p.description, "status": p.status,
-            "stats": {
-                "total_units": len(inventory), "available": len(available), "sold": len(sold),
-                "total_area": total_area, "avg_rate": round(avg_rate, 0),
-                "total_value": sum(float(i.area_marla) * float(i.rate_per_marla) for i in inventory),
-                "sold_value": sum(float(i.area_marla) * float(i.rate_per_marla) for i in sold)
-            }
-        })
-    return result
+    try:
+        projects = db.query(Project).order_by(Project.created_at.desc()).all()
+        result = []
+        for p in projects:
+            inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
+            available = [i for i in inventory if i.status == "available"]
+            sold = [i for i in inventory if i.status == "sold"]
+            total_area = sum(float(i.area_marla) for i in inventory)
+            avg_rate = sum(float(i.rate_per_marla) for i in inventory) / len(inventory) if inventory else 0
+            result.append({
+                "id": str(p.id), "project_id": p.project_id, "name": p.name,
+                "location": p.location, "description": p.description, "status": p.status,
+                "stats": {
+                    "total_units": len(inventory), "available": len(available), "sold": len(sold),
+                    "total_area": total_area, "avg_rate": round(avg_rate, 0),
+                    "total_value": sum(float(i.area_marla) * float(i.rate_per_marla) for i in inventory),
+                    "sold_value": sum(float(i.area_marla) * float(i.rate_per_marla) for i in sold)
+                }
+            })
+        return result
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower() or "column" in error_msg.lower():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database schema error: Missing columns. Please run the migration script: python migrate_vector_schema.py. Error: {error_msg[:200]}"
+            )
+        raise HTTPException(status_code=500, detail=f"Error loading projects: {error_msg[:200]}")
 
 @app.get("/api/projects/{pid}")
 def get_project(pid: str, db: Session = Depends(get_db)):
@@ -2039,77 +2353,86 @@ def delete_payment(pid: str, db: Session = Depends(get_db)):
 @app.get("/api/dashboard/summary")
 def get_dashboard_summary(db: Session = Depends(get_db)):
     """Overall system statistics"""
-    today = date.today()
-    month_start = today.replace(day=1)
-    
-    # Customers
-    total_customers = db.query(Customer).count()
-    active_customers = db.query(Customer).join(Transaction).distinct().count()
-    
-    # Transactions
-    total_transactions = db.query(Transaction).count()
-    total_sale_value = db.query(func.sum(Transaction.total_value)).scalar() or 0
-    
-    # Receipts
-    total_received = db.query(func.sum(Receipt.amount)).scalar() or 0
-    month_received = db.query(func.sum(Receipt.amount)).filter(Receipt.payment_date >= month_start).scalar() or 0
-    
-    # Payments
-    total_paid = db.query(func.sum(Payment.amount)).filter(Payment.status == "completed").scalar() or 0
-    month_paid = db.query(func.sum(Payment.amount)).filter(Payment.payment_date >= month_start, Payment.status == "completed").scalar() or 0
-    
-    # Outstanding breakdown: Overdue vs Future Receivable
-    today = date.today()
-    total_overdue = 0
-    total_future_receivable = 0
-    
-    all_transactions = db.query(Transaction).all()
-    for txn in all_transactions:
-        installments = db.query(Installment).filter(Installment.transaction_id == txn.id).all()
-        for inst in installments:
-            balance = float(inst.amount) - float(inst.amount_paid or 0)
-            if balance > 0:
-                if inst.due_date <= today:
-                    total_overdue += balance
-                else:
-                    total_future_receivable += balance
-    
-    total_outstanding = float(total_sale_value) - float(total_received)
-    
-    # Projects
-    total_projects = db.query(Project).count()
-    active_projects = db.query(Project).filter(Project.status == "active").count()
-    
-    # Brokers
-    total_brokers = db.query(Broker).count()
-    active_brokers = db.query(Broker).filter(Broker.status == "active").count()
-    
-    # Inventory
-    total_units = db.query(Inventory).count()
-    available_units = db.query(Inventory).filter(Inventory.status == "available").count()
-    sold_units = db.query(Inventory).filter(Inventory.status == "sold").count()
-    
-    # This month transactions
-    this_month_txns = db.query(Transaction).filter(Transaction.booking_date >= month_start).count()
-    this_month_sale = db.query(func.sum(Transaction.total_value)).filter(Transaction.booking_date >= month_start).scalar() or 0
-    
-    return {
-        "customers": {"total": total_customers, "active": active_customers},
-        "transactions": {"total": total_transactions, "total_value": float(total_sale_value), "this_month": this_month_txns, "this_month_value": float(this_month_sale)},
-        "financials": {
-            "total_sale": float(total_sale_value),
-            "total_received": float(total_received),
-            "total_outstanding": float(total_outstanding),
-            "total_overdue": float(total_overdue),
-            "future_receivable": float(total_future_receivable),
-            "total_paid": float(total_paid),
-            "month_received": float(month_received),
-            "month_paid": float(month_paid)
-        },
-        "projects": {"total": total_projects, "active": active_projects},
-        "brokers": {"total": total_brokers, "active": active_brokers},
-        "inventory": {"total": total_units, "available": available_units, "sold": sold_units}
-    }
+    try:
+        today = date.today()
+        month_start = today.replace(day=1)
+        
+        # Customers
+        total_customers = db.query(Customer).count()
+        active_customers = db.query(Customer).join(Transaction).distinct().count()
+        
+        # Transactions
+        total_transactions = db.query(Transaction).count()
+        total_sale_value = db.query(func.sum(Transaction.total_value)).scalar() or 0
+        
+        # Receipts
+        total_received = db.query(func.sum(Receipt.amount)).scalar() or 0
+        month_received = db.query(func.sum(Receipt.amount)).filter(Receipt.payment_date >= month_start).scalar() or 0
+        
+        # Payments
+        total_paid = db.query(func.sum(Payment.amount)).filter(Payment.status == "completed").scalar() or 0
+        month_paid = db.query(func.sum(Payment.amount)).filter(Payment.payment_date >= month_start, Payment.status == "completed").scalar() or 0
+        
+        # Outstanding breakdown: Overdue vs Future Receivable
+        today = date.today()
+        total_overdue = 0
+        total_future_receivable = 0
+        
+        all_transactions = db.query(Transaction).all()
+        for txn in all_transactions:
+            installments = db.query(Installment).filter(Installment.transaction_id == txn.id).all()
+            for inst in installments:
+                balance = float(inst.amount) - float(inst.amount_paid or 0)
+                if balance > 0:
+                    if inst.due_date <= today:
+                        total_overdue += balance
+                    else:
+                        total_future_receivable += balance
+        
+        total_outstanding = float(total_sale_value) - float(total_received)
+        
+        # Projects
+        total_projects = db.query(Project).count()
+        active_projects = db.query(Project).filter(Project.status == "active").count()
+        
+        # Brokers
+        total_brokers = db.query(Broker).count()
+        active_brokers = db.query(Broker).filter(Broker.status == "active").count()
+        
+        # Inventory
+        total_units = db.query(Inventory).count()
+        available_units = db.query(Inventory).filter(Inventory.status == "available").count()
+        sold_units = db.query(Inventory).filter(Inventory.status == "sold").count()
+        
+        # This month transactions
+        this_month_txns = db.query(Transaction).filter(Transaction.booking_date >= month_start).count()
+        this_month_sale = db.query(func.sum(Transaction.total_value)).filter(Transaction.booking_date >= month_start).scalar() or 0
+        
+        return {
+            "customers": {"total": total_customers, "active": active_customers},
+            "transactions": {"total": total_transactions, "total_value": float(total_sale_value), "this_month": this_month_txns, "this_month_value": float(this_month_sale)},
+            "financials": {
+                "total_sale": float(total_sale_value),
+                "total_received": float(total_received),
+                "total_outstanding": float(total_outstanding),
+                "total_overdue": float(total_overdue),
+                "future_receivable": float(total_future_receivable),
+                "total_paid": float(total_paid),
+                "month_received": float(month_received),
+                "month_paid": float(month_paid)
+            },
+            "projects": {"total": total_projects, "active": active_projects},
+            "brokers": {"total": total_brokers, "active": active_brokers},
+            "inventory": {"total": total_units, "available": available_units, "sold": sold_units}
+        }
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower() or "column" in error_msg.lower():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database schema error: Missing columns. Please run the migration script: python migrate_vector_schema.py. Error: {error_msg[:200]}"
+            )
+        raise HTTPException(status_code=500, detail=f"Error loading dashboard summary: {error_msg[:200]}")
 
 @app.get("/api/dashboard/customer-stats")
 def get_customer_stats(db: Session = Depends(get_db)):
@@ -2163,62 +2486,71 @@ def get_customer_stats(db: Session = Depends(get_db)):
 @app.get("/api/dashboard/project-stats")
 def get_project_stats(db: Session = Depends(get_db)):
     """Project performance statistics"""
-    projects = db.query(Project).all()
-    result = []
-    
-    for p in projects:
-        inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
-        txns = db.query(Transaction).filter(Transaction.project_id == p.id).all()
+    try:
+        projects = db.query(Project).all()
+        result = []
         
-        # Inventory stats
-        available = [i for i in inventory if i.status == "available"]
-        sold = [i for i in inventory if i.status == "sold"]
-        total_marlas = sum(float(i.area_marla) for i in inventory)
-        available_marlas = sum(float(i.area_marla) for i in available)
-        sold_marlas = sum(float(i.area_marla) for i in sold)
+        for p in projects:
+            inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
+            txns = db.query(Transaction).filter(Transaction.project_id == p.id).all()
+            
+            # Inventory stats
+            available = [i for i in inventory if i.status == "available"]
+            sold = [i for i in inventory if i.status == "sold"]
+            total_marlas = sum(float(i.area_marla) for i in inventory)
+            available_marlas = sum(float(i.area_marla) for i in available)
+            sold_marlas = sum(float(i.area_marla) for i in sold)
+            
+            # Financial stats
+            total_sale = sum(float(t.total_value or 0) for t in txns)
+            total_received = 0
+            overdue = 0
+            future_receivable = 0
+            today = date.today()
+            
+            for t in txns:
+                installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
+                for i in installments:
+                    paid = float(i.amount_paid or 0)
+                    total_received += paid
+                    balance = float(i.amount) - paid
+                    if balance > 0:
+                        if i.due_date < today:
+                            overdue += balance
+                        else:
+                            future_receivable += balance
+            
+            result.append({
+                "project_id": p.project_id,
+                "name": p.name,
+                "location": p.location,
+                "inventory": {
+                    "total_units": len(inventory),
+                    "available_units": len(available),
+                    "sold_units": len(sold),
+                    "total_marlas": total_marlas,
+                    "available_marlas": available_marlas,
+                    "sold_marlas": sold_marlas
+                },
+                "financials": {
+                    "total_sale": total_sale,
+                    "total_received": total_received,
+                    "overdue": overdue,
+                    "future_receivable": future_receivable,
+                    "outstanding": total_sale - total_received
+                },
+                "transaction_count": len(txns)
+            })
         
-        # Financial stats
-        total_sale = sum(float(t.total_value or 0) for t in txns)
-        total_received = 0
-        overdue = 0
-        future_receivable = 0
-        today = date.today()
-        
-        for t in txns:
-            installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
-            for i in installments:
-                paid = float(i.amount_paid or 0)
-                total_received += paid
-                balance = float(i.amount) - paid
-                if balance > 0:
-                    if i.due_date < today:
-                        overdue += balance
-                    else:
-                        future_receivable += balance
-        
-        result.append({
-            "project_id": p.project_id,
-            "name": p.name,
-            "location": p.location,
-            "inventory": {
-                "total_units": len(inventory),
-                "available_units": len(available),
-                "sold_units": len(sold),
-                "total_marlas": total_marlas,
-                "available_marlas": available_marlas,
-                "sold_marlas": sold_marlas
-            },
-            "financials": {
-                "total_sale": total_sale,
-                "total_received": total_received,
-                "overdue": overdue,
-                "future_receivable": future_receivable,
-                "outstanding": total_sale - total_received
-            },
-            "transaction_count": len(txns)
-        })
-    
-    return result
+        return result
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower() or "column" in error_msg.lower():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database schema error: Missing columns. Please run the migration script: python migrate_vector_schema.py. Error: {error_msg[:200]}"
+            )
+        raise HTTPException(status_code=500, detail=f"Error loading project stats: {error_msg[:200]}")
 
 @app.get("/api/dashboard/broker-stats")
 def get_broker_stats(db: Session = Depends(get_db)):
@@ -2315,133 +2647,151 @@ def get_revenue_trends(start_date: str = None, end_date: str = None, db: Session
 @app.get("/api/dashboard/top-receivables")
 def get_top_receivables(limit: int = 10, db: Session = Depends(get_db)):
     """Top receivables by customer with overdue breakdown"""
-    today = date.today()
-    customers = db.query(Customer).all()
-    result = []
-    
-    for c in customers:
-        txns = db.query(Transaction).filter(Transaction.customer_id == c.id).all()
-        total_sale = sum(float(t.total_value or 0) for t in txns)
+    try:
+        today = date.today()
+        customers = db.query(Customer).all()
+        result = []
         
-        # Calculate received
-        total_received = 0
-        overdue_amount = 0
-        future_amount = 0
-        overdue_installments = []
-        future_installments = []
+        for c in customers:
+            txns = db.query(Transaction).filter(Transaction.customer_id == c.id).all()
+            total_sale = sum(float(t.total_value or 0) for t in txns)
+            
+            # Calculate received
+            total_received = 0
+            overdue_amount = 0
+            future_amount = 0
+            overdue_installments = []
+            future_installments = []
+            
+            for t in txns:
+                installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
+                for i in installments:
+                    paid = float(i.amount_paid or 0)
+                    total_received += paid
+                    balance = float(i.amount) - paid
+                    if balance > 0:
+                        inst_data = {
+                            "installment_number": i.installment_number,
+                            "due_date": str(i.due_date),
+                            "amount": float(i.amount),
+                            "amount_paid": paid,
+                            "balance": balance,
+                            "status": i.status,
+                            "transaction_id": str(t.transaction_id),
+                            "project_name": db.query(Project).filter(Project.id == t.project_id).first().name if t.project_id else None
+                        }
+                        if i.due_date <= today:
+                            overdue_amount += balance
+                            overdue_installments.append(inst_data)
+                        else:
+                            future_amount += balance
+                            future_installments.append(inst_data)
+            
+            outstanding = total_sale - total_received
+            if outstanding > 0:
+                result.append({
+                    "customer_id": c.customer_id,
+                    "customer_name": c.name,
+                    "mobile": c.mobile,
+                    "total_sale": total_sale,
+                    "total_received": total_received,
+                    "total_outstanding": outstanding,
+                    "overdue": overdue_amount,
+                    "future_receivable": future_amount,
+                    "overdue_installments": overdue_installments,
+                    "future_installments": future_installments,
+                    "transaction_count": len(txns)
+                })
         
-        for t in txns:
-            installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
-            for i in installments:
-                paid = float(i.amount_paid or 0)
-                total_received += paid
-                balance = float(i.amount) - paid
-                if balance > 0:
-                    inst_data = {
-                        "installment_number": i.installment_number,
-                        "due_date": str(i.due_date),
-                        "amount": float(i.amount),
-                        "amount_paid": paid,
-                        "balance": balance,
-                        "status": i.status,
-                        "transaction_id": str(t.transaction_id),
-                        "project_name": db.query(Project).filter(Project.id == t.project_id).first().name if t.project_id else None
-                    }
-                    if i.due_date <= today:
-                        overdue_amount += balance
-                        overdue_installments.append(inst_data)
-                    else:
-                        future_amount += balance
-                        future_installments.append(inst_data)
-        
-        outstanding = total_sale - total_received
-        if outstanding > 0:
-            result.append({
-                "customer_id": c.customer_id,
-                "customer_name": c.name,
-                "mobile": c.mobile,
-                "total_sale": total_sale,
-                "total_received": total_received,
-                "total_outstanding": outstanding,
-                "overdue": overdue_amount,
-                "future_receivable": future_amount,
-                "overdue_installments": overdue_installments,
-                "future_installments": future_installments,
-                "transaction_count": len(txns)
-            })
-    
-    # Sort by total outstanding descending
-    result.sort(key=lambda x: x["total_outstanding"], reverse=True)
-    return result[:limit]
+        # Sort by total outstanding descending
+        result.sort(key=lambda x: x["total_outstanding"], reverse=True)
+        return result[:limit]
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower() or "column" in error_msg.lower():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database schema error: Missing columns. Please run the migration script: python migrate_vector_schema.py. Error: {error_msg[:200]}"
+            )
+        raise HTTPException(status_code=500, detail=f"Error loading top receivables: {error_msg[:200]}")
 
 @app.get("/api/dashboard/project-inventory")
 def get_project_inventory(db: Session = Depends(get_db)):
     """Project-wise inventory breakdown with detailed metrics"""
-    projects = db.query(Project).all()
-    result = []
-    
-    for p in projects:
-        inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
-        available = [i for i in inventory if i.status == "available"]
-        sold = [i for i in inventory if i.status == "sold"]
+    try:
+        projects = db.query(Project).all()
+        result = []
         
-        # Calculate totals
-        total_units = len(inventory)
-        available_units = len(available)
-        sold_units = len(sold)
+        for p in projects:
+            inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
+            available = [i for i in inventory if i.status == "available"]
+            sold = [i for i in inventory if i.status == "sold"]
+            
+            # Calculate totals
+            total_units = len(inventory)
+            available_units = len(available)
+            sold_units = len(sold)
+            
+            total_marlas = sum(float(i.area_marla or 0) for i in inventory)
+            available_marlas = sum(float(i.area_marla or 0) for i in available)
+            sold_marlas = sum(float(i.area_marla or 0) for i in sold)
+            
+            total_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in inventory)
+            available_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in available)
+            sold_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in sold)
+            
+            # Average rates
+            avg_rate = total_value / total_marlas if total_marlas > 0 else 0
+            available_avg_rate = available_value / available_marlas if available_marlas > 0 else 0
+            
+            # Unit type breakdown
+            unit_types = {}
+            for i in inventory:
+                ut = i.unit_type or "plot"
+                if ut not in unit_types:
+                    unit_types[ut] = {"total": 0, "available": 0, "sold": 0}
+                unit_types[ut]["total"] += 1
+                if i.status == "available":
+                    unit_types[ut]["available"] += 1
+                elif i.status == "sold":
+                    unit_types[ut]["sold"] += 1
+            
+            result.append({
+                "project_id": p.project_id,
+                "name": p.name,
+                "location": p.location,
+                "status": p.status,
+                "summary": {
+                    "total_units": total_units,
+                    "available_units": available_units,
+                    "sold_units": sold_units,
+                    "utilization_rate": (sold_units / total_units * 100) if total_units > 0 else 0
+                },
+                "area": {
+                    "total_marlas": total_marlas,
+                    "available_marlas": available_marlas,
+                    "sold_marlas": sold_marlas,
+                    "available_percentage": (available_marlas / total_marlas * 100) if total_marlas > 0 else 0
+                },
+                "value": {
+                    "total_value": total_value,
+                    "available_value": available_value,
+                    "sold_value": sold_value,
+                    "avg_rate_per_marla": avg_rate,
+                    "available_avg_rate": available_avg_rate
+                },
+                "unit_types": unit_types
+            })
         
-        total_marlas = sum(float(i.area_marla or 0) for i in inventory)
-        available_marlas = sum(float(i.area_marla or 0) for i in available)
-        sold_marlas = sum(float(i.area_marla or 0) for i in sold)
-        
-        total_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in inventory)
-        available_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in available)
-        sold_value = sum(float(i.area_marla or 0) * float(i.rate_per_marla or 0) for i in sold)
-        
-        # Average rates
-        avg_rate = total_value / total_marlas if total_marlas > 0 else 0
-        available_avg_rate = available_value / available_marlas if available_marlas > 0 else 0
-        
-        # Unit type breakdown
-        unit_types = {}
-        for i in inventory:
-            ut = i.unit_type or "plot"
-            if ut not in unit_types:
-                unit_types[ut] = {"total": 0, "available": 0, "sold": 0}
-            unit_types[ut]["total"] += 1
-            if i.status == "available":
-                unit_types[ut]["available"] += 1
-            elif i.status == "sold":
-                unit_types[ut]["sold"] += 1
-        
-        result.append({
-            "project_id": p.project_id,
-            "name": p.name,
-            "location": p.location,
-            "status": p.status,
-            "summary": {
-                "total_units": total_units,
-                "available_units": available_units,
-                "sold_units": sold_units,
-                "utilization_rate": (sold_units / total_units * 100) if total_units > 0 else 0
-            },
-            "area": {
-                "total_marlas": total_marlas,
-                "available_marlas": available_marlas,
-                "sold_marlas": sold_marlas,
-                "available_percentage": (available_marlas / total_marlas * 100) if total_marlas > 0 else 0
-            },
-            "value": {
-                "total_value": total_value,
-                "available_value": available_value,
-                "sold_value": sold_value,
-                "avg_rate_per_marla": avg_rate,
-                "available_avg_rate": available_avg_rate
-            },
-            "unit_types": unit_types
-        })
-    
-    return result
+        return result
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower() or "column" in error_msg.lower():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database schema error: Missing columns. Please run the migration script: python migrate_vector_schema.py. Error: {error_msg[:200]}"
+            )
+        raise HTTPException(status_code=500, detail=f"Error loading project inventory: {error_msg[:200]}")
 
 @app.get("/api/customers/{customer_id}/details")
 def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
@@ -3327,3 +3677,1213 @@ def delete_media_file(file_id: str, db: Session = Depends(get_db)):
     
     db.delete(media); db.commit()
     return {"message": "File deleted"}
+
+# ============================================
+# VECTOR API ENDPOINTS
+# ============================================
+
+# Vector Projects Endpoints
+@app.get("/api/vector/projects")
+def get_vector_projects(
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """List all Vector projects (standalone + linked)"""
+    projects = db.query(VectorProject).all()
+    result = []
+    for p in projects:
+        linked_project = None
+        if p.linked_project_id:
+            linked_project = db.query(Project).filter(Project.id == p.linked_project_id).first()
+        
+        result.append({
+            "id": str(p.id),
+            "name": p.name,
+            "map_name": p.map_name,
+            "map_size": p.map_size,
+            "linked_project_id": str(p.linked_project_id) if p.linked_project_id else None,
+            "linked_project_name": linked_project.name if linked_project else None,
+            "vector_metadata": p.vector_metadata,
+            "system_branches": p.system_branches,
+            "has_map": bool(p.map_pdf_base64),
+            "created_at": str(p.created_at),
+            "updated_at": str(p.updated_at)
+        })
+    return result
+
+@app.get("/api/vector/projects/{project_id}")
+def get_vector_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Get Vector project details - returns full project data in JSON format for frontend"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    
+    # Get all related data
+    annotations = db.query(VectorAnnotation).filter(VectorAnnotation.project_id == project_uuid).all()
+    shapes = db.query(VectorShape).filter(VectorShape.project_id == project_uuid).all()
+    labels = db.query(VectorLabel).filter(VectorLabel.project_id == project_uuid).all()
+    branches = db.query(VectorBranch).filter(VectorBranch.project_id == project_uuid).all()
+    creator_notes = db.query(VectorCreatorNote).filter(VectorCreatorNote.project_id == project_uuid).all()
+    change_logs = db.query(VectorChangeLog).filter(VectorChangeLog.project_id == project_uuid).order_by(VectorChangeLog.timestamp.desc()).all()
+    legend = db.query(VectorLegend).filter(VectorLegend.project_id == project_uuid).first()
+    
+    # Extract plots and metadata from vector_metadata
+    plots = project.vector_metadata.get('plots', []) if project.vector_metadata else []
+    plot_offsets = project.vector_metadata.get('plotOffsets', {}) if project.vector_metadata else {}
+    plot_rotations = project.vector_metadata.get('plotRotations', {}) if project.vector_metadata else {}
+    
+    # Convert annotations to frontend format
+    # PRIORITY: Use vector_metadata if it has annotations, otherwise use separate table
+    annos = []
+    
+    # Check vector_metadata for annotations (this is where we save them)
+    # FIXED: Check if 'annos' key exists, not just if it's truthy (empty list is falsy but valid)
+    if project.vector_metadata and 'annos' in project.vector_metadata:
+        metadata_annos = project.vector_metadata.get('annos')
+        # Use annotations from vector_metadata if it's a list (even if empty, we'll use it)
+        if isinstance(metadata_annos, list):
+            annos = metadata_annos
+            print(f"DEBUG: Using {len(annos)} annotations from vector_metadata")
+        else:
+            print(f"DEBUG: vector_metadata.annos exists but is not a list, type: {type(metadata_annos)}, value: {metadata_annos}")
+    elif len(annotations) > 0:
+        # Fallback to separate table if no annotations in vector_metadata
+        print(f"DEBUG: No 'annos' in vector_metadata, using {len(annotations)} annotations from separate table")
+        for a in annotations:
+            annos.append({
+                "id": a.annotation_id,  # Use annotation_id as id (timestamp-based)
+                "note": a.note,
+                "cat": a.category or "",
+                "color": a.color or "#6366f1",
+                "fontSize": a.font_size or 12,
+                "rotation": a.rotation or 0,
+                "plotIds": a.plot_ids or [],
+                "plotNums": a.plot_nums or []
+            })
+    else:
+        print(f"DEBUG: No annotations found - vector_metadata: {project.vector_metadata is not None}, has 'annos' key: {'annos' in project.vector_metadata if project.vector_metadata else False}, separate table: {len(annotations)}")
+    
+    print(f"DEBUG: Final annos count being returned: {len(annos)}")
+    
+    # Convert shapes to frontend format
+    # PRIORITY: Use vector_metadata if it has shapes, otherwise use separate table
+    shapes_list = []
+    if project.vector_metadata and project.vector_metadata.get('shapes') and len(project.vector_metadata.get('shapes', [])) > 0:
+        shapes_list = project.vector_metadata.get('shapes', [])
+    elif len(shapes) > 0:
+        for s in shapes:
+            shape_data = s.data if isinstance(s.data, dict) else {}
+            shape_obj = {
+                "id": s.shape_id,
+                "type": s.type or "rectangle",
+                "x": s.x or 0,
+                "y": s.y or 0,
+                "width": s.width or 50,
+                "height": s.height or 50,
+                "color": s.color or "#6366f1"
+            }
+            # Merge additional shape data
+            if shape_data:
+                shape_obj.update(shape_data)
+            shapes_list.append(shape_obj)
+    
+    # Convert labels to frontend format
+    # PRIORITY: Use vector_metadata if it has labels, otherwise use separate table
+    labels_list = []
+    if project.vector_metadata and project.vector_metadata.get('labels') and len(project.vector_metadata.get('labels', [])) > 0:
+        labels_list = project.vector_metadata.get('labels', [])
+    elif len(labels) > 0:
+        for l in labels:
+            labels_list.append({
+                "id": l.label_id,
+                "text": l.text or "",
+                "x": l.x or 0,
+                "y": l.y or 0,
+                "size": l.size or 12,
+                "color": l.color or "#000000"
+            })
+    
+    # Convert branches to frontend format
+    # PRIORITY: Use vector_metadata if it has branches, otherwise use separate table
+    branches_list = []
+    if project.vector_metadata and project.vector_metadata.get('branches') and len(project.vector_metadata.get('branches', [])) > 0:
+        branches_list = project.vector_metadata.get('branches', [])
+    elif len(branches) > 0:
+        for b in branches:
+            branches_list.append({
+                "id": str(b.id),
+                "name": b.name,
+                "timestamp": str(b.timestamp) if b.timestamp else None,
+                "annoCount": b.anno_count or 0,
+                "data": b.data or {}
+            })
+    
+    # Convert creator notes
+    # PRIORITY: Use vector_metadata if it has creator notes, otherwise use separate table
+    creator_notes_list = []
+    if project.vector_metadata and project.vector_metadata.get('creatorNotes') and len(project.vector_metadata.get('creatorNotes', [])) > 0:
+        creator_notes_list = project.vector_metadata.get('creatorNotes', [])
+    elif len(creator_notes) > 0:
+        for n in creator_notes:
+            creator_notes_list.append({
+                "id": str(n.id),
+                "text": n.text,
+                "timestamp": str(n.timestamp) if n.timestamp else None
+            })
+    
+    # Convert change log
+    # PRIORITY: Use vector_metadata if it has change log, otherwise use separate table
+    change_log_list = []
+    if project.vector_metadata and project.vector_metadata.get('changeLog') and len(project.vector_metadata.get('changeLog', [])) > 0:
+        change_log_list = project.vector_metadata.get('changeLog', [])
+    elif len(change_logs) > 0:
+        for log in change_logs:
+            change_log_list.append({
+                "timestamp": str(log.timestamp) if log.timestamp else None,
+                "action": log.action or "",
+                "details": log.details or ""
+            })
+    
+    # Get legend
+    # PRIORITY: Use vector_metadata if it has legend data, otherwise use separate table
+    if project.vector_metadata and project.vector_metadata.get('legend'):
+        legend_data = project.vector_metadata.get('legend', {})
+        # Ensure it has all required fields
+        if not isinstance(legend_data, dict):
+            legend_data = {}
+        legend_data = {
+            "visible": legend_data.get("visible", True) if isinstance(legend_data.get("visible"), bool) else (legend_data.get("visible", "true") == "true" or legend_data.get("visible", True) == True),
+            "minimized": legend_data.get("minimized", False) if isinstance(legend_data.get("minimized"), bool) else (legend_data.get("minimized", "false") == "true" or legend_data.get("minimized", False) == True),
+            "position": legend_data.get("position", "bottom-right"),
+            "manualEntries": legend_data.get("manualEntries", [])
+        }
+    elif legend:
+        legend_data = {
+            "visible": legend.visible if legend else True,
+            "minimized": legend.minimized if legend else False,
+            "position": legend.position or "bottom-right",
+            "manualEntries": legend.manual_entries or [] if legend else []
+        }
+    else:
+        legend_data = {
+            "visible": True,
+            "minimized": False,
+            "position": "bottom-right",
+            "manualEntries": []
+        }
+    
+    # Get inventory if linked to Radius project, otherwise from vector_metadata
+    inventory = {}
+    if project.linked_project_id:
+        inventory_items = db.query(Inventory).filter(Inventory.project_id == project.linked_project_id).all()
+        for inv in inventory_items:
+            inventory[inv.unit_number] = {
+                "marla": inv.marla,
+                "totalValue": inv.total_value,
+                "ratePerMarla": inv.rate_per_marla,
+                "dimensions": inv.dimensions,
+                "owner": inv.owner,
+                "status": inv.status,
+                "notes": inv.notes
+            }
+    elif project.vector_metadata and project.vector_metadata.get('inventory'):
+        inventory = project.vector_metadata.get('inventory', {})
+    
+    # Build project metadata
+    project_metadata = project.vector_metadata.get('projectMetadata', {}) if project.vector_metadata else {
+        "created": str(project.created_at),
+        "lastModified": str(project.updated_at),
+        "version": "8.2",
+        "createdBy": "",
+        "description": "",
+        "notes": []
+    }
+    
+    # Return full project data in frontend JSON format
+    return {
+        "projectName": project.name,
+        "mapName": project.map_name or "Map",
+        "pdfBase64": project.map_pdf_base64,
+        "plots": plots,
+        "annos": annos,  # Preserve order from database
+        "inventory": inventory,
+        "shapes": shapes_list,
+        "labels": labels_list,
+        "branches": branches_list,
+        "plotOffsets": plot_offsets,
+        "plotRotations": plot_rotations,
+        "creatorNotes": creator_notes_list,
+        "changeLog": change_log_list,
+        "legend": legend_data,
+        "projectMetadata": project_metadata
+    }
+
+@app.post("/api/vector/projects")
+def create_vector_project(
+    name: str = Form(...),
+    map_name: str = Form(None),
+    map_pdf_base64: str = Form(None),
+    map_size: str = Form(None),
+    vector_metadata: str = Form(None),
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Create Vector project (standalone)"""
+    import json
+    
+    parsed_metadata = json.loads(vector_metadata) if vector_metadata else None
+    if parsed_metadata:
+        # Debug: Log what's being saved
+        annos_in_save = parsed_metadata.get('annos', [])
+        print(f"DEBUG CREATE: Creating project with vector_metadata containing {len(annos_in_save) if isinstance(annos_in_save, list) else 'non-list'} annotations")
+        if isinstance(annos_in_save, list) and len(annos_in_save) > 0:
+            print(f"DEBUG CREATE: First annotation sample: id={annos_in_save[0].get('id') if annos_in_save[0] else 'none'}, note={annos_in_save[0].get('note') if annos_in_save[0] else 'none'}")
+    
+    project = VectorProject(
+        name=name,
+        map_name=map_name,
+        map_pdf_base64=map_pdf_base64,
+        map_size=json.loads(map_size) if map_size else None,
+        vector_metadata=parsed_metadata,
+        system_branches={"sales": {}, "inventory": {}}
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    
+    return {
+        "id": str(project.id),
+        "name": project.name,
+        "map_name": project.map_name,
+        "map_size": project.map_size,
+        "system_branches": project.system_branches,
+        "created_at": str(project.created_at)
+    }
+
+@app.put("/api/vector/projects/{project_id}")
+def update_vector_project(
+    project_id: str,
+    name: str = Form(None),
+    map_name: str = Form(None),
+    map_pdf_base64: str = Form(None),
+    map_size: str = Form(None),
+    vector_metadata: str = Form(None),
+    system_branches: str = Form(None),
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Update Vector project"""
+    import json
+    
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    
+    if name is not None:
+        project.name = name
+    if map_name is not None:
+        project.map_name = map_name
+    if map_pdf_base64 is not None:
+        project.map_pdf_base64 = map_pdf_base64
+    if map_size is not None:
+        project.map_size = json.loads(map_size) if map_size else None
+    if vector_metadata is not None:
+        parsed_metadata = json.loads(vector_metadata) if vector_metadata else None
+        if parsed_metadata:
+            # Debug: Log what's being saved
+            annos_in_save = parsed_metadata.get('annos', [])
+            print(f"DEBUG UPDATE: Updating project with vector_metadata containing {len(annos_in_save) if isinstance(annos_in_save, list) else 'non-list'} annotations")
+            if isinstance(annos_in_save, list) and len(annos_in_save) > 0:
+                print(f"DEBUG UPDATE: First annotation sample: id={annos_in_save[0].get('id') if annos_in_save[0] else 'none'}, note={annos_in_save[0].get('note') if annos_in_save[0] else 'none'}")
+        project.vector_metadata = parsed_metadata
+    if system_branches is not None:
+        project.system_branches = json.loads(system_branches) if system_branches else None
+    
+    project.updated_at = func.now()
+    db.commit()
+    db.refresh(project)
+    
+    return {
+        "id": str(project.id),
+        "name": project.name,
+        "map_name": project.map_name,
+        "map_size": project.map_size,
+        "system_branches": project.system_branches,
+        "updated_at": str(project.updated_at)
+    }
+
+@app.delete("/api/vector/projects/{project_id}")
+def delete_vector_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Delete Vector project"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    
+    db.delete(project)
+    db.commit()
+    return {"message": "Vector project deleted"}
+
+@app.post("/api/vector/projects/{project_id}/link")
+def link_vector_project(
+    project_id: str,
+    linked_project_id: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Link Vector project to Radius project"""
+    import json
+    
+    try:
+        vector_project_uuid = uuid.UUID(project_id)
+        radius_project_uuid = uuid.UUID(linked_project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    vector_project = db.query(VectorProject).filter(VectorProject.id == vector_project_uuid).first()
+    if not vector_project:
+        raise HTTPException(404, "Vector project not found")
+    
+    radius_project = db.query(Project).filter(Project.id == radius_project_uuid).first()
+    if not radius_project:
+        raise HTTPException(404, "Radius project not found")
+    
+    vector_project.linked_project_id = radius_project_uuid
+    # Initialize system branches if not exists
+    if not vector_project.system_branches:
+        vector_project.system_branches = {"sales": {}, "inventory": {}}
+    
+    vector_project.updated_at = func.now()
+    db.commit()
+    
+    # Create or update reconciliation record
+    recon = db.query(VectorReconciliation).filter(VectorReconciliation.project_id == vector_project_uuid).first()
+    if not recon:
+        recon = VectorReconciliation(
+            project_id=vector_project_uuid,
+            linked_project_id=radius_project_uuid,
+            sync_status="linked"
+        )
+        db.add(recon)
+    else:
+        recon.linked_project_id = radius_project_uuid
+        recon.sync_status = "linked"
+    
+    db.commit()
+    
+    return {
+        "message": "Vector project linked to Radius project",
+        "vector_project_id": str(vector_project.id),
+        "linked_project_id": str(radius_project.id),
+        "linked_project_name": radius_project.name
+    }
+
+@app.post("/api/vector/projects/{project_id}/unlink")
+def unlink_vector_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Unlink Vector project from Radius project"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    
+    project.linked_project_id = None
+    project.updated_at = func.now()
+    db.commit()
+    
+    # Update reconciliation record
+    recon = db.query(VectorReconciliation).filter(VectorReconciliation.project_id == project_uuid).first()
+    if recon:
+        recon.linked_project_id = None
+        recon.sync_status = "standalone"
+        db.commit()
+    
+    return {"message": "Vector project unlinked"}
+
+@app.get("/api/vector/projects/{project_id}/sync-status")
+def get_sync_status(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Get sync status for Vector project"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    
+    recon = db.query(VectorReconciliation).filter(VectorReconciliation.project_id == project_uuid).first()
+    
+    # Check if incomplete (no source map)
+    is_incomplete = not bool(project.map_pdf_base64)
+    
+    status = "standalone"
+    if project.linked_project_id:
+        status = recon.sync_status if recon else "linked"
+    
+    return {
+        "status": status,
+        "is_incomplete": is_incomplete,
+        "linked_project_id": str(project.linked_project_id) if project.linked_project_id else None,
+        "last_sync_at": str(recon.last_sync_at) if recon and recon.last_sync_at else None,
+        "has_map": bool(project.map_pdf_base64)
+    }
+
+# Vector Annotations Endpoints
+@app.get("/api/vector/projects/{project_id}/annotations")
+def get_vector_annotations(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Get annotations for Vector project"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    annotations = db.query(VectorAnnotation).filter(VectorAnnotation.project_id == project_uuid).all()
+    return [{
+        "id": str(a.id),
+        "annotation_id": a.annotation_id,
+        "note": a.note,
+        "category": a.category,
+        "color": a.color,
+        "font_size": a.font_size,
+        "rotation": a.rotation,
+        "plot_ids": a.plot_ids,
+        "plot_nums": a.plot_nums
+    } for a in annotations]
+
+@app.post("/api/vector/projects/{project_id}/annotations")
+def create_vector_annotation(
+    project_id: str,
+    annotation_id: str = Form(...),
+    note: str = Form(None),
+    category: str = Form(None),
+    color: str = Form(None),
+    font_size: int = Form(None),
+    rotation: int = Form(0),
+    plot_ids: str = Form(None),
+    plot_nums: str = Form(None),
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Create annotation for Vector project"""
+    import json
+    
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    
+    annotation = VectorAnnotation(
+        project_id=project_uuid,
+        annotation_id=annotation_id,
+        note=note,
+        category=category,
+        color=color,
+        font_size=font_size,
+        rotation=rotation,
+        plot_ids=json.loads(plot_ids) if plot_ids else [],
+        plot_nums=json.loads(plot_nums) if plot_nums else []
+    )
+    db.add(annotation)
+    db.commit()
+    db.refresh(annotation)
+    
+    return {
+        "id": str(annotation.id),
+        "annotation_id": annotation.annotation_id,
+        "note": annotation.note,
+        "plot_ids": annotation.plot_ids,
+        "plot_nums": annotation.plot_nums
+    }
+
+@app.put("/api/vector/projects/{project_id}/annotations/{anno_id}")
+def update_vector_annotation(
+    project_id: str,
+    anno_id: str,
+    note: str = Form(None),
+    category: str = Form(None),
+    color: str = Form(None),
+    font_size: int = Form(None),
+    rotation: int = Form(None),
+    plot_ids: str = Form(None),
+    plot_nums: str = Form(None),
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Update annotation"""
+    import json
+    
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    annotation = db.query(VectorAnnotation).filter(
+        VectorAnnotation.project_id == project_uuid,
+        VectorAnnotation.annotation_id == anno_id
+    ).first()
+    
+    if not annotation:
+        raise HTTPException(404, "Annotation not found")
+    
+    if note is not None:
+        annotation.note = note
+    if category is not None:
+        annotation.category = category
+    if color is not None:
+        annotation.color = color
+    if font_size is not None:
+        annotation.font_size = font_size
+    if rotation is not None:
+        annotation.rotation = rotation
+    if plot_ids is not None:
+        annotation.plot_ids = json.loads(plot_ids) if plot_ids else []
+    if plot_nums is not None:
+        annotation.plot_nums = json.loads(plot_nums) if plot_nums else []
+    
+    annotation.updated_at = func.now()
+    db.commit()
+    db.refresh(annotation)
+    
+    return {
+        "id": str(annotation.id),
+        "annotation_id": annotation.annotation_id,
+        "note": annotation.note,
+        "plot_ids": annotation.plot_ids,
+        "plot_nums": annotation.plot_nums
+    }
+
+@app.delete("/api/vector/projects/{project_id}/annotations/{anno_id}")
+def delete_vector_annotation(
+    project_id: str,
+    anno_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Delete annotation"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    annotation = db.query(VectorAnnotation).filter(
+        VectorAnnotation.project_id == project_uuid,
+        VectorAnnotation.annotation_id == anno_id
+    ).first()
+    
+    if not annotation:
+        raise HTTPException(404, "Annotation not found")
+    
+    db.delete(annotation)
+    db.commit()
+    return {"message": "Annotation deleted"}
+
+# Vector Shapes, Labels, Legend, Branches endpoints (similar pattern)
+@app.get("/api/vector/projects/{project_id}/shapes")
+def get_vector_shapes(project_id: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    try:
+        project_uuid = uuid.UUID(project_id)
+        shapes = db.query(VectorShape).filter(VectorShape.project_id == project_uuid).all()
+        return [{"id": str(s.id), "shape_id": s.shape_id, "type": s.type, "x": s.x, "y": s.y, "width": s.width, "height": s.height, "color": s.color, "data": s.data} for s in shapes]
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.post("/api/vector/projects/{project_id}/shapes")
+def create_vector_shape(project_id: str, shape_id: str = Form(...), type: str = Form(None), x: int = Form(None), y: int = Form(None), width: int = Form(None), height: int = Form(None), color: str = Form(None), data: str = Form(None), db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    import json
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+        if not project:
+            raise HTTPException(404, "Vector project not found")
+        shape = VectorShape(project_id=project_uuid, shape_id=shape_id, type=type, x=x, y=y, width=width, height=height, color=color, data=json.loads(data) if data else None)
+        db.add(shape)
+        db.commit()
+        db.refresh(shape)
+        return {"id": str(shape.id), "shape_id": shape.shape_id}
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.get("/api/vector/projects/{project_id}/labels")
+def get_vector_labels(project_id: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    try:
+        project_uuid = uuid.UUID(project_id)
+        labels = db.query(VectorLabel).filter(VectorLabel.project_id == project_uuid).all()
+        return [{"id": str(l.id), "label_id": l.label_id, "text": l.text, "x": l.x, "y": l.y, "size": l.size, "color": l.color} for l in labels]
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.post("/api/vector/projects/{project_id}/labels")
+def create_vector_label(project_id: str, label_id: str = Form(...), text: str = Form(None), x: int = Form(None), y: int = Form(None), size: int = Form(None), color: str = Form(None), db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+        if not project:
+            raise HTTPException(404, "Vector project not found")
+        label = VectorLabel(project_id=project_uuid, label_id=label_id, text=text, x=x, y=y, size=size, color=color)
+        db.add(label)
+        db.commit()
+        db.refresh(label)
+        return {"id": str(label.id), "label_id": label.label_id}
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.get("/api/vector/projects/{project_id}/legend")
+def get_vector_legend(project_id: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    try:
+        project_uuid = uuid.UUID(project_id)
+        legend = db.query(VectorLegend).filter(VectorLegend.project_id == project_uuid).first()
+        if not legend:
+            return {"visible": True, "minimized": False, "position": None, "manual_entries": []}
+        return {"id": str(legend.id), "visible": legend.visible == "true", "minimized": legend.minimized == "true", "position": legend.position, "manual_entries": legend.manual_entries}
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.put("/api/vector/projects/{project_id}/legend")
+def update_vector_legend(project_id: str, visible: str = Form(None), minimized: str = Form(None), position: str = Form(None), manual_entries: str = Form(None), db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    import json
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+        if not project:
+            raise HTTPException(404, "Vector project not found")
+        legend = db.query(VectorLegend).filter(VectorLegend.project_id == project_uuid).first()
+        if not legend:
+            legend = VectorLegend(project_id=project_uuid, visible="true", minimized="false")
+            db.add(legend)
+        if visible is not None:
+            legend.visible = visible
+        if minimized is not None:
+            legend.minimized = minimized
+        if position is not None:
+            legend.position = position
+        if manual_entries is not None:
+            legend.manual_entries = json.loads(manual_entries) if manual_entries else None
+        legend.updated_at = func.now()
+        db.commit()
+        db.refresh(legend)
+        return {"id": str(legend.id), "visible": legend.visible == "true", "minimized": legend.minimized == "true", "position": legend.position, "manual_entries": legend.manual_entries}
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.get("/api/vector/projects/{project_id}/branches")
+def get_vector_branches(project_id: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    try:
+        project_uuid = uuid.UUID(project_id)
+        branches = db.query(VectorBranch).filter(VectorBranch.project_id == project_uuid).all()
+        return [{"id": str(b.id), "name": b.name, "timestamp": str(b.timestamp) if b.timestamp else None, "anno_count": b.anno_count, "data": b.data} for b in branches]
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.post("/api/vector/projects/{project_id}/branches")
+def create_vector_branch(project_id: str, name: str = Form(...), timestamp: str = Form(None), anno_count: int = Form(None), data: str = Form(None), db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    import json
+    from dateutil.parser import parse as parse_date
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+        if not project:
+            raise HTTPException(404, "Vector project not found")
+        branch = VectorBranch(project_id=project_uuid, name=name, timestamp=parse_date(timestamp) if timestamp else datetime.utcnow(), anno_count=anno_count, data=json.loads(data) if data else None)
+        db.add(branch)
+        db.commit()
+        db.refresh(branch)
+        return {"id": str(branch.id), "name": branch.name}
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.post("/api/vector/projects/{project_id}/backup")
+def create_vector_backup(project_id: str, backup_data: str = Form(...), db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    import json
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+        if not project:
+            raise HTTPException(404, "Vector project not found")
+        backup = VectorProjectBackup(project_id=project_uuid, backup_data=json.loads(backup_data), created_by=current_user.id)
+        db.add(backup)
+        db.commit()
+        db.refresh(backup)
+        return {"id": str(backup.id), "created_at": str(backup.created_at)}
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.get("/api/vector/projects/{project_id}/backups")
+def get_vector_backups(project_id: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    try:
+        project_uuid = uuid.UUID(project_id)
+        backups = db.query(VectorProjectBackup).filter(VectorProjectBackup.project_id == project_uuid).order_by(VectorProjectBackup.created_at.desc()).all()
+        return [{"id": str(b.id), "created_at": str(b.created_at), "created_by": str(b.created_by)} for b in backups]
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+@app.post("/api/vector/projects/{project_id}/backups/{backup_id}/restore")
+def restore_vector_backup(project_id: str, backup_id: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    try:
+        project_uuid = uuid.UUID(project_id)
+        backup_uuid = uuid.UUID(backup_id)
+        backup = db.query(VectorProjectBackup).filter(VectorProjectBackup.id == backup_uuid, VectorProjectBackup.project_id == project_uuid).first()
+        if not backup:
+            raise HTTPException(404, "Backup not found")
+        return {"backup_data": backup.backup_data, "message": "Backup data retrieved"}
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid ID")
+
+# Reconciliation Endpoints
+@app.get("/api/vector/projects/{project_id}/reconcile")
+def get_reconciliation_report(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Get reconciliation report (discrepancies, missing data)"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        vector_project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not vector_project:
+        raise HTTPException(404, "Vector project not found")
+    
+    if not vector_project.linked_project_id:
+        return {
+            "status": "standalone",
+            "message": "Vector project is not linked to a Radius project",
+            "missing_inventory": [],
+            "missing_plots": [],
+            "smart_matches": []
+        }
+    
+    # Get Vector annotations and extract plot numbers
+    annotations = db.query(VectorAnnotation).filter(VectorAnnotation.project_id == project_uuid).all()
+    vector_plot_nums = set()
+    for anno in annotations:
+        if anno.plot_nums:
+            vector_plot_nums.update(anno.plot_nums)
+    
+    # Get Radius inventory for linked project
+    inventory_items = db.query(Inventory).filter(Inventory.project_id == vector_project.linked_project_id).all()
+    radius_unit_nums = [item.unit_number for item in inventory_items]
+    
+    # Find missing data
+    missing_inventory = list(vector_plot_nums - set(radius_unit_nums))
+    missing_plots = [unit for unit in radius_unit_nums if unit not in vector_plot_nums]
+    
+    # Smart matching
+    smart_matches = smart_match_plot_numbers(list(vector_plot_nums), radius_unit_nums)
+    
+    # Update reconciliation record
+    recon = db.query(VectorReconciliation).filter(VectorReconciliation.project_id == project_uuid).first()
+    if not recon:
+        recon = VectorReconciliation(
+            project_id=project_uuid,
+            linked_project_id=vector_project.linked_project_id,
+            sync_status="needs-reconciliation" if (missing_inventory or missing_plots) else "synced",
+            discrepancies={"missing_inventory": missing_inventory, "missing_plots": missing_plots}
+        )
+        db.add(recon)
+    else:
+        recon.discrepancies = {"missing_inventory": missing_inventory, "missing_plots": missing_plots}
+        recon.sync_status = "needs-reconciliation" if (missing_inventory or missing_plots) else "synced"
+        recon.updated_at = func.now()
+    
+    db.commit()
+    
+    return {
+        "status": recon.sync_status,
+        "missing_inventory": missing_inventory,
+        "missing_plots": missing_plots,
+        "smart_matches": smart_matches,
+        "total_vector_plots": len(vector_plot_nums),
+        "total_radius_units": len(radius_unit_nums)
+    }
+
+@app.post("/api/vector/projects/{project_id}/reconcile/match")
+def smart_match_plots(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Smart match plot/unit numbers (fuzzy matching)"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        vector_project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not vector_project or not vector_project.linked_project_id:
+        raise HTTPException(404, "Vector project not found or not linked")
+    
+    # Get Vector plot numbers
+    annotations = db.query(VectorAnnotation).filter(VectorAnnotation.project_id == project_uuid).all()
+    vector_plot_nums = set()
+    for anno in annotations:
+        if anno.plot_nums:
+            vector_plot_nums.update(anno.plot_nums)
+    
+    # Get Radius unit numbers
+    inventory_items = db.query(Inventory).filter(Inventory.project_id == vector_project.linked_project_id).all()
+    radius_unit_nums = [item.unit_number for item in inventory_items]
+    
+    # Perform smart matching
+    matches = smart_match_plot_numbers(list(vector_plot_nums), radius_unit_nums)
+    
+    return {
+        "matches": matches,
+        "total_matches": len([m for m in matches if m["radius_unit"] is not None]),
+        "auto_matched": len([m for m in matches if m["auto_match"]])
+    }
+
+@app.post("/api/vector/projects/{project_id}/reconcile/sync-from-projects")
+def sync_from_projects(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Sync data from Radius Projects → Vector (one-way)"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        vector_project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not vector_project or not vector_project.linked_project_id:
+        raise HTTPException(404, "Vector project not found or not linked")
+    
+    # Get Radius inventory
+    inventory_items = db.query(Inventory).filter(Inventory.project_id == vector_project.linked_project_id).all()
+    
+    # Get Radius transactions
+    transactions = db.query(Transaction).filter(Transaction.project_id == vector_project.linked_project_id).all()
+    
+    # Update system-generated branches
+    inventory_branch = {}
+    for item in inventory_items:
+        inventory_branch[item.unit_number] = {
+            "unit_number": item.unit_number,
+            "area_marla": float(item.area_marla) if item.area_marla else 0,
+            "rate_per_marla": float(item.rate_per_marla) if item.rate_per_marla else 0,
+            "status": item.status,
+            "plot_coordinates": item.plot_coordinates,
+            "plot_offset": item.plot_offset
+        }
+    
+    sales_branch = {}
+    for txn in transactions:
+        sales_branch[txn.transaction_id] = {
+            "transaction_id": txn.transaction_id,
+            "unit_number": txn.unit_number,
+            "total_value": float(txn.total_value) if txn.total_value else 0,
+            "status": txn.status,
+            "booking_date": str(txn.booking_date) if txn.booking_date else None
+        }
+    
+    # Update system branches
+    if not vector_project.system_branches:
+        vector_project.system_branches = {}
+    vector_project.system_branches["inventory"] = inventory_branch
+    vector_project.system_branches["sales"] = sales_branch
+    vector_project.updated_at = func.now()
+    
+    # Update reconciliation record
+    recon = db.query(VectorReconciliation).filter(VectorReconciliation.project_id == project_uuid).first()
+    if not recon:
+        recon = VectorReconciliation(
+            project_id=project_uuid,
+            linked_project_id=vector_project.linked_project_id,
+            sync_status="synced",
+            last_sync_at=datetime.utcnow()
+        )
+        db.add(recon)
+    else:
+        recon.sync_status = "synced"
+        recon.last_sync_at = datetime.utcnow()
+        recon.updated_at = func.now()
+    
+    db.commit()
+    
+    return {
+        "message": "Data synced from Radius Projects to Vector",
+        "inventory_items_synced": len(inventory_items),
+        "transactions_synced": len(transactions),
+        "last_sync_at": str(recon.last_sync_at)
+    }
+
+@app.post("/api/vector/projects/{project_id}/reconcile/add-to-projects")
+def add_to_projects(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Add Vector map data to Radius Projects"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        vector_project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not vector_project:
+        raise HTTPException(404, "Vector project not found")
+    
+    # Get Vector annotations to extract plot data
+    annotations = db.query(VectorAnnotation).filter(VectorAnnotation.project_id == project_uuid).all()
+    
+    # This endpoint prepares data for adding to Radius Projects
+    # Actual creation would be done via existing /api/projects and /api/inventory endpoints
+    plot_data = []
+    for anno in annotations:
+        if anno.plot_nums:
+            for plot_num in anno.plot_nums:
+                plot_data.append({
+                    "plot_number": plot_num,
+                    "annotation": anno.note,
+                    "category": anno.category,
+                    "color": anno.color
+                })
+    
+    return {
+        "message": "Vector map data prepared for adding to Radius Projects",
+        "plots_count": len(plot_data),
+        "plots": plot_data,
+        "note": "Use /api/projects and /api/inventory endpoints to create actual records"
+    }
+
+@app.get("/api/vector/projects/{project_id}/incomplete-check")
+def check_incomplete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Check if Vector project is incomplete (no source map)"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    
+    is_incomplete = not bool(project.map_pdf_base64)
+    
+    return {
+        "is_incomplete": is_incomplete,
+        "has_map": bool(project.map_pdf_base64),
+        "map_name": project.map_name,
+        "message": "Vector project without source map needs attention" if is_incomplete else "Vector project has source map"
+    }
+
+@app.post("/api/vector/projects/import")
+def import_vector_json(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Import Vector JSON file - 100% compatible with original Vector format"""
+    import json
+    
+    try:
+        # Read and parse JSON file
+        content = file.file.read()
+        if isinstance(content, bytes):
+            content = content.decode('utf-8')
+        
+        vector_data = json.loads(content)
+        
+        # Extract project data
+        project_name = vector_data.get('projectName', file.filename.replace('.json', ''))
+        map_name = vector_data.get('mapName', '')
+        pdf_base64 = vector_data.get('pdfBase64', '')
+        map_size = vector_data.get('mapSize', {})
+        project_metadata = vector_data.get('projectMetadata', {})
+        
+        # Create or update Vector project
+        vector_project = VectorProject(
+            name=project_name,
+            map_name=map_name,
+            map_pdf_base64=pdf_base64 if pdf_base64 else None,
+            map_size=map_size if map_size else None,
+            vector_metadata=project_metadata if project_metadata else None,
+            system_branches=vector_data.get('branches', {})
+        )
+        db.add(vector_project)
+        db.flush()  # Get the ID
+        
+        # Import plots (convert to annotations/shapes as needed)
+        plots = vector_data.get('plots', [])
+        plot_offsets = vector_data.get('plotOffsets', {})
+        plot_rotations = vector_data.get('plotRotations', {})
+        
+        # Import annotations
+        annos = vector_data.get('annos', [])
+        for anno in annos:
+            vector_anno = VectorAnnotation(
+                project_id=vector_project.id,
+                annotation_id=str(anno.get('id', uuid.uuid4())),
+                note=anno.get('note', ''),
+                category=anno.get('cat', ''),
+                color=anno.get('color', '#000000'),
+                font_size=anno.get('fontSize', 12),
+                rotation=anno.get('rotation', 0),
+                plot_ids=anno.get('plotIds', []),
+                plot_nums=anno.get('plotNums', [])
+            )
+            db.add(vector_anno)
+        
+        # Import labels
+        labels = vector_data.get('labels', [])
+        for label in labels:
+            vector_label = VectorLabel(
+                project_id=vector_project.id,
+                label_id=str(label.get('id', uuid.uuid4())),
+                text=label.get('text', ''),
+                x=label.get('x', 0),
+                y=label.get('y', 0),
+                size=label.get('size', 12),
+                color=label.get('color', '#000000')
+            )
+            db.add(vector_label)
+        
+        # Import shapes
+        shapes = vector_data.get('shapes', [])
+        for shape in shapes:
+            vector_shape = VectorShape(
+                project_id=vector_project.id,
+                shape_id=str(shape.get('id', uuid.uuid4())),
+                type=shape.get('type', ''),
+                x=shape.get('x', 0),
+                y=shape.get('y', 0),
+                width=shape.get('width', 0),
+                height=shape.get('height', 0),
+                color=shape.get('color', '#000000'),
+                data=shape.get('data', {})
+            )
+            db.add(vector_shape)
+        
+        # Import legend
+        legend = vector_data.get('legend', {})
+        if legend:
+            vector_legend = VectorLegend(
+                project_id=vector_project.id,
+                visible=str(legend.get('visible', 'true')).lower(),
+                minimized=str(legend.get('minimized', 'false')).lower(),
+                position=legend.get('position', ''),
+                manual_entries=legend.get('manualEntries', {})
+            )
+            db.add(vector_legend)
+        
+        # Import creator notes
+        creator_notes = vector_data.get('creatorNotes', [])
+        if isinstance(creator_notes, list):
+            for note in creator_notes:
+                if isinstance(note, dict):
+                    vector_note = VectorCreatorNote(
+                        project_id=vector_project.id,
+                        note=note.get('note', ''),
+                        timestamp=datetime.fromisoformat(note.get('timestamp', datetime.now().isoformat())) if isinstance(note.get('timestamp'), str) else datetime.now()
+                    )
+                    db.add(vector_note)
+        
+        # Import change log
+        change_log = vector_data.get('changeLog', [])
+        if isinstance(change_log, list):
+            for log_entry in change_log:
+                if isinstance(log_entry, dict):
+                    vector_log = VectorChangeLog(
+                        project_id=vector_project.id,
+                        action=log_entry.get('action', ''),
+                        details=log_entry.get('details', {}),
+                        timestamp=datetime.fromisoformat(log_entry.get('timestamp', datetime.now().isoformat())) if isinstance(log_entry.get('timestamp'), str) else datetime.now()
+                    )
+                    db.add(vector_log)
+        
+        # Store plots data in vector_metadata for reference
+        if not vector_project.vector_metadata:
+            vector_project.vector_metadata = {}
+        vector_project.vector_metadata['plots'] = plots
+        vector_project.vector_metadata['plotOffsets'] = plot_offsets
+        vector_project.vector_metadata['plotRotations'] = plot_rotations
+        vector_project.vector_metadata['imported_from'] = file.filename
+        vector_project.vector_metadata['import_timestamp'] = datetime.now().isoformat()
+        
+        db.commit()
+        db.refresh(vector_project)
+        
+        return {
+            "message": "Vector project imported successfully",
+            "project_id": str(vector_project.id),
+            "name": vector_project.name,
+            "plots_imported": len(plots),
+            "annotations_imported": len(annos),
+            "labels_imported": len(labels),
+            "shapes_imported": len(shapes)
+        }
+        
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"Invalid JSON file: {str(e)}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Error importing Vector project: {str(e)}")
+
+@app.post("/api/vector/projects/{project_id}/unlink")
+def unlink_vector_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Unlink Vector project from Radius project"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    
+    project.linked_project_id = None
+    db.commit()
+    
+    return {"message": "Project unlinked successfully"}

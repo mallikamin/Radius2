@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import VectorMap from './components/Vector/VectorMap';
 
 const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
@@ -89,6 +90,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('projects');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  
+  // Expose setActiveTab for Vector navigation
+  useEffect(() => {
+    window.setActiveTab = setActiveTab;
+    return () => {
+      window.setActiveTab = null;
+    };
+  }, []);
   
   // Check for existing login on mount - MUST be before any conditional returns
   useEffect(() => {
@@ -181,10 +190,10 @@ export default function App() {
     
     // Role-based access rules
     const roleAccess = {
-      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'settings'],
-      manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'media'],
-      user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'media'],
-      viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'media']
+      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector', 'settings'],
+      manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'media', 'vector'],
+      user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'media', 'vector'],
+      viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'media', 'vector']
     };
     
     return roleAccess[role]?.includes(tabId) || false;
@@ -211,7 +220,8 @@ export default function App() {
     { id: 'customers', label: 'Customers' },
     { id: 'brokers', label: 'Brokers' },
     { id: 'campaigns', label: 'Campaigns' },
-    { id: 'media', label: 'Media Library' }
+    { id: 'media', label: 'Media Library' },
+    { id: 'vector', label: 'Vector' }
   ].filter(tab => canAccess(tab.id));
   
   // All tabs for reference
@@ -308,6 +318,7 @@ export default function App() {
         {activeTab === 'brokers' && <BrokersView />}
         {activeTab === 'campaigns' && <CampaignsView />}
         {activeTab === 'media' && <MediaView />}
+        {activeTab === 'vector' && <VectorView />}
         {activeTab === 'settings' && <SettingsView />}
       </main>
     </div>
@@ -4633,6 +4644,760 @@ function BulkImport({ entity, onImport, importFile, setImportFile, importResult 
           {importResult.errors?.length > 0 && <div className="mt-1 text-xs">{importResult.errors.slice(0, 3).join(', ')}</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================
+// VECTOR VIEW
+// ============================================
+function VectorView() {
+  // Use the new VectorMap component for full Vector functionality
+  return <VectorMap />;
+}
+
+// ============================================
+// VECTOR MAP EDITOR COMPONENT - FULL FEATURED
+// ============================================
+function VectorMapEditor({ project, onClose, onUpdate }) {
+  const [projectData, setProjectData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [annotations, setAnnotations] = useState([]);
+  const [labels, setLabels] = useState([]);
+  const [shapes, setShapes] = useState([]);
+  const [plots, setPlots] = useState([]);
+  const [pdfPages, setPdfPages] = useState([]);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [scale, setScale] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [tool, setTool] = useState('select'); // select, pan, addPlot, brush, rectangle, circle, text
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [showAnnotationModal, setShowAnnotationModal] = useState(false);
+  const [editingAnnotation, setEditingAnnotation] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [drawingStart, setDrawingStart] = useState(null);
+  const [tempShape, setTempShape] = useState(null);
+
+  useEffect(() => {
+    loadProjectData();
+  }, [project.id]);
+
+  useEffect(() => {
+    if (projectData?.map_pdf_base64) {
+      loadPDF();
+    }
+  }, [projectData]);
+
+  useEffect(() => {
+    if (canvasRef.current && pdfPages.length > 0) {
+      drawCanvas();
+    }
+  }, [pdfPages, currentPage, scale, panOffset, annotations, labels, shapes, plots, tool, selectedItem, tempShape]);
+
+  const loadProjectData = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get(`/vector/projects/${project.id}`);
+      const data = res.data;
+      setProjectData(data);
+      
+      const [annosRes, labelsRes, shapesRes] = await Promise.all([
+        api.get(`/vector/projects/${project.id}/annotations`).catch(() => ({ data: [] })),
+        api.get(`/vector/projects/${project.id}/labels`).catch(() => ({ data: [] })),
+        api.get(`/vector/projects/${project.id}/shapes`).catch(() => ({ data: [] }))
+      ]);
+      
+      setAnnotations(annosRes.data || []);
+      setLabels(labelsRes.data || []);
+      setShapes(shapesRes.data || []);
+      
+      if (data.vector_metadata?.plots) {
+        setPlots(data.vector_metadata.plots);
+      }
+    } catch (e) {
+      alert('Error loading project: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadPDF = async () => {
+    try {
+      const pdfjsLib = await import('pdfjs-dist');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+      
+      const base64 = projectData.map_pdf_base64;
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+      const pages = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        pages.push(page);
+      }
+      setPdfPages(pages);
+    } catch (e) {
+      console.error('Error loading PDF:', e);
+      alert('Error loading PDF: ' + e.message);
+    }
+  };
+
+  const drawCanvas = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || pdfPages.length === 0) return;
+    
+    const ctx = canvas.getContext('2d');
+    const page = pdfPages[currentPage];
+    const viewport = page.getViewport({ scale: scale });
+    
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(panOffset.x, panOffset.y);
+    
+    // Draw PDF page
+    const renderContext = {
+      canvasContext: ctx,
+      viewport: viewport
+    };
+    await page.render(renderContext).promise;
+    
+    // Draw plots
+    plots.forEach(plot => {
+      if (plot.x !== undefined && plot.y !== undefined) {
+        const isSelected = selectedItem?.type === 'plot' && selectedItem.data.id === plot.id;
+        ctx.strokeStyle = isSelected ? '#ef4444' : '#3b82f6';
+        ctx.lineWidth = isSelected ? 3 : 2;
+        ctx.strokeRect(plot.x * scale, plot.y * scale, (plot.w || 50) * scale, (plot.h || 50) * scale);
+        if (plot.n) {
+          ctx.fillStyle = isSelected ? '#ef4444' : '#3b82f6';
+          ctx.font = `${12 * scale}px Arial`;
+          ctx.fillText(plot.n, plot.x * scale + 5, plot.y * scale + 15);
+        }
+      }
+    });
+    
+    // Draw shapes
+    shapes.forEach(shape => {
+      ctx.strokeStyle = shape.color || '#000000';
+      ctx.lineWidth = 2;
+      if (shape.type === 'rectangle') {
+        ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
+      } else if (shape.type === 'circle') {
+        ctx.beginPath();
+        ctx.arc(shape.x + shape.width/2, shape.y + shape.height/2, Math.min(shape.width, shape.height)/2, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+    });
+    
+    // Draw labels
+    labels.forEach(label => {
+      ctx.fillStyle = label.color || '#000000';
+      ctx.font = `${(label.size || 12) * scale}px Arial`;
+      ctx.fillText(label.text || '', label.x, label.y);
+    });
+    
+    // Draw annotations
+    annotations.forEach(anno => {
+      if (anno.plot_ids && anno.plot_ids.length > 0) {
+        const plotIds = anno.plot_ids;
+        plotIds.forEach(plotId => {
+          const plot = plots.find(p => p.id === plotId);
+          if (plot && plot.x !== undefined) {
+            ctx.fillStyle = anno.color || '#ff0000';
+            ctx.font = `${(anno.font_size || 12) * scale}px Arial`;
+            const text = anno.note || '';
+            const x = plot.x * scale + (plot.w || 50) * scale / 2;
+            const y = plot.y * scale - 10;
+            ctx.fillText(text, x, y);
+          }
+        });
+      }
+    });
+    
+    // Draw temp shape while drawing
+    if (tempShape && drawingStart) {
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      if (tool === 'rectangle') {
+        ctx.strokeRect(
+          Math.min(drawingStart.x, tempShape.x),
+          Math.min(drawingStart.y, tempShape.y),
+          Math.abs(tempShape.x - drawingStart.x),
+          Math.abs(tempShape.y - drawingStart.y)
+        );
+      } else if (tool === 'circle') {
+        const radius = Math.sqrt(
+          Math.pow(tempShape.x - drawingStart.x, 2) + 
+          Math.pow(tempShape.y - drawingStart.y, 2)
+        );
+        ctx.beginPath();
+        ctx.arc(drawingStart.x, drawingStart.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+    
+    ctx.restore();
+  };
+
+  const handleCanvasMouseDown = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left - panOffset.x;
+    const y = e.clientY - rect.top - panOffset.y;
+    
+    if (tool === 'pan') {
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
+    } else if (tool === 'addPlot' || tool === 'rectangle' || tool === 'circle') {
+      setDrawingStart({ x, y });
+      setTempShape({ x, y });
+    } else if (tool === 'select') {
+      // Check if clicking on a plot
+      const clickedPlot = plots.find(p => {
+        const px = p.x * scale;
+        const py = p.y * scale;
+        return x >= px && x <= px + (p.w || 50) * scale && y >= py && y <= py + (p.h || 50) * scale;
+      });
+      if (clickedPlot) {
+        setSelectedItem({ type: 'plot', data: clickedPlot });
+      } else {
+        // Check if clicking on a shape
+        const clickedShape = shapes.find(s => {
+          if (s.type === 'rectangle') {
+            return x >= s.x && x <= s.x + s.width && y >= s.y && y <= s.y + s.height;
+          } else if (s.type === 'circle') {
+            const centerX = s.x + s.width / 2;
+            const centerY = s.y + s.height / 2;
+            const radius = Math.min(s.width, s.height) / 2;
+            const dist = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+            return dist <= radius;
+          }
+          return false;
+        });
+        if (clickedShape) {
+          setSelectedItem({ type: 'shape', data: clickedShape });
+        } else {
+          setSelectedItem(null);
+        }
+      }
+    }
+  };
+
+  const handleCanvasMouseMove = (e) => {
+    if (isDragging && tool === 'pan') {
+      const newX = e.clientX - dragStart.x;
+      const newY = e.clientY - dragStart.y;
+      setPanOffset({ x: newX, y: newY });
+    } else if (drawingStart && (tool === 'addPlot' || tool === 'rectangle' || tool === 'circle')) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left - panOffset.x;
+      const y = e.clientY - rect.top - panOffset.y;
+      setTempShape({ x, y });
+    }
+  };
+
+  const handleCanvasMouseUp = async (e) => {
+    if (isDragging) {
+      setIsDragging(false);
+    } else if (tool === 'text') {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left - panOffset.x;
+      const y = e.clientY - rect.top - panOffset.y;
+      const text = prompt('Enter text label:');
+      if (text) {
+        await saveLabel({ text, x, y, size: 12, color: '#000000' });
+        saveHistory();
+      }
+    } else if (drawingStart && tempShape) {
+      if (tool === 'addPlot') {
+        const plotNum = prompt('Plot number:');
+        if (plotNum) {
+          const newPlot = {
+            id: Date.now().toString(),
+            n: plotNum,
+            x: Math.min(drawingStart.x, tempShape.x) / scale,
+            y: Math.min(drawingStart.y, tempShape.y) / scale,
+            w: Math.abs(tempShape.x - drawingStart.x) / scale,
+            h: Math.abs(tempShape.y - drawingStart.y) / scale
+          };
+          const updatedPlots = [...plots, newPlot];
+          setPlots(updatedPlots);
+          await savePlots(updatedPlots);
+          saveHistory();
+        }
+      } else if (tool === 'rectangle' || tool === 'circle') {
+        const newShape = {
+          type: tool === 'rectangle' ? 'rectangle' : 'circle',
+          x: Math.min(drawingStart.x, tempShape.x),
+          y: Math.min(drawingStart.y, tempShape.y),
+          width: Math.abs(tempShape.x - drawingStart.x),
+          height: Math.abs(tempShape.y - drawingStart.y),
+          color: '#000000'
+        };
+        await saveShape(newShape);
+        saveHistory();
+      }
+      setDrawingStart(null);
+      setTempShape(null);
+    }
+  };
+
+  const savePlots = async (plotsToSave) => {
+    if (!projectData) return;
+    try {
+      const metadata = { ...projectData.vector_metadata, plots: plotsToSave };
+      const formData = new FormData();
+      formData.append('vector_metadata', JSON.stringify(metadata));
+      await api.put(`/vector/projects/${project.id}`, formData);
+      setProjectData({ ...projectData, vector_metadata: metadata });
+    } catch (e) {
+      console.error('Error saving plots:', e);
+    }
+  };
+
+  const saveShape = async (shape) => {
+    try {
+      const formData = new FormData();
+      formData.append('shape_id', Date.now().toString());
+      formData.append('type', shape.type);
+      formData.append('x', shape.x);
+      formData.append('y', shape.y);
+      formData.append('width', shape.width);
+      formData.append('height', shape.height);
+      formData.append('color', shape.color);
+      const res = await api.post(`/vector/projects/${project.id}/shapes`, formData);
+      setShapes([...shapes, res.data]);
+    } catch (e) {
+      alert('Error saving shape: ' + (e.response?.data?.detail || e.message));
+    }
+  };
+
+  const saveLabel = async (label) => {
+    try {
+      const formData = new FormData();
+      formData.append('label_id', Date.now().toString());
+      formData.append('text', label.text);
+      formData.append('x', label.x);
+      formData.append('y', label.y);
+      formData.append('size', label.size || 12);
+      formData.append('color', label.color || '#000000');
+      const res = await api.post(`/vector/projects/${project.id}/labels`, formData);
+      setLabels([...labels, res.data]);
+    } catch (e) {
+      alert('Error saving label: ' + (e.response?.data?.detail || e.message));
+    }
+  };
+
+  const saveHistory = () => {
+    const state = { annotations, labels, shapes, plots };
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(state);
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+  };
+
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      const prevState = history[historyIndex - 1];
+      setAnnotations(prevState.annotations);
+      setLabels(prevState.labels);
+      setShapes(prevState.shapes);
+      setPlots(prevState.plots);
+      setHistoryIndex(historyIndex - 1);
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndex < history.length - 1) {
+      const nextState = history[historyIndex + 1];
+      setAnnotations(nextState.annotations);
+      setLabels(nextState.labels);
+      setShapes(nextState.shapes);
+      setPlots(nextState.plots);
+      setHistoryIndex(historyIndex + 1);
+    }
+  };
+
+  const handleAddAnnotation = () => {
+    if (selectedItem && selectedItem.type === 'plot') {
+      setEditingAnnotation({ plot_ids: [selectedItem.data.id], plot_nums: [selectedItem.data.n] });
+      setShowAnnotationModal(true);
+    } else {
+      alert('Please select a plot first');
+    }
+  };
+
+  const handleSaveAnnotation = async (annoData) => {
+    try {
+      const formData = new FormData();
+      formData.append('annotation_id', editingAnnotation?.id || Date.now().toString());
+      formData.append('note', annoData.note || '');
+      formData.append('category', annoData.category || '');
+      formData.append('color', annoData.color || '#ff0000');
+      formData.append('font_size', annoData.fontSize || 12);
+      formData.append('plot_ids', JSON.stringify(annoData.plotIds || []));
+      formData.append('plot_nums', JSON.stringify(annoData.plotNums || []));
+      
+      if (editingAnnotation?.id) {
+        await api.put(`/vector/projects/${project.id}/annotations/${editingAnnotation.id}`, formData);
+        setAnnotations(annotations.map(a => a.id === editingAnnotation.id ? { ...a, ...annoData } : a));
+      } else {
+        const res = await api.post(`/vector/projects/${project.id}/annotations`, formData);
+        setAnnotations([...annotations, res.data]);
+      }
+      setShowAnnotationModal(false);
+      setEditingAnnotation(null);
+      saveHistory();
+    } catch (e) {
+      alert('Error saving annotation: ' + (e.response?.data?.detail || e.message));
+    }
+  };
+
+  const handleExport = async (format) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    if (format === 'image') {
+      const link = document.createElement('a');
+      link.download = `${project.name}_map.png`;
+      link.href = canvas.toDataURL();
+      link.click();
+    } else if (format === 'pdf') {
+      // Export as PDF using canvas
+      alert('PDF export coming soon - use image export for now');
+    }
+  };
+
+  if (loading) return <Loader />;
+
+  if (!projectData) {
+    return (
+      <Modal title="Vector Map Editor" onClose={onClose}>
+        <div className="p-6 text-center">
+          <p className="text-gray-600 mb-4">Project data not found</p>
+          <button onClick={onClose} className="bg-gray-900 text-white px-4 py-2 rounded-lg">Close</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl shadow-xl w-full h-full max-w-[95vw] max-h-[95vh] flex flex-col">
+        {/* Header */}
+        <div className="p-4 border-b flex justify-between items-center">
+          <div>
+            <h3 className="text-lg font-semibold">Vector Map Editor - {project.name}</h3>
+            <div className="text-xs text-gray-500 mt-1">
+              Plots: {plots.length} | Annotations: {annotations.length} | Labels: {labels.length} | Shapes: {shapes.length}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+        </div>
+
+        {/* Toolbar */}
+        <div className="p-3 border-b bg-gray-50 flex items-center gap-2 flex-wrap">
+          <div className="flex gap-1 border-r pr-2">
+            <button
+              onClick={() => setTool('select')}
+              className={`px-3 py-1.5 text-xs rounded ${tool === 'select' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
+              title="Select"
+            >
+              ↖ Select
+            </button>
+            <button
+              onClick={() => setTool('pan')}
+              className={`px-3 py-1.5 text-xs rounded ${tool === 'pan' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
+              title="Pan"
+            >
+              ✋ Pan
+            </button>
+            <button
+              onClick={() => setTool('addPlot')}
+              className={`px-3 py-1.5 text-xs rounded ${tool === 'addPlot' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
+              title="Add Plot"
+            >
+              ▢ Plot
+            </button>
+            <button
+              onClick={() => setTool('rectangle')}
+              className={`px-3 py-1.5 text-xs rounded ${tool === 'rectangle' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
+              title="Rectangle"
+            >
+              ▭ Rect
+            </button>
+            <button
+              onClick={() => setTool('circle')}
+              className={`px-3 py-1.5 text-xs rounded ${tool === 'circle' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
+              title="Circle"
+            >
+              ○ Circle
+            </button>
+            <button
+              onClick={() => setTool('text')}
+              className={`px-3 py-1.5 text-xs rounded ${tool === 'text' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
+              title="Text Label"
+            >
+              A Text
+            </button>
+          </div>
+          
+          <div className="flex gap-1 border-r pr-2">
+            <button
+              onClick={handleAddAnnotation}
+              className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+              title="Add Annotation"
+            >
+              📝 Annotate
+            </button>
+            <button
+              onClick={handleUndo}
+              disabled={historyIndex <= 0}
+              className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50"
+              title="Undo"
+            >
+              ↶ Undo
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={historyIndex >= history.length - 1}
+              className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50"
+              title="Redo"
+            >
+              ↷ Redo
+            </button>
+          </div>
+
+          <div className="flex gap-1 border-r pr-2">
+            <button
+              onClick={() => setScale(Math.max(0.5, scale - 0.1))}
+              className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded"
+            >
+              −
+            </button>
+            <span className="px-3 py-1.5 text-xs">{Math.round(scale * 100)}%</span>
+            <button
+              onClick={() => setScale(Math.min(3, scale + 0.1))}
+              className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded"
+            >
+              +
+            </button>
+          </div>
+
+          {pdfPages.length > 1 && (
+            <div className="flex gap-1 border-r pr-2">
+              <button
+                onClick={() => setCurrentPage(Math.max(0, currentPage - 1))}
+                disabled={currentPage === 0}
+                className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded disabled:opacity-50"
+              >
+                ‹ Prev
+              </button>
+              <span className="px-3 py-1.5 text-xs">{currentPage + 1} / {pdfPages.length}</span>
+              <button
+                onClick={() => setCurrentPage(Math.min(pdfPages.length - 1, currentPage + 1))}
+                disabled={currentPage === pdfPages.length - 1}
+                className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded disabled:opacity-50"
+              >
+                Next ›
+              </button>
+            </div>
+          )}
+
+          <div className="flex gap-1">
+            {selectedItem && (
+              <button
+                onClick={async () => {
+                  if (confirm('Delete selected item?')) {
+                    if (selectedItem.type === 'plot') {
+                      const updatedPlots = plots.filter(p => p.id !== selectedItem.data.id);
+                      setPlots(updatedPlots);
+                      await savePlots(updatedPlots);
+                      setSelectedItem(null);
+                      saveHistory();
+                    }
+                  }
+                }}
+                className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700"
+                title="Delete Selected"
+              >
+                🗑️ Delete
+              </button>
+            )}
+            <button
+              onClick={() => handleExport('image')}
+              className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+              title="Export as Image"
+            >
+              💾 Export
+            </button>
+          </div>
+        </div>
+
+        {/* Canvas Area */}
+        <div className="flex-1 overflow-auto bg-gray-100 p-4" ref={containerRef}>
+          {!projectData.map_pdf_base64 ? (
+            <div className="p-8 text-center bg-yellow-50 rounded-lg">
+              <p className="text-yellow-800 mb-4">⚠️ No map PDF uploaded for this project</p>
+              <label className="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-blue-700">
+                Upload Map PDF
+                <input
+                  type="file"
+                  accept=".pdf"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = async (event) => {
+                      const base64 = event.target.result.split(',')[1];
+                      const formData = new FormData();
+                      formData.append('map_name', file.name);
+                      formData.append('map_pdf_base64', base64);
+                      await api.put(`/vector/projects/${project.id}`, formData);
+                      await loadProjectData();
+                      await onUpdate();
+                    };
+                    reader.readAsDataURL(file);
+                  }}
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="relative inline-block">
+              <canvas
+                ref={canvasRef}
+                className="border border-gray-300 bg-white cursor-crosshair"
+                onMouseDown={handleCanvasMouseDown}
+                onMouseMove={handleCanvasMouseMove}
+                onMouseUp={handleCanvasMouseUp}
+                onMouseLeave={() => {
+                  setIsDragging(false);
+                  setDrawingStart(null);
+                  setTempShape(null);
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Annotation Modal */}
+      {showAnnotationModal && (
+        <AnnotationEditor
+          annotation={editingAnnotation}
+          plots={plots}
+          onSave={handleSaveAnnotation}
+          onClose={() => {
+            setShowAnnotationModal(false);
+            setEditingAnnotation(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Annotation Editor Component
+function AnnotationEditor({ annotation, plots, onSave, onClose }) {
+  const [note, setNote] = useState(annotation?.note || '');
+  const [category, setCategory] = useState(annotation?.category || '');
+  const [color, setColor] = useState(annotation?.color || '#ff0000');
+  const [fontSize, setFontSize] = useState(annotation?.font_size || 12);
+  const [plotIds, setPlotIds] = useState(annotation?.plot_ids || []);
+  const [plotNums, setPlotNums] = useState(annotation?.plot_nums || []);
+
+  const handleSave = () => {
+    onSave({
+      note,
+      category,
+      color,
+      fontSize,
+      plotIds,
+      plotNums
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+      <div className="bg-white rounded-lg p-6 max-w-md w-full">
+        <h3 className="text-lg font-semibold mb-4">Edit Annotation</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Note</label>
+            <textarea
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg"
+              rows={3}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Category</label>
+            <input
+              type="text"
+              value={category}
+              onChange={e => setCategory(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Color</label>
+              <input
+                type="color"
+                value={color}
+                onChange={e => setColor(e.target.value)}
+                className="w-full h-10 border rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Font Size</label>
+              <input
+                type="number"
+                value={fontSize}
+                onChange={e => setFontSize(parseInt(e.target.value))}
+                className="w-full px-3 py-2 border rounded-lg"
+                min="8"
+                max="72"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Linked Plots</label>
+            <div className="text-xs text-gray-600">
+              {plotNums.length > 0 ? plotNums.join(', ') : 'No plots linked'}
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-6">
+          <button
+            onClick={handleSave}
+            className="flex-1 bg-gray-900 text-white px-4 py-2 rounded-lg hover:bg-gray-800"
+          >
+            Save
+          </button>
+          <button
+            onClick={onClose}
+            className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-300"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
