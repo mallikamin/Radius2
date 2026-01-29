@@ -30,6 +30,30 @@ export default function LegendPanel({ vectorState }) {
     let globalMarlaTotal = 0;
     let globalValueTotal = 0;
 
+    // Debug: Log inventory state
+    const invKeys = Object.keys(vectorState.inventory || {});
+    console.log('LegendPanel: Inventory keys count:', invKeys.length);
+    if (invKeys.length > 0) {
+      console.log('LegendPanel: Sample inventory keys:', invKeys.slice(0, 5));
+      console.log('LegendPanel: Sample inventory value:', vectorState.inventory[invKeys[0]]);
+    }
+    console.log('LegendPanel: Plots count:', vectorState.plots?.length || 0);
+    console.log('LegendPanel: Annos count:', vectorState.annos?.length || 0);
+
+    // Debug: Show sample plot names to compare with inventory keys
+    if (vectorState.plots?.length > 0) {
+      const samplePlotNames = vectorState.plots.slice(0, 5).map(p => p.n);
+      console.log('LegendPanel: Sample plot names (plot.n):', samplePlotNames);
+    }
+
+    // Debug: Check first annotation's plotIds
+    if (vectorState.annos?.length > 0 && vectorState.annos[0].plotIds?.length > 0) {
+      const firstAnno = vectorState.annos[0];
+      const firstPlotId = firstAnno.plotIds[0];
+      const foundPlot = vectorState.plots.find(p => p.id === firstPlotId || String(p.id) === String(firstPlotId));
+      console.log('LegendPanel: First anno plotId:', firstPlotId, 'Found plot:', foundPlot ? { id: foundPlot.id, n: foundPlot.n } : 'NOT FOUND');
+    }
+
     // Process annotations
     vectorState.annos.forEach(a => {
       const key = a.color + '|' + (a.note || a.cat);
@@ -40,6 +64,7 @@ export default function LegendPanel({ vectorState }) {
         let totalMarla = 0;
         let totalValue = 0;
         let plotsWithData = 0;
+        let debugMatchCount = 0;
 
         a.plotIds.forEach(pid => {
           const plot = findPlotById(vectorState.plots, pid);
@@ -54,6 +79,7 @@ export default function LegendPanel({ vectorState }) {
             }
 
             if (inv) {
+              debugMatchCount++;
               const marlaVal = parseFloat(inv.marla) || 0;
               const valueVal = parseFloat(inv.totalValue) || 0;
 
@@ -68,6 +94,8 @@ export default function LegendPanel({ vectorState }) {
             }
           }
         });
+
+        console.log(`LegendPanel: Anno "${a.note || a.cat}" - ${a.plotIds.length} plotIds, ${debugMatchCount} inv matches, marla=${totalMarla}, value=${totalValue}`);
 
         items.push({
           id: a.id,
@@ -295,7 +323,18 @@ export default function LegendPanel({ vectorState }) {
       </div>
 
       {!minimized && (
-        <div className="p-2 max-h-[150px] overflow-y-auto">
+        <div className="p-2 max-h-[180px] overflow-y-auto">
+          {/* View All button */}
+          {vectorState.activeView !== 'all' && (
+            <div
+              className="flex items-center gap-2 py-1.5 px-2 mb-1 bg-blue-50 border border-blue-200 rounded cursor-pointer hover:bg-blue-100"
+              onClick={() => vectorState.setActiveView('all')}
+              title="Show all annotations"
+            >
+              <span className="text-xs font-semibold text-blue-700">← Show All</span>
+            </div>
+          )}
+
           {items.length === 0 ? (
             <div className="text-xs text-gray-500 text-center py-4">No annotations yet</div>
           ) : (
@@ -304,22 +343,35 @@ export default function LegendPanel({ vectorState }) {
               if (item.marla > 0) parts.push(`${item.marla.toFixed(1)}M`);
               if (item.value > 0) parts.push(formatCurrency(item.value));
 
+              const isActiveView = vectorState.activeView === item.id;
+
               return (
                 <div
                   key={idx}
-                  className="flex items-center gap-2 py-1 border-b border-gray-100 last:border-0 cursor-pointer hover:bg-gray-50"
+                  className={`flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0 cursor-pointer transition-all ${
+                    isActiveView
+                      ? 'bg-indigo-50 border-l-2 border-l-indigo-500 pl-1'
+                      : 'hover:bg-gray-50'
+                  }`}
                   onClick={() => {
-                    // Show annotation summary - to be implemented
-                    console.log('Annotation:', item.note);
+                    // Toggle view: click to focus, click again to show all
+                    if (isActiveView) {
+                      vectorState.setActiveView('all');
+                    } else {
+                      vectorState.setActiveView(item.id);
+                    }
                   }}
-                  title="Click for details"
+                  title={isActiveView ? "Click to show all" : `Click to focus on ${item.note}`}
                 >
                   <div
                     className="w-4 h-3 rounded flex-shrink-0"
                     style={{ backgroundColor: item.color }}
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-xs truncate">{item.note}</div>
+                    <div className="font-semibold text-xs truncate flex items-center gap-1">
+                      {item.note}
+                      {isActiveView && <span className="text-indigo-500">●</span>}
+                    </div>
                     <div className="text-xs text-gray-500">
                       {item.count} plots
                       {parts.length > 0 && (

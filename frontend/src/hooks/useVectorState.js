@@ -43,6 +43,19 @@ export function useVectorState() {
     return saved === 'true';
   });
   const [currentProjectId, setCurrentProjectId] = useState(null);
+  const [systemBranches, setSystemBranches] = useState({ sales: {}, inventory: {} });
+  const [linkedProjectId, setLinkedProjectId] = useState(null);
+  const [linkedProjectName, setLinkedProjectName] = useState(null);
+  const [branchVisibility, setBranchVisibility] = useState({
+    master: true,
+    orbit: true,
+    sales: true,
+    inventory: true,
+    raw: true
+  });
+
+  // Active view mode: 'all' for all annotations, or annotation ID for single annotation view
+  const [activeView, setActiveView] = useState('all');
 
   // Save database mode to localStorage when it changes
   useEffect(() => {
@@ -57,6 +70,8 @@ export function useVectorState() {
     if (data.projectId) {
       setCurrentProjectId(data.projectId);
     }
+    // Reset view mode to 'all' when loading a new project
+    setActiveView('all');
     setBranches(data.branches || []);
     setInventory(data.inventory || {});
     setChangeLog(data.changeLog || []);
@@ -231,7 +246,32 @@ export function useVectorState() {
       console.log('loadProjectData: ✓ All annotations preserved, count:', processedAnnos.length);
     }
     setLabels(data.labels || []);
-    
+
+    // Load system branches (auto-generated from ORBIT data)
+    if (data.systemBranches) {
+      setSystemBranches({
+        orbit: data.systemBranches.orbit || {},
+        sales: data.systemBranches.sales || {},
+        inventory: data.systemBranches.inventory || {},
+        reconciliation: data.systemBranches.reconciliation || {},
+        raw: data.systemBranches.raw || {}
+      });
+    } else {
+      setSystemBranches({ orbit: {}, sales: {}, inventory: {}, reconciliation: {}, raw: {} });
+    }
+
+    // Load linked project info
+    if (data.linkedProjectId) {
+      setLinkedProjectId(data.linkedProjectId);
+    } else {
+      setLinkedProjectId(null);
+    }
+    if (data.linkedProjectName) {
+      setLinkedProjectName(data.linkedProjectName);
+    } else {
+      setLinkedProjectName(null);
+    }
+
     // Store PDF base64 for later loading
     if (data.pdfBase64) {
       console.log('loadProjectData: Setting pdfBase64, length:', data.pdfBase64.length);
@@ -472,7 +512,12 @@ export function useVectorState() {
     hasUnsavedChanges,
     databaseMode,
     currentProjectId,
-    
+    systemBranches,
+    linkedProjectId,
+    linkedProjectName,
+    branchVisibility,
+    activeView,
+
     // Setters
     setProjectName,
     setMapName,
@@ -499,7 +544,12 @@ export function useVectorState() {
     setHasUnsavedChanges,
     setDatabaseMode,
     setCurrentProjectId,
-    
+    setSystemBranches,
+    setLinkedProjectId,
+    setLinkedProjectName,
+    setBranchVisibility,
+    setActiveView,
+
     // Actions
     loadProjectData,
     addPlot,

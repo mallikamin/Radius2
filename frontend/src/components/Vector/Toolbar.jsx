@@ -7,6 +7,8 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [projects, setProjects] = useState([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
+  const [projectFilter, setProjectFilter] = useState('master'); // 'all', 'master', 'auto'
+  const [expandedGroups, setExpandedGroups] = useState(new Set());
   
   // Get user role for admin check
   const getUserRole = () => {
@@ -244,13 +246,13 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
             if (window.location) {
               window.location.href = '/';
             } else {
-              alert('Click the Radius logo or navigate back to return to main app');
+              alert('Click the ORBIT logo or navigate back to return to main app');
             }
           }
         }}
         className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded mr-2"
         style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
-        title="Back to Radius"
+        title="Back to ORBIT"
       >
         ← Back
       </button>
@@ -346,6 +348,36 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
 
         <div className="w-px h-5 bg-gray-700 mx-1" />
 
+        {/* View Mode Selector - Quick annotation view switching */}
+        {vectorState.annos && vectorState.annos.length > 0 && (
+          <div className="flex items-center">
+            <select
+              value={vectorState.activeView || 'all'}
+              onChange={(e) => vectorState.setActiveView(e.target.value)}
+              className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded border-none cursor-pointer appearance-none"
+              style={{
+                color: '#fff',
+                minWidth: '100px',
+                backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+                backgroundPosition: 'right 4px center',
+                backgroundRepeat: 'no-repeat',
+                backgroundSize: '16px',
+                paddingRight: '20px'
+              }}
+              title="View Mode - Focus on specific annotations"
+            >
+              <option value="all">All Views</option>
+              {vectorState.annos.map(anno => (
+                <option key={anno.id} value={anno.id}>
+                  {anno.note || anno.cat || 'Unnamed'}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="w-px h-5 bg-gray-700 mx-1" />
+
         {/* Display Mode & Zoom - Compact */}
         <div className="flex items-center gap-0.5">
           <button
@@ -421,101 +453,212 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
 
             {vectorState.databaseMode ? (
               <>
-                {/* Projects List */}
+                {/* Projects List with Filter */}
                 <div className="mb-4">
-                  <div className="flex justify-between items-center mb-2">
+                  <div className="flex justify-between items-center mb-3">
                     <h3 className="text-sm font-semibold">Saved Projects</h3>
-                    <button
-                      onClick={loadProjects}
-                      disabled={loadingProjects}
-                      className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded disabled:opacity-50"
-                    >
-                      {loadingProjects ? 'Loading...' : '🔄 Refresh'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={projectFilter}
+                        onChange={(e) => setProjectFilter(e.target.value)}
+                        className="text-xs px-2 py-1 border rounded bg-white"
+                      >
+                        <option value="master">Master Projects</option>
+                        <option value="all">All Projects</option>
+                        <option value="auto">Auto-generated Only</option>
+                      </select>
+                      <button
+                        onClick={loadProjects}
+                        disabled={loadingProjects}
+                        className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded disabled:opacity-50"
+                      >
+                        {loadingProjects ? '...' : '↻'}
+                      </button>
+                    </div>
                   </div>
-                  
+
+                  {/* Project counts summary */}
+                  {!loadingProjects && projects.length > 0 && (
+                    <div className="flex gap-3 text-xs text-gray-500 mb-2 px-1">
+                      <span>{projects.filter(p => !p.vector_metadata?.isAutoGenerated).length} master</span>
+                      <span>•</span>
+                      <span>{projects.filter(p => p.vector_metadata?.isAutoGenerated).length} auto-generated</span>
+                    </div>
+                  )}
+
                   {loadingProjects ? (
                     <div className="text-center py-8 text-gray-500">Loading projects...</div>
                   ) : projects.length === 0 ? (
                     <div className="text-center py-8 text-gray-500">No projects found. Create a new project to get started.</div>
                   ) : (
-                    <div className="border rounded divide-y max-h-64 overflow-y-auto">
-                      {projects.map((project) => {
-                        // Determine display name - simple fallback chain
-                        // Debug: log the project to see what fields are available
-                        console.log('Project in list (full object):', JSON.stringify(project, null, 2));
-                        console.log('Project name field:', project.name, 'Type:', typeof project.name);
-                        console.log('Project map_name field:', project.map_name, 'Type:', typeof project.map_name);
-                        const displayName = project.name || project.map_name || 'Unnamed Project';
-                        console.log('Display name determined:', displayName);
-                        
-                        return (
-                          <div
-                            key={project.id}
-                            className="p-3 hover:bg-gray-50 cursor-pointer flex justify-between items-center"
-                            onClick={() => {
-                              console.log('Loading project:', project.id, project.name);
-                              if (window.loadProjectFromDB) {
-                                window.loadProjectFromDB(project.id);
-                                setShowProjectModal(false);
-                              } else {
-                                console.error('loadProjectFromDB function not available');
-                                alert('Load function not available. Please refresh the page.');
-                              }
-                            }}
-                          >
-                            <div className="flex-1 min-w-0">
-                              <div className="font-medium text-sm truncate text-gray-900">
-                                {displayName}
+                    <div className="border rounded max-h-72 overflow-y-auto">
+                      {(() => {
+                        // Group projects: master projects with their auto-generated children
+                        const masterProjects = projects.filter(p => !p.vector_metadata?.isAutoGenerated);
+                        const autoProjects = projects.filter(p => p.vector_metadata?.isAutoGenerated);
+
+                        // Build grouped structure
+                        const groups = masterProjects.map(master => ({
+                          master,
+                          autoMaps: autoProjects.filter(auto =>
+                            auto.vector_metadata?.sourceProjectId === master.id ||
+                            auto.linked_project_id === master.linked_project_id
+                          )
+                        }));
+
+                        // Find orphaned auto-maps (no matching master)
+                        const assignedAutoIds = new Set(groups.flatMap(g => g.autoMaps.map(a => a.id)));
+                        const orphanedAuto = autoProjects.filter(a => !assignedAutoIds.has(a.id));
+
+                        // Filter based on selection
+                        let filteredGroups = groups;
+                        if (projectFilter === 'auto') {
+                          return autoProjects.map(project => renderProjectItem(project, true));
+                        }
+
+                        // Render function for project item
+                        function renderProjectItem(project, isChild = false) {
+                          const displayName = project.name || project.map_name || 'Unnamed Project';
+                          const isAuto = project.vector_metadata?.isAutoGenerated;
+                          const mapType = project.vector_metadata?.mapType;
+
+                          return (
+                            <div
+                              key={project.id}
+                              className={`p-2.5 hover:bg-gray-50 cursor-pointer flex justify-between items-center border-b border-gray-100 last:border-0 ${isChild ? 'pl-6 bg-gray-50/50' : ''}`}
+                              onClick={() => {
+                                if (window.loadProjectFromDB) {
+                                  window.loadProjectFromDB(project.id);
+                                  setShowProjectModal(false);
+                                }
+                              }}
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-sm truncate text-gray-900 flex items-center gap-1.5">
+                                  {isChild && <span className="text-gray-400 text-xs">↳</span>}
+                                  <span className="truncate">{displayName}</span>
+                                  {/* Badges */}
+                                  {isAuto && mapType === 'status' && (
+                                    <span className="flex-shrink-0 px-1.5 py-0.5 text-[9px] bg-red-100 text-red-700 rounded font-semibold">
+                                      Status
+                                    </span>
+                                  )}
+                                  {isAuto && mapType === 'customer' && (
+                                    <span className="flex-shrink-0 px-1.5 py-0.5 text-[9px] bg-orange-100 text-orange-700 rounded font-semibold">
+                                      Customers
+                                    </span>
+                                  )}
+                                  {isAuto && mapType === 'auto_master' && (
+                                    <span className="flex-shrink-0 px-1.5 py-0.5 text-[9px] bg-purple-100 text-purple-700 rounded font-semibold">
+                                      Master
+                                    </span>
+                                  )}
+                                  {!isAuto && project.linked_project_id && (
+                                    <span className="flex-shrink-0 px-1.5 py-0.5 text-[9px] bg-blue-100 text-blue-700 rounded font-semibold">
+                                      Linked
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-gray-400 mt-0.5">
+                                  {project.linked_project_name && !isAuto && (
+                                    <span className="text-blue-500">{project.linked_project_name} • </span>
+                                  )}
+                                  {new Date(project.updated_at).toLocaleDateString()}
+                                </div>
                               </div>
-                              <div className="text-xs text-gray-500">
-                                {project.map_name && project.map_name !== displayName && `${project.map_name} • `}
-                                Updated: {new Date(project.updated_at).toLocaleDateString()}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 ml-2">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  console.log('Load button clicked for project:', project.id, project.name);
-                                  if (window.loadProjectFromDB) {
-                                    window.loadProjectFromDB(project.id);
-                                    setShowProjectModal(false);
-                                  } else {
-                                    console.error('loadProjectFromDB function not available');
-                                    alert('Load function not available. Please refresh the page.');
-                                  }
-                                }}
-                                className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-                              >
-                                Load
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRenameProject(project.id, displayName);
-                                }}
-                                className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
-                                title="Rename project"
-                              >
-                                ✏️
-                              </button>
-                              {isAdmin && (
+                              <div className="flex items-center gap-1 ml-2 flex-shrink-0">
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleDeleteProject(project.id, displayName);
+                                    if (window.loadProjectFromDB) {
+                                      window.loadProjectFromDB(project.id);
+                                      setShowProjectModal(false);
+                                    }
                                   }}
-                                  className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700"
-                                  title="Delete project (Admin only)"
+                                  className="px-2 py-1 text-[10px] bg-blue-600 text-white rounded hover:bg-blue-700"
                                 >
-                                  🗑️
+                                  Open
                                 </button>
-                              )}
+                                {!isAuto && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRenameProject(project.id, displayName);
+                                    }}
+                                    className="p-1 text-gray-400 hover:text-gray-600"
+                                    title="Rename"
+                                  >
+                                    ✏️
+                                  </button>
+                                )}
+                                {isAdmin && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteProject(project.id, displayName);
+                                    }}
+                                    className="p-1 text-gray-400 hover:text-red-600"
+                                    title="Delete"
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                          </div>
+                          );
+                        }
+
+                        // Render grouped projects
+                        return (
+                          <>
+                            {filteredGroups.map(({ master, autoMaps }) => {
+                              const hasAutoMaps = autoMaps.length > 0;
+                              const isExpanded = expandedGroups.has(master.id);
+
+                              return (
+                                <div key={master.id}>
+                                  {/* Master project row */}
+                                  <div className="flex items-center">
+                                    {hasAutoMaps && projectFilter !== 'auto' && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const newExpanded = new Set(expandedGroups);
+                                          if (isExpanded) {
+                                            newExpanded.delete(master.id);
+                                          } else {
+                                            newExpanded.add(master.id);
+                                          }
+                                          setExpandedGroups(newExpanded);
+                                        }}
+                                        className="p-2 text-gray-400 hover:text-gray-600 text-xs"
+                                      >
+                                        {isExpanded ? '▼' : '▶'}
+                                      </button>
+                                    )}
+                                    <div className="flex-1">
+                                      {renderProjectItem(master, false)}
+                                    </div>
+                                  </div>
+                                  {/* Auto-generated children (collapsed by default) */}
+                                  {hasAutoMaps && isExpanded && projectFilter !== 'auto' && (
+                                    <div className="border-l-2 border-gray-200 ml-3">
+                                      {autoMaps.map(auto => renderProjectItem(auto, true))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                            {/* Orphaned auto-maps */}
+                            {projectFilter === 'all' && orphanedAuto.length > 0 && (
+                              <div className="border-t border-gray-200 mt-2 pt-2">
+                                <div className="text-[10px] text-gray-400 px-3 py-1">Unlinked Auto-maps</div>
+                                {orphanedAuto.map(auto => renderProjectItem(auto, true))}
+                              </div>
+                            )}
+                          </>
                         );
-                      })}
+                      })()}
                     </div>
                   )}
                 </div>

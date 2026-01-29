@@ -161,6 +161,28 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       });
     });
 
+    // Check if we're in a specific annotation view mode
+    const activeView = vectorState.activeView || 'all';
+    const isFilteredView = activeView !== 'all';
+
+    // Helper function to get display color based on view mode
+    const getDisplayColor = (anno, originalColor) => {
+      if (!isFilteredView || !anno) return originalColor;
+      // If this annotation matches the active view, use full color
+      if (anno.id === activeView) return originalColor;
+      // Otherwise, return muted gray
+      return '#e5e7eb'; // Light gray for muted plots
+    };
+
+    // Helper function to get opacity based on view mode
+    const getDisplayOpacity = (anno, baseOpacity = 0.92) => {
+      if (!isFilteredView || !anno) return baseOpacity;
+      // If this annotation matches the active view, use full opacity
+      if (anno.id === activeView) return baseOpacity;
+      // Otherwise, use very low opacity
+      return 0.3;
+    };
+
     // Draw plots
     vectorState.plots.forEach(p => {
       try {
@@ -227,15 +249,15 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
           // Connector line if offset
           if (anno && (offset.ox !== 0 || offset.oy !== 0)) {
-            ctx.strokeStyle = anno.color;
+            ctx.strokeStyle = getDisplayColor(anno, anno.color);
             ctx.lineWidth = 1.5;
-            ctx.globalAlpha = 0.6;
+            ctx.globalAlpha = getDisplayOpacity(anno, 0.6);
             ctx.beginPath();
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(drawX, drawY);
             ctx.stroke();
             ctx.globalAlpha = 1;
-            ctx.fillStyle = anno.color;
+            ctx.fillStyle = getDisplayColor(anno, anno.color);
             ctx.beginPath();
             ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
             ctx.fill();
@@ -243,8 +265,9 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
           // Draw annotation box
           if (anno) {
-            ctx.fillStyle = anno.color;
-            ctx.globalAlpha = 0.92;
+            // Apply view mode filtering - mute non-active annotations
+            ctx.fillStyle = getDisplayColor(anno, anno.color);
+            ctx.globalAlpha = getDisplayOpacity(anno, 0.92);
 
             const plotRotation = vectorState.plotRotations[p.id] !== undefined 
               ? vectorState.plotRotations[p.id] 
@@ -434,7 +457,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     });
 
     ctx.restore();
-  }, [vectorState, vectorState.annos, vectorState.plots, vectorState.plotOffsets, scale, offX, offY, hoveredPlotId, displayMode]);
+  }, [vectorState, vectorState.annos, vectorState.plots, vectorState.plotOffsets, vectorState.activeView, scale, offX, offY, hoveredPlotId, displayMode]);
 
   // Handle mouse move for hover
   const handleMouseMove = useCallback((e) => {

@@ -13,6 +13,7 @@ import ChangeLogPanel from './ChangeLogPanel';
 import PanSettingsPanel from './PanSettingsPanel';
 import InventoryImportPanel from './InventoryImportPanel';
 import SettingsPanel from './SettingsPanel';
+import BranchesPanel from './BranchesPanel';
 
 export default function Sidebar({ vectorState }) {
   const [activeTab, setActiveTab] = useState('selection');
@@ -228,6 +229,15 @@ export default function Sidebar({ vectorState }) {
           📋
         </button>
         <button
+          onClick={() => setActiveTab('branches')}
+          className={`px-2 py-2 text-xs font-medium ${
+            activeTab === 'branches' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
+          }`}
+          title="Branches (ORBIT Sync)"
+        >
+          🔀
+        </button>
+        <button
           onClick={() => setActiveTab('pan')}
           className={`px-2 py-2 text-xs font-medium ${
             activeTab === 'pan' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
@@ -283,6 +293,10 @@ export default function Sidebar({ vectorState }) {
 
         {activeTab === 'changelog' && (
           <ChangeLogPanel vectorState={vectorState} />
+        )}
+
+        {activeTab === 'branches' && (
+          <BranchesPanel vectorState={vectorState} />
         )}
 
         {activeTab === 'pan' && (

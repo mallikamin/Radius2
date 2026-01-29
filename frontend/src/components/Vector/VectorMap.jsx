@@ -260,16 +260,34 @@ export default function VectorMap() {
       }
 
       // Ensure we have the PDF base64 - check both state and ref (ref is more reliable due to React async state)
-      const pdfBase64FromState = vectorState.pdfBase64 || null;
-      const pdfBase64FromRef = pdfBase64Ref.current || null;
-      const pdfBase64ToSave = pdfBase64FromState || pdfBase64FromRef;
-      
+      let pdfBase64FromState = vectorState.pdfBase64 || null;
+      let pdfBase64FromRef = pdfBase64Ref.current || null;
+      let pdfBase64ToSave = pdfBase64FromState || pdfBase64FromRef;
+
       console.log('handleSaveToDatabase: PDF base64 check - state:', !!pdfBase64FromState, 'ref:', !!pdfBase64FromRef, 'final:', !!pdfBase64ToSave);
-      
+
+      // If PDF is missing but we have a project ID, try to recover it from the server
+      const existingProjectId = currentProjectIdRef.current || vectorState.currentProjectId;
+      if (!pdfBase64ToSave && existingProjectId) {
+        console.log('handleSaveToDatabase: Attempting to recover PDF from server for project:', existingProjectId);
+        try {
+          const recoveryResponse = await api.get(`/vector/projects/${existingProjectId}`);
+          if (recoveryResponse.data?.pdfBase64) {
+            pdfBase64ToSave = recoveryResponse.data.pdfBase64;
+            // Store in ref and state for future use
+            pdfBase64Ref.current = pdfBase64ToSave;
+            vectorState.setPdfBase64(pdfBase64ToSave);
+            console.log('handleSaveToDatabase: Recovered PDF from server, length:', pdfBase64ToSave.length);
+          }
+        } catch (recoveryError) {
+          console.warn('handleSaveToDatabase: Could not recover PDF from server:', recoveryError.message);
+        }
+      }
+
       if (!pdfBase64ToSave) {
-        console.warn('handleSaveToDatabase: No PDF base64 found in state or ref. PDF will not be saved.');
+        console.warn('handleSaveToDatabase: No PDF base64 found in state, ref, or server. PDF will not be saved.');
         console.warn('handleSaveToDatabase: Current state - pdfImg:', !!vectorState.pdfImg, 'pdfBase64:', !!vectorState.pdfBase64);
-        
+
         // Warn user but allow save - they might want to save without PDF
         const continueWithoutPdf = confirm('Warning: No PDF map found in this project. The project will be saved without the map PDF. You can load a PDF later using the "Open" button.\n\nDo you want to continue saving?');
         if (!continueWithoutPdf) {
@@ -278,10 +296,14 @@ export default function VectorMap() {
         }
       } else {
         console.log('handleSaveToDatabase: PDF base64 found, length:', pdfBase64ToSave.length);
-        // If we got it from ref but not state, update state for consistency
-        if (pdfBase64FromRef && !pdfBase64FromState) {
-          console.log('handleSaveToDatabase: Updating state with pdfBase64 from ref');
-          vectorState.setPdfBase64(pdfBase64FromRef);
+        // Ensure both state and ref are synced
+        if (!pdfBase64FromState) {
+          console.log('handleSaveToDatabase: Updating state with pdfBase64');
+          vectorState.setPdfBase64(pdfBase64ToSave);
+        }
+        if (!pdfBase64FromRef) {
+          console.log('handleSaveToDatabase: Updating ref with pdfBase64');
+          pdfBase64Ref.current = pdfBase64ToSave;
         }
       }
 
@@ -303,10 +325,11 @@ export default function VectorMap() {
       });
 
       // Use ref for immediate access (avoids React async state issues)
-      let projectId = currentProjectIdRef.current || vectorState.currentProjectId;
+      // Note: projectId was already defined earlier for PDF recovery
+      const currentProjectId = currentProjectIdRef.current || vectorState.currentProjectId;
 
-      console.log('handleSaveToDatabase: Current project ID:', projectId);
-      console.log('handleSaveToDatabase: Will', projectId ? 'UPDATE existing project' : 'CREATE new project');
+      console.log('handleSaveToDatabase: Current project ID:', currentProjectId);
+      console.log('handleSaveToDatabase: Will', currentProjectId ? 'UPDATE existing project' : 'CREATE new project');
 
       // Create or update project
       const formData = new FormData();
@@ -346,17 +369,17 @@ export default function VectorMap() {
         console.error('handleSaveToDatabase: ✗ vector_metadata is missing from FormData!');
       }
 
-      let savedProjectId = projectId;
-      if (projectId) {
+      let savedProjectId = currentProjectId;
+      if (currentProjectId) {
         // Update existing project
-        console.log('handleSaveToDatabase: Updating existing project', projectId);
-        const updateResponse = await api.put(`/vector/projects/${projectId}`, formData, {
+        console.log('handleSaveToDatabase: Updating existing project', currentProjectId);
+        const updateResponse = await api.put(`/vector/projects/${currentProjectId}`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
         console.log('handleSaveToDatabase: Update response', updateResponse.data);
       } else {
         // Create new project
-        console.log('handleSaveToDatabase: Creating new project (no existing projectId)');
+        console.log('handleSaveToDatabase: Creating new project (no existing currentProjectId)');
         const response = await api.post('/vector/projects', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
@@ -369,17 +392,17 @@ export default function VectorMap() {
 
       vectorState.setHasUnsavedChanges(false);
       vectorState.addChangeLog('Project saved to database', `Saved project: ${projectName}`);
-      
+
       // Reload project list if modal is open
       if (window.refreshProjectList) {
         window.refreshProjectList();
       }
-      
+
       // If this was a new project, reload it to ensure everything is synced
       // BUT: Don't reload if we just saved successfully - the data is already in state
       // Reloading can cause data loss if the backend hasn't fully committed yet
       // Only reload if explicitly needed (e.g., to sync with server-side changes)
-      if (!projectId || savedProjectId !== projectId) {
+      if (!currentProjectId || savedProjectId !== currentProjectId) {
         console.log('handleSaveToDatabase: New project created, skipping auto-reload to preserve current state');
         console.log('handleSaveToDatabase: Project saved with ID:', savedProjectId);
         console.log('handleSaveToDatabase: Current state preserved - annos:', vectorState.annos?.length || 0);

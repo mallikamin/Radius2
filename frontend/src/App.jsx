@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import VectorMap from './components/Vector/VectorMap';
+import OrphanTrackingPanel from './components/OrphanTrackingPanel';
 
 const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
@@ -37,7 +38,7 @@ function LoginView({ onLogin }) {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-lg p-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Radius CRM</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">ORBIT</h1>
         <p className="text-gray-600 mb-8">Sign in to your account</p>
         
         {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>}
@@ -242,7 +243,7 @@ export default function App() {
     <div className="min-h-screen bg-[#fafafa]">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-          <h1 className="text-xl font-semibold tracking-tight text-gray-900">Radius</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-gray-900">ORBIT</h1>
           <nav className="flex items-center gap-2">
             <div className="text-sm text-gray-600 mr-4">
               {user.name} <span className="text-gray-400">({user.role})</span>
@@ -3024,7 +3025,7 @@ function ReportsView() {
                     <div>
                       <h2 className="text-2xl font-bold mb-1">{customerReport.report_header?.title || 'Customer Detailed Financial Report'}</h2>
                       <div className="text-sm text-gray-300">
-                        Generated via <span className="font-semibold text-white">Radius CRM</span>
+                        Generated via <span className="font-semibold text-white">ORBIT</span>
                         {customerReport.report_header?.generated_at && (
                           <span className="ml-4">• {new Date(customerReport.report_header.generated_at).toLocaleString()}</span>
                         )}
@@ -3350,7 +3351,7 @@ function ReportsView() {
                     <div>
                       <h2 className="text-2xl font-bold mb-1">{projectReport.report_header?.title || 'Project Financial Report'}</h2>
                       <div className="text-sm text-gray-300">
-                        Generated via <span className="font-semibold text-white">Radius CRM</span>
+                        Generated via <span className="font-semibold text-white">ORBIT</span>
                         {projectReport.report_header?.generated_at && (
                           <span className="ml-4">• {new Date(projectReport.report_header.generated_at).toLocaleString()}</span>
                         )}
@@ -3652,7 +3653,7 @@ function ReportsView() {
                     <div>
                       <h2 className="text-2xl font-bold mb-1">{brokerReport.report_header?.title || 'Broker Detailed Report'}</h2>
                       <div className="text-sm text-gray-300">
-                        Generated via <span className="font-semibold text-white">Radius CRM</span>
+                        Generated via <span className="font-semibold text-white">ORBIT</span>
                         {brokerReport.report_header?.generated_at && (
                           <span className="ml-4">• {new Date(brokerReport.report_header.generated_at).toLocaleString()}</span>
                         )}
@@ -3855,6 +3856,7 @@ function SettingsView() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ name: '', mobile: '', email: '' });
+  const [settingsTab, setSettingsTab] = useState('reps');
 
   useEffect(() => { loadReps(); }, []);
   const loadReps = async () => {
@@ -3885,6 +3887,33 @@ function SettingsView() {
       <div><h2 className="text-2xl font-semibold text-gray-900">Settings</h2>
         <p className="text-sm text-gray-500 mt-1">Manage system configuration</p></div>
 
+      {/* Settings Tabs */}
+      <div className="flex gap-2 border-b">
+        <button
+          onClick={() => setSettingsTab('reps')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+            settingsTab === 'reps' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Company Reps
+        </button>
+        <button
+          onClick={() => setSettingsTab('project-linking')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+            settingsTab === 'project-linking' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Project Linking
+        </button>
+      </div>
+
+      {settingsTab === 'project-linking' && (
+        <div className="bg-white rounded-2xl shadow-sm border">
+          <OrphanTrackingPanel />
+        </div>
+      )}
+
+      {settingsTab === 'reps' && (
       <div className="bg-white rounded-2xl shadow-sm border p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -3917,20 +3946,21 @@ function SettingsView() {
             ))}
           </div>
         )}
-      </div>
 
-      {showModal && (
-        <Modal title={editing ? 'Edit Company Rep' : 'Add Company Rep'} onClose={() => setShowModal(false)}>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
-            <Input label="Mobile" value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} />
-            <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
-            <div className="flex justify-end gap-3 pt-4">
-              <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
-              <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">{editing ? 'Update' : 'Create'}</button>
-            </div>
-          </form>
-        </Modal>
+        {showModal && (
+          <Modal title={editing ? 'Edit Company Rep' : 'Add Company Rep'} onClose={() => setShowModal(false)}>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+              <Input label="Mobile" value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} />
+              <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+              <div className="flex justify-end gap-3 pt-4">
+                <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+                <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">{editing ? 'Update' : 'Create'}</button>
+              </div>
+            </form>
+          </Modal>
+        )}
+      </div>
       )}
     </div>
   );
