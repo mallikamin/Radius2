@@ -593,7 +593,81 @@ export default function VectorMap() {
             vectorState.setPdfScale(progress.pdfScale);
             vectorState.setPdfImg(progress.pdfImg);
           });
-          
+
+          // COORDINATE SCALING FIX: Scale imported coordinates to match re-rendered PDF dimensions
+          // Old Vector used pdfScale cap of 4.0, Vector2 uses 3.0, causing coordinate misalignment
+          const originalMapSize = data.mapSize;
+          if (originalMapSize && (originalMapSize.w || originalMapSize.h)) {
+            const scaleX = result.mapW / (originalMapSize.w || result.mapW);
+            const scaleY = result.mapH / (originalMapSize.h || result.mapH);
+
+            // Only scale if there's a significant difference (>0.1%)
+            if (Math.abs(scaleX - 1) > 0.001 || Math.abs(scaleY - 1) > 0.001) {
+              console.log('Coordinate scaling required for JSON import:', {
+                originalMapSize,
+                newMapSize: { w: result.mapW, h: result.mapH },
+                scaleX,
+                scaleY
+              });
+
+              // Scale plot coordinates
+              if (data.plots && data.plots.length > 0) {
+                data.plots = data.plots.map(p => ({
+                  ...p,
+                  x: p.x * scaleX,
+                  y: p.y * scaleY,
+                  w: (p.w || 20) * scaleX,
+                  h: (p.h || 14) * scaleY
+                }));
+                console.log('Scaled', data.plots.length, 'plots');
+              }
+
+              // Scale plotOffsets (connector line offsets)
+              if (data.plotOffsets && Object.keys(data.plotOffsets).length > 0) {
+                const scaledOffsets = {};
+                Object.keys(data.plotOffsets).forEach(key => {
+                  const offset = data.plotOffsets[key];
+                  scaledOffsets[key] = {
+                    ox: (offset.ox || 0) * scaleX,
+                    oy: (offset.oy || 0) * scaleY
+                  };
+                });
+                data.plotOffsets = scaledOffsets;
+                console.log('Scaled', Object.keys(scaledOffsets).length, 'plotOffsets');
+              }
+
+              // Scale shapes (rectangles, lines, arrows, etc.)
+              if (data.shapes && data.shapes.length > 0) {
+                data.shapes = data.shapes.map(shape => ({
+                  ...shape,
+                  x: shape.x !== undefined ? shape.x * scaleX : shape.x,
+                  y: shape.y !== undefined ? shape.y * scaleY : shape.y,
+                  width: shape.width !== undefined ? shape.width * scaleX : shape.width,
+                  height: shape.height !== undefined ? shape.height * scaleY : shape.height,
+                  points: shape.points ? shape.points.map(pt => ({
+                    x: pt.x * scaleX,
+                    y: pt.y * scaleY
+                  })) : shape.points
+                }));
+                console.log('Scaled', data.shapes.length, 'shapes');
+              }
+
+              // Scale labels
+              if (data.labels && data.labels.length > 0) {
+                data.labels = data.labels.map(label => ({
+                  ...label,
+                  x: label.x !== undefined ? label.x * scaleX : label.x,
+                  y: label.y !== undefined ? label.y * scaleY : label.y
+                }));
+                console.log('Scaled', data.labels.length, 'labels');
+              }
+
+              // Update mapSize in data to reflect new dimensions
+              data.mapSize = { w: result.mapW, h: result.mapH };
+              console.log('Updated mapSize to match new PDF dimensions');
+            }
+          }
+
           // Extract plots from PDF if not already in JSON
           // Allow empty plots array for blank PDFs
           if ((!data.plots || data.plots.length === 0) && result.page) {
