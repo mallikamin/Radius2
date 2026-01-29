@@ -64,15 +64,17 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
   // Find annotation at coordinates (click on annotation box)
   const findAnnotationAt = useCallback((mx, my) => {
+    // Build annotation map with string keys for type-flexible matching
     const annoMap = {};
     vectorState.annos.forEach(a => {
       a.plotIds.forEach(pid => {
-        annoMap[pid] = a;
+        annoMap[String(pid)] = a;
       });
     });
 
     for (const p of vectorState.plots) {
-      const anno = annoMap[p.id];
+      // Use string conversion for type-flexible lookup
+      const anno = annoMap[String(p.id)];
       if (!anno) continue;
 
       const offset = vectorState.plotOffsets[p.id] || { ox: 0, oy: 0 };
@@ -151,17 +153,19 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
     // Build annotation map - PRESERVE ORDER FROM vectorState.annos
     // Order is critical and must match JSON source file order
+    // Use string keys for type-flexible matching (handles number vs string IDs)
     const annoMap = {};
     vectorState.annos.forEach(a => {
       a.plotIds.forEach(pid => {
-        annoMap[pid] = a;
+        annoMap[String(pid)] = a;
       });
     });
 
     // Draw plots
     vectorState.plots.forEach(p => {
       try {
-        const anno = annoMap[p.id];
+        // Use string conversion for type-flexible lookup
+        const anno = annoMap[String(p.id)];
         const isSel = vectorState.selected.has(p.id);
         const isHovered = hoveredPlotId === p.id;
 
@@ -430,7 +434,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     });
 
     ctx.restore();
-  }, [vectorState, scale, offX, offY, hoveredPlotId, displayMode]);
+  }, [vectorState, vectorState.annos, vectorState.plots, vectorState.plotOffsets, scale, offX, offY, hoveredPlotId, displayMode]);
 
   // Handle mouse move for hover
   const handleMouseMove = useCallback((e) => {
@@ -491,7 +495,10 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     // Brush painting
     if (brushPainting && tool === 'brush' && brushAnnotationId && plot) {
       const anno = vectorState.annos.find(a => a.id === brushAnnotationId);
-      if (anno && !anno.plotIds.includes(plot.id)) {
+      // Use type-flexible matching for plotIds check
+      const plotIdStr = String(plot.id);
+      const hasPlotId = anno && anno.plotIds.some(pid => String(pid) === plotIdStr);
+      if (anno && !hasPlotId) {
         // Add plot to annotation
         const updatedPlotIds = [...anno.plotIds, plot.id];
         const updatedPlotNums = [...(anno.plotNums || []), plot.n].filter((v, i, a) => a.indexOf(v) === i);
@@ -505,23 +512,24 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
     // Eraser (on mouse move while dragging)
     if (eraserActive && tool === 'eraser' && plot) {
-      // Find annotation containing this plot
-      const anno = vectorState.annos.find(a => a.plotIds.includes(plot.id));
+      // Find annotation containing this plot (type-flexible matching)
+      const plotIdStr = String(plot.id);
+      const anno = vectorState.annos.find(a => a.plotIds.some(pid => String(pid) === plotIdStr));
       if (anno) {
         const eraserMode = window.eraserMode || 'removePlot'; // 'removePlot' or 'removeAnnotation'
-        
+
         // Check if we already processed this plot in this drag session
         const processedKey = `eraser_${plot.id}_${anno.id}`;
         if (!window.eraserProcessed) {
           window.eraserProcessed = new Set();
         }
-        
+
         if (!window.eraserProcessed.has(processedKey)) {
           window.eraserProcessed.add(processedKey);
-          
+
           if (eraserMode === 'removePlot') {
-            // Remove plot from annotation
-            const updatedPlotIds = anno.plotIds.filter(id => id !== plot.id);
+            // Remove plot from annotation (type-flexible filter)
+            const updatedPlotIds = anno.plotIds.filter(id => String(id) !== plotIdStr);
             const updatedPlotNums = anno.plotNums.filter(n => n !== plot.n);
             vectorState.updateAnnotation(anno.id, {
               plotIds: updatedPlotIds,
@@ -675,14 +683,17 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       if (currentBrushAnnoId) {
         setBrushAnnotationId(currentBrushAnnoId);
         setBrushPainting(true);
-        
+
         // Add first plot if clicked on one
         const rect = canvasRef.current.getBoundingClientRect();
         const [mx, my] = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
         const plot = findPlotAt(mx, my, false);
         if (plot) {
           const anno = vectorState.annos.find(a => a.id === currentBrushAnnoId);
-          if (anno && !anno.plotIds.includes(plot.id)) {
+          // Use type-flexible matching for plotIds check
+          const plotIdStr = String(plot.id);
+          const hasPlotId = anno && anno.plotIds.some(pid => String(pid) === plotIdStr);
+          if (anno && !hasPlotId) {
             const updatedPlotIds = [...anno.plotIds, plot.id];
             const updatedPlotNums = [...(anno.plotNums || []), plot.n].filter((v, i, a) => a.indexOf(v) === i);
             vectorState.updateAnnotation(currentBrushAnnoId, {
@@ -697,18 +708,21 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     } else if (tool === 'eraser') {
       // Start eraser
       setEraserActive(true);
-      
+
       // Erase first plot if clicked on one
       const rect = canvasRef.current.getBoundingClientRect();
       const [mx, my] = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
       const plot = findPlotAt(mx, my, false);
       if (plot) {
-        const anno = vectorState.annos.find(a => a.plotIds.includes(plot.id));
+        // Use type-flexible matching for finding annotation
+        const plotIdStr = String(plot.id);
+        const anno = vectorState.annos.find(a => a.plotIds.some(pid => String(pid) === plotIdStr));
         if (anno) {
           const eraserMode = window.eraserMode || 'removePlot';
-          
+
           if (eraserMode === 'removePlot') {
-            const updatedPlotIds = anno.plotIds.filter(id => id !== plot.id);
+            // Type-flexible filter
+            const updatedPlotIds = anno.plotIds.filter(id => String(id) !== plotIdStr);
             const updatedPlotNums = anno.plotNums.filter(n => n !== plot.n);
             vectorState.updateAnnotation(anno.id, {
               plotIds: updatedPlotIds,

@@ -12,6 +12,17 @@ export default function LegendPanel({ vectorState }) {
     return 'PKR ' + parseFloat(amount).toLocaleString('en-PK', { maximumFractionDigits: 0 });
   };
 
+  // Helper function to find plot with fallback for type mismatches
+  const findPlotById = (plots, pid) => {
+    // Try exact match first
+    let plot = plots.find(x => x.id === pid);
+    // Fallback: try string comparison if exact match fails
+    if (!plot) {
+      plot = plots.find(x => String(x.id) === String(pid));
+    }
+    return plot;
+  };
+
   // Calculate legend items
   const legendItems = useMemo(() => {
     const items = [];
@@ -22,16 +33,16 @@ export default function LegendPanel({ vectorState }) {
     // Process annotations
     vectorState.annos.forEach(a => {
       const key = a.color + '|' + (a.note || a.cat);
-      
+
       if (!seen.has(key)) {
         seen.add(key);
-        
+
         let totalMarla = 0;
         let totalValue = 0;
         let plotsWithData = 0;
 
         a.plotIds.forEach(pid => {
-          const plot = vectorState.plots.find(x => x.id === pid);
+          const plot = findPlotById(vectorState.plots, pid);
           if (plot && plot.n) {
             let inv = vectorState.inventory[plot.n];
             if (!inv) {
@@ -76,7 +87,7 @@ export default function LegendPanel({ vectorState }) {
           let plotsWithData = 0;
 
           a.plotIds.forEach(pid => {
-            const plot = vectorState.plots.find(x => x.id === pid);
+            const plot = findPlotById(vectorState.plots, pid);
             if (plot && plot.n) {
               let inv = vectorState.inventory[plot.n];
               if (!inv) {

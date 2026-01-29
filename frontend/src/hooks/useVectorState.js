@@ -119,18 +119,53 @@ export function useVectorState() {
       });
     }
     setPlots(loadedPlots);
-    
+    console.log('loadProjectData: Plots loaded:', loadedPlots.length, 'First plot ID:', loadedPlots[0]?.id);
+
+    // Debug: Show what plot IDs exist for annotation matching
+    console.log('loadProjectData: Plot IDs available:', loadedPlots.slice(0, 5).map(p => p.id));
+
+    // Validate plot ID types for debugging type mismatches
+    if (loadedPlots.length > 0) {
+      const plotIdTypes = new Set(loadedPlots.map(p => typeof p.id));
+      console.log('loadProjectData: Plot ID types:', [...plotIdTypes]);
+      if (plotIdTypes.size > 1) {
+        console.warn('loadProjectData: ⚠ Mixed plot ID types detected! This may cause matching issues.');
+      }
+    }
+
     // Process annotations - PRESERVE EXACT STRUCTURE AND ORDER
     // CRITICAL: Annotations must be preserved EXACTLY as saved - this is how Vector works
     // Vector preserves annotations exactly as they are, including all properties and plotIds
     const plotIdSet = new Set(loadedPlots.map(p => p.id));
     const rawAnnos = data.annos || [];
-    
+
     console.log('loadProjectData: Processing annotations:', {
       count: rawAnnos.length,
       plotsCount: loadedPlots.length,
       sample: rawAnnos.slice(0, 1) // Show first annotation for debugging
     });
+
+    // Helper function for type-flexible plot ID matching
+    const plotIdMatches = (plotId, annoPlotId) => {
+      return plotId === annoPlotId || String(plotId) === String(annoPlotId);
+    };
+
+    // Debug: Verify annotation plotIds match available plot IDs (with type-flexible matching)
+    if (rawAnnos.length > 0 && rawAnnos[0]?.plotIds) {
+      const firstAnnoPlotIds = rawAnnos[0].plotIds;
+      // Try exact match first, then string conversion
+      const matchingIds = firstAnnoPlotIds.filter(id =>
+        plotIdSet.has(id) || [...plotIdSet].some(pid => String(pid) === String(id))
+      );
+      console.log('loadProjectData: First annotation plotIds:', firstAnnoPlotIds);
+      console.log('loadProjectData: Matching plot IDs:', matchingIds.length, '/', firstAnnoPlotIds.length);
+      if (matchingIds.length === 0 && firstAnnoPlotIds.length > 0) {
+        console.warn('loadProjectData: ⚠ No plotIds match! Annotations may not render correctly.');
+        console.warn('loadProjectData: Plot ID types:', typeof loadedPlots[0]?.id, '| Anno plotId types:', typeof firstAnnoPlotIds[0]);
+      } else if (matchingIds.length > 0 && matchingIds.length < firstAnnoPlotIds.length) {
+        console.warn('loadProjectData: ⚠ Some plotIds not matching:', firstAnnoPlotIds.length - matchingIds.length, 'missing');
+      }
+    }
     
     // PRESERVE ANNOTATIONS EXACTLY AS THEY ARE - don't filter or modify unnecessarily
     // Only update plotNums for display purposes, but keep original plotIds
@@ -147,11 +182,14 @@ export function useVectorState() {
       
       // Update plotNums for display (but don't lose original if it exists)
       if (!processedAnno.plotNums || processedAnno.plotNums.length === 0) {
-        // Generate plotNums from plotIds that exist
+        // Generate plotNums from plotIds that exist (with type-flexible matching)
         processedAnno.plotNums = processedAnno.plotIds
-          .filter(id => plotIdSet.has(id))
           .map(id => {
-            const plot = loadedPlots.find(p => p.id === id);
+            // Try exact match first, then string conversion
+            let plot = loadedPlots.find(p => p.id === id);
+            if (!plot) {
+              plot = loadedPlots.find(p => String(p.id) === String(id));
+            }
             return plot ? plot.n : null;
           })
           .filter(n => n !== null);
@@ -162,8 +200,10 @@ export function useVectorState() {
       if (!processedAnno.color) processedAnno.color = "#6366f1";
       if (processedAnno.fontSize === undefined) processedAnno.fontSize = 12;
       
-      // Log if plotIds don't match any plots (but still preserve them)
-      const validPlotIds = processedAnno.plotIds.filter(id => plotIdSet.has(id));
+      // Log if plotIds don't match any plots (with type-flexible matching)
+      const validPlotIds = processedAnno.plotIds.filter(id =>
+        plotIdSet.has(id) || [...plotIdSet].some(pid => String(pid) === String(id))
+      );
       if (processedAnno.plotIds.length > 0 && validPlotIds.length === 0) {
         console.warn(`loadProjectData: Annotation "${processedAnno.note || processedAnno.cat}" has plotIds that don't match any plots:`, processedAnno.plotIds);
         console.warn('loadProjectData: This annotation will be preserved but may not display correctly until plots are loaded');

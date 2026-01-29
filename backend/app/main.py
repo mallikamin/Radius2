@@ -3740,6 +3740,12 @@ def get_vector_project(
     plots = project.vector_metadata.get('plots', []) if project.vector_metadata else []
     plot_offsets = project.vector_metadata.get('plotOffsets', {}) if project.vector_metadata else {}
     plot_rotations = project.vector_metadata.get('plotRotations', {}) if project.vector_metadata else {}
+
+    # DEBUG: Log plot IDs being returned
+    print(f"DEBUG LOAD: Returning {len(plots)} plots")
+    if len(plots) > 0:
+        print(f"DEBUG LOAD: First 3 plot IDs: {[p.get('id') for p in plots[:3]]}")
+        print(f"DEBUG LOAD: First plot structure: {plots[0]}")
     
     # Convert annotations to frontend format
     # PRIORITY: Use vector_metadata if it has annotations, otherwise use separate table
@@ -3747,12 +3753,16 @@ def get_vector_project(
     
     # Check vector_metadata for annotations (this is where we save them)
     # FIXED: Check if 'annos' key exists, not just if it's truthy (empty list is falsy but valid)
+    print(f"DEBUG: vector_metadata keys: {list(project.vector_metadata.keys()) if project.vector_metadata else 'None'}")
     if project.vector_metadata and 'annos' in project.vector_metadata:
         metadata_annos = project.vector_metadata.get('annos')
         # Use annotations from vector_metadata if it's a list (even if empty, we'll use it)
         if isinstance(metadata_annos, list):
             annos = metadata_annos
             print(f"DEBUG: Using {len(annos)} annotations from vector_metadata")
+            if len(annos) > 0:
+                print(f"DEBUG: First annotation: {annos[0]}")
+                print(f"DEBUG: First annotation plotIds: {annos[0].get('plotIds', 'N/A')}")
         else:
             print(f"DEBUG: vector_metadata.annos exists but is not a list, type: {type(metadata_annos)}, value: {metadata_annos}")
     elif len(annotations) > 0:
@@ -3943,10 +3953,13 @@ def create_vector_project(
     parsed_metadata = json.loads(vector_metadata) if vector_metadata else None
     if parsed_metadata:
         # Debug: Log what's being saved
+        plots_in_save = parsed_metadata.get('plots', [])
         annos_in_save = parsed_metadata.get('annos', [])
-        print(f"DEBUG CREATE: Creating project with vector_metadata containing {len(annos_in_save) if isinstance(annos_in_save, list) else 'non-list'} annotations")
+        print(f"DEBUG CREATE: Creating project with {len(plots_in_save)} plots and {len(annos_in_save) if isinstance(annos_in_save, list) else 'non-list'} annotations")
+        if isinstance(plots_in_save, list) and len(plots_in_save) > 0:
+            print(f"DEBUG CREATE: First 3 plot IDs: {[p.get('id') for p in plots_in_save[:3]]}")
         if isinstance(annos_in_save, list) and len(annos_in_save) > 0:
-            print(f"DEBUG CREATE: First annotation sample: id={annos_in_save[0].get('id') if annos_in_save[0] else 'none'}, note={annos_in_save[0].get('note') if annos_in_save[0] else 'none'}")
+            print(f"DEBUG CREATE: First annotation plotIds (first 5): {annos_in_save[0].get('plotIds', [])[:5] if annos_in_save[0] else 'none'}")
     
     project = VectorProject(
         name=name,
@@ -4005,10 +4018,13 @@ def update_vector_project(
         parsed_metadata = json.loads(vector_metadata) if vector_metadata else None
         if parsed_metadata:
             # Debug: Log what's being saved
+            plots_in_save = parsed_metadata.get('plots', [])
             annos_in_save = parsed_metadata.get('annos', [])
-            print(f"DEBUG UPDATE: Updating project with vector_metadata containing {len(annos_in_save) if isinstance(annos_in_save, list) else 'non-list'} annotations")
+            print(f"DEBUG UPDATE: Updating project with {len(plots_in_save)} plots and {len(annos_in_save) if isinstance(annos_in_save, list) else 'non-list'} annotations")
+            if isinstance(plots_in_save, list) and len(plots_in_save) > 0:
+                print(f"DEBUG UPDATE: First 3 plot IDs: {[p.get('id') for p in plots_in_save[:3]]}")
             if isinstance(annos_in_save, list) and len(annos_in_save) > 0:
-                print(f"DEBUG UPDATE: First annotation sample: id={annos_in_save[0].get('id') if annos_in_save[0] else 'none'}, note={annos_in_save[0].get('note') if annos_in_save[0] else 'none'}")
+                print(f"DEBUG UPDATE: First annotation plotIds (first 5): {annos_in_save[0].get('plotIds', [])[:5] if annos_in_save[0] else 'none'}")
         project.vector_metadata = parsed_metadata
     if system_branches is not None:
         project.system_branches = json.loads(system_branches) if system_branches else None
