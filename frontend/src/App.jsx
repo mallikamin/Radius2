@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import VectorMap from './components/Vector/VectorMap';
 import OrphanTrackingPanel from './components/OrphanTrackingPanel';
+import InventoryMapViewer from './components/InventoryMapViewer';
 
 const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
@@ -518,6 +519,73 @@ function InventoryView() {
   const [rateMin, setRateMin] = useState('');
   const [rateMax, setRateMax] = useState('');
 
+  // Map view state
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem('inventoryViewMode') || 'table'); // table, split-h, split-v, map
+  const [vectorProject, setVectorProject] = useState(null);
+  const [loadingMap, setLoadingMap] = useState(false);
+  const [highlightedUnit, setHighlightedUnit] = useState(null);
+  const mapRef = useRef(null);
+  const tableRowRefs = useRef({});
+
+  // Save view mode preference
+  useEffect(() => {
+    localStorage.setItem('inventoryViewMode', viewMode);
+  }, [viewMode]);
+
+  // Load Vector project when ORBIT project changes
+  useEffect(() => {
+    const loadVectorProject = async () => {
+      if (!filter.project_id) {
+        setVectorProject(null);
+        return;
+      }
+
+      setLoadingMap(true);
+      try {
+        // First get the ORBIT project to check for linked vector project
+        const projectRes = await api.get(`/projects/${filter.project_id}`);
+        const orbitProject = projectRes.data;
+
+        // Try to find a linked vector project
+        const vectorRes = await api.get('/vector/projects');
+        const linkedVector = vectorRes.data?.find(vp => vp.linked_project_id === orbitProject.id);
+
+        if (linkedVector) {
+          // Load full vector project data
+          const fullVectorRes = await api.get(`/vector/projects/${linkedVector.id}`);
+          setVectorProject(fullVectorRes.data);
+        } else {
+          setVectorProject(null);
+        }
+      } catch (e) {
+        console.error('Error loading vector project:', e);
+        setVectorProject(null);
+      } finally {
+        setLoadingMap(false);
+      }
+    };
+
+    loadVectorProject();
+  }, [filter.project_id]);
+
+  // Handle row click - zoom to plot
+  const handleRowClick = (item) => {
+    setHighlightedUnit(item.unit_number);
+    if (mapRef.current && (viewMode === 'split-h' || viewMode === 'split-v' || viewMode === 'map')) {
+      mapRef.current.zoomToPlot(item.unit_number);
+    }
+  };
+
+  // Handle plot click from map - scroll to row
+  const handlePlotClick = (unitNumber) => {
+    setHighlightedUnit(unitNumber);
+    // Find and scroll to the row
+    const rowEl = tableRowRefs.current[unitNumber.toLowerCase()];
+    if (rowEl) {
+      rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
   // Get unique blocks from inventory for dropdown
   const uniqueBlocks = [...new Set(inventory.map(i => i.block).filter(Boolean))].sort();
 
@@ -578,25 +646,52 @@ function InventoryView() {
 
   const openSellModal = (item) => { setSelectedItem(item); setShowSellModal(true); };
 
+  // View mode icon components
+  const ViewModeIcons = {
+    table: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" /></svg>,
+    'split-h': <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" /></svg>,
+    'split-v': <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm0 10a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2z" /></svg>,
+    map: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div><h2 className="text-2xl font-semibold text-gray-900">Inventory</h2>
-          <p className="text-sm text-gray-500 mt-1">{inventory.length} units</p></div>
-        <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Unit</button>
+    <div className="space-y-4 h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-shrink-0">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">Inventory</h2>
+          <p className="text-sm text-gray-500 mt-1">{filteredInventory.length} of {inventory.length} units</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {/* View Mode Toggle */}
+          <div className="flex bg-gray-100 rounded-lg p-1 gap-1">
+            {['table', 'split-h', 'split-v', 'map'].map(mode => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`p-2 rounded-md transition-all ${viewMode === mode ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
+                title={mode === 'table' ? 'Table view' : mode === 'split-h' ? 'Split horizontal' : mode === 'split-v' ? 'Split vertical' : 'Map view'}
+              >
+                {ViewModeIcons[mode]}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">
+            Add Unit
+          </button>
+        </div>
       </div>
 
       {summary && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-3 gap-4 flex-shrink-0">
           <SummaryCard label="Total Projects" value={summary.total_projects} />
           <SummaryCard label="Available Units" value={summary.total_available} sub={formatCurrency(summary.available_value)} />
           <SummaryCard label="Sold Units" value={summary.total_sold} sub={formatCurrency(summary.sold_value)} />
         </div>
       )}
 
-      {/* Search & Filters Panel */}
       {/* Search Filters */}
-      <div className="bg-white rounded-2xl shadow-sm border p-4">
+      <div className="bg-white rounded-2xl shadow-sm border p-4 flex-shrink-0">
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end">
           {/* Unit # - Exact Match */}
           <div>
@@ -677,47 +772,94 @@ function InventoryView() {
         </div>
       </div>
 
-      {loading ? <Loader /> : inventory.length === 0 ? <Empty msg="No inventory" /> : filteredInventory.length === 0 ? (
-        <div className="bg-white rounded-2xl shadow-sm border p-12 text-center">
-          <div className="text-gray-400 mb-2">No plots match your search criteria</div>
-          <button onClick={clearAllFilters} className="text-sm text-blue-600 hover:text-blue-800">Clear all filters</button>
-        </div>
-      ) : (
-        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
-          <table className="w-full">
-            <thead><tr className="border-b border-gray-100">
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">ID</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Project</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Unit</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Block</th>
-              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Area</th>
-              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Rate/Marla</th>
-              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Total</th>
-              <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
-              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Action</th>
-            </tr></thead>
-            <tbody className="divide-y divide-gray-50">
-              {filteredInventory.map(i => (
-                <tr key={i.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 text-sm font-mono text-gray-500">{i.inventory_id}</td>
-                  <td className="px-6 py-4 text-sm">{i.project_name}</td>
-                  <td className="px-6 py-4 text-sm font-medium">{i.unit_number}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{i.block || '—'}</td>
-                  <td className="px-6 py-4 text-sm text-right">{i.area_marla} M</td>
-                  <td className="px-6 py-4 text-sm text-right">{formatCurrency(i.rate_per_marla)}</td>
-                  <td className="px-6 py-4 text-sm text-right font-medium">{formatCurrency(i.total_value)}</td>
-                  <td className="px-6 py-4 text-center">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${i.status === 'available' ? 'bg-green-50 text-green-700' : i.status === 'sold' ? 'bg-blue-50 text-blue-700' : 'bg-yellow-50 text-yellow-700'}`}>{i.status}</span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    {i.status === 'available' && <button onClick={() => openSellModal(i)} className="text-sm text-blue-600 hover:text-blue-800 font-medium">Sell</button>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Main Content - Split View Layout */}
+      <div className={`flex-1 min-h-0 ${viewMode === 'split-v' ? 'flex flex-col' : 'flex'} gap-4`}>
+        {/* Table Panel */}
+        {(viewMode === 'table' || viewMode === 'split-h' || viewMode === 'split-v') && (
+          <div className={`${viewMode === 'split-h' ? 'w-1/2' : viewMode === 'split-v' ? 'h-1/2' : 'w-full'} ${viewMode !== 'table' ? 'min-w-0 overflow-hidden' : ''}`}>
+            {loading ? <Loader /> : inventory.length === 0 ? <Empty msg="No inventory" /> : filteredInventory.length === 0 ? (
+              <div className="bg-white rounded-2xl shadow-sm border p-12 text-center h-full flex items-center justify-center">
+                <div>
+                  <div className="text-gray-400 mb-2">No plots match your search criteria</div>
+                  <button onClick={clearAllFilters} className="text-sm text-blue-600 hover:text-blue-800">Clear all filters</button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl shadow-sm border overflow-hidden h-full flex flex-col">
+                <div className="overflow-auto flex-1">
+                  <table className="w-full">
+                    <thead className="sticky top-0 bg-white z-10"><tr className="border-b border-gray-100">
+                      <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Unit</th>
+                      <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Block</th>
+                      <th className="text-right text-xs font-medium text-gray-500 uppercase px-4 py-3">Area</th>
+                      <th className="text-right text-xs font-medium text-gray-500 uppercase px-4 py-3">Rate</th>
+                      <th className="text-center text-xs font-medium text-gray-500 uppercase px-4 py-3">Status</th>
+                      {viewMode === 'table' && <th className="text-right text-xs font-medium text-gray-500 uppercase px-4 py-3">Action</th>}
+                    </tr></thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {filteredInventory.map(i => (
+                        <tr
+                          key={i.id}
+                          ref={el => tableRowRefs.current[i.unit_number?.toLowerCase()] = el}
+                          onClick={() => handleRowClick(i)}
+                          className={`cursor-pointer transition-colors ${highlightedUnit?.toLowerCase() === i.unit_number?.toLowerCase() ? 'bg-blue-50 ring-1 ring-blue-200' : 'hover:bg-gray-50'}`}
+                        >
+                          <td className="px-4 py-3 text-sm font-medium">{i.unit_number}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">{i.block || '—'}</td>
+                          <td className="px-4 py-3 text-sm text-right">{i.area_marla}M</td>
+                          <td className="px-4 py-3 text-sm text-right">{formatCurrency(i.rate_per_marla)}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.status === 'available' ? 'bg-green-50 text-green-700' : i.status === 'sold' ? 'bg-blue-50 text-blue-700' : 'bg-yellow-50 text-yellow-700'}`}>{i.status}</span>
+                          </td>
+                          {viewMode === 'table' && (
+                            <td className="px-4 py-3 text-right">
+                              {i.status === 'available' && <button onClick={(e) => { e.stopPropagation(); openSellModal(i); }} className="text-sm text-blue-600 hover:text-blue-800 font-medium">Sell</button>}
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Map Panel */}
+        {(viewMode === 'map' || viewMode === 'split-h' || viewMode === 'split-v') && (
+          <div className={`${viewMode === 'split-h' ? 'w-1/2' : viewMode === 'split-v' ? 'h-1/2' : 'w-full h-full'} min-w-0 min-h-0`}>
+            <div className="bg-white rounded-2xl shadow-sm border overflow-hidden h-full">
+              {loadingMap ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <div className="w-8 h-8 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin mx-auto mb-2"></div>
+                    <p className="text-sm text-slate-500">Loading map...</p>
+                  </div>
+                </div>
+              ) : !filter.project_id ? (
+                <div className="flex items-center justify-center h-full bg-slate-50">
+                  <div className="text-center">
+                    <svg className="w-12 h-12 text-slate-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                    </svg>
+                    <p className="text-sm text-slate-500 mb-1">Select a project to view map</p>
+                    <p className="text-xs text-slate-400">Use the Project filter above</p>
+                  </div>
+                </div>
+              ) : (
+                <InventoryMapViewer
+                  ref={mapRef}
+                  vectorProject={vectorProject}
+                  highlightedUnitNumber={highlightedUnit}
+                  onPlotClick={handlePlotClick}
+                  inventoryData={filteredInventory}
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       <BulkImport entity="inventory" onImport={handleImport} importFile={importFile} setImportFile={setImportFile} importResult={importResult} />
 
