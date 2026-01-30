@@ -336,6 +336,14 @@ function ProjectsView() {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
   const [form, setForm] = useState({ name: '', location: '', description: '' });
+  const [searchTerm, setSearchTerm] = useState('');
+
+  // Filter projects by search term
+  const filteredProjects = projects.filter(p =>
+    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.project_id?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   useEffect(() => { loadProjects(); }, []);
   const loadProjects = async () => {
@@ -369,9 +377,35 @@ function ProjectsView() {
         <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Project</button>
       </div>
 
-      {loading ? <Loader /> : projects.length === 0 ? <Empty msg="No projects yet" /> : (
+      {/* Search Bar */}
+      <div className="relative">
+        <input
+          type="text"
+          placeholder="Search projects by name, location, or ID..."
+          value={searchTerm}
+          onChange={e => setSearchTerm(e.target.value)}
+          className="w-full border border-gray-200 rounded-xl px-4 py-3 pl-10 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+        />
+        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        {searchTerm && (
+          <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {loading ? <Loader /> : projects.length === 0 ? <Empty msg="No projects yet" /> : filteredProjects.length === 0 ? (
+        <div className="bg-white rounded-2xl shadow-sm border p-12 text-center">
+          <div className="text-gray-400 mb-2">No projects match "{searchTerm}"</div>
+          <button onClick={() => setSearchTerm('')} className="text-sm text-blue-600 hover:text-blue-800">Clear search</button>
+        </div>
+      ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map(p => (
+          {filteredProjects.map(p => (
             <div 
               key={p.id} 
               onClick={() => handleProjectClick(p.id)}
@@ -476,6 +510,44 @@ function InventoryView() {
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
 
+  // Search filters - exact match fields
+  const [unitNumber, setUnitNumber] = useState('');
+  const [searchBlock, setSearchBlock] = useState('');
+  const [areaMin, setAreaMin] = useState('');
+  const [areaMax, setAreaMax] = useState('');
+  const [rateMin, setRateMin] = useState('');
+  const [rateMax, setRateMax] = useState('');
+
+  // Get unique blocks from inventory for dropdown
+  const uniqueBlocks = [...new Set(inventory.map(i => i.block).filter(Boolean))].sort();
+
+  // Filter inventory - exact match for unit number
+  const filteredInventory = inventory.filter(item => {
+    // Unit number - EXACT match (case-insensitive)
+    if (unitNumber && item.unit_number?.toLowerCase() !== unitNumber.toLowerCase()) return false;
+    // Block filter - exact match
+    if (searchBlock && item.block !== searchBlock) return false;
+    // Area range filter
+    if (areaMin && parseFloat(item.area_marla) < parseFloat(areaMin)) return false;
+    if (areaMax && parseFloat(item.area_marla) > parseFloat(areaMax)) return false;
+    // Rate range filter
+    if (rateMin && parseFloat(item.rate_per_marla) < parseFloat(rateMin)) return false;
+    if (rateMax && parseFloat(item.rate_per_marla) > parseFloat(rateMax)) return false;
+    return true;
+  });
+
+  const clearAllFilters = () => {
+    setUnitNumber('');
+    setSearchBlock('');
+    setAreaMin('');
+    setAreaMax('');
+    setRateMin('');
+    setRateMax('');
+    setFilter({ project_id: '', status: '' });
+  };
+
+  const hasActiveFilters = unitNumber || searchBlock || areaMin || areaMax || rateMin || rateMax || filter.project_id || filter.status;
+
   useEffect(() => { loadData(); }, [filter]);
   const loadData = async () => {
     try {
@@ -522,20 +594,95 @@ function InventoryView() {
         </div>
       )}
 
-      <div className="flex gap-4">
-        <select value={filter.project_id} onChange={e => setFilter({...filter, project_id: e.target.value})} className="border rounded-lg px-3 py-2 text-sm">
-          <option value="">All Projects</option>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        <select value={filter.status} onChange={e => setFilter({...filter, status: e.target.value})} className="border rounded-lg px-3 py-2 text-sm">
-          <option value="">All Status</option>
-          <option value="available">Available</option>
-          <option value="sold">Sold</option>
-          <option value="reserved">Reserved</option>
-        </select>
+      {/* Search & Filters Panel */}
+      {/* Search Filters */}
+      <div className="bg-white rounded-2xl shadow-sm border p-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end">
+          {/* Unit # - Exact Match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Unit #</label>
+            <input
+              type="text"
+              placeholder="Exact unit#"
+              value={unitNumber}
+              onChange={e => setUnitNumber(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          {/* Project */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Project</label>
+            <select value={filter.project_id} onChange={e => setFilter({...filter, project_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Projects</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          {/* Block */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Block</label>
+            <select value={searchBlock} onChange={e => setSearchBlock(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Blocks</option>
+              {uniqueBlocks.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+          {/* Status */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <select value={filter.status} onChange={e => setFilter({...filter, status: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Status</option>
+              <option value="available">Available</option>
+              <option value="sold">Sold</option>
+              <option value="reserved">Reserved</option>
+            </select>
+          </div>
+          {/* Area Range */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Area (Marla)</label>
+            <div className="flex items-center gap-1">
+              <input type="number" placeholder="Min" value={areaMin} onChange={e => setAreaMin(e.target.value)} className="w-full border rounded-lg px-2 py-2 text-sm" step="0.5" min="0" />
+              <span className="text-gray-400 text-xs">to</span>
+              <input type="number" placeholder="Max" value={areaMax} onChange={e => setAreaMax(e.target.value)} className="w-full border rounded-lg px-2 py-2 text-sm" step="0.5" min="0" />
+            </div>
+          </div>
+          {/* Rate Range */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Rate/Marla</label>
+            <div className="flex items-center gap-1">
+              <input type="number" placeholder="Min" value={rateMin} onChange={e => setRateMin(e.target.value)} className="w-full border rounded-lg px-2 py-2 text-sm" step="10000" min="0" />
+              <span className="text-gray-400 text-xs">to</span>
+              <input type="number" placeholder="Max" value={rateMax} onChange={e => setRateMax(e.target.value)} className="w-full border rounded-lg px-2 py-2 text-sm" step="10000" min="0" />
+            </div>
+          </div>
+          {/* Clear Button */}
+          <div className="flex items-center gap-2">
+            {hasActiveFilters && (
+              <button onClick={clearAllFilters} className="px-3 py-2 text-sm text-red-600 hover:text-red-800 font-medium whitespace-nowrap">
+                Clear All
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Quick Presets & Results */}
+        <div className="flex items-center justify-between mt-3 pt-3 border-t">
+          <div className="flex gap-2">
+            <button onClick={() => { setAreaMin('5'); setAreaMax('7'); setFilter({...filter, status: 'available'}); }} className="px-3 py-1 text-xs bg-blue-50 text-blue-700 rounded-full hover:bg-blue-100">5-7 Marla Available</button>
+            <button onClick={() => { setAreaMin('10'); setAreaMax(''); setFilter({...filter, status: 'available'}); }} className="px-3 py-1 text-xs bg-blue-50 text-blue-700 rounded-full hover:bg-blue-100">10+ Marla Available</button>
+          </div>
+          {hasActiveFilters && (
+            <div className="text-sm text-gray-600">
+              <span className="font-medium">{filteredInventory.length}</span> of {inventory.length} units
+            </div>
+          )}
+        </div>
       </div>
 
-      {loading ? <Loader /> : inventory.length === 0 ? <Empty msg="No inventory" /> : (
+      {loading ? <Loader /> : inventory.length === 0 ? <Empty msg="No inventory" /> : filteredInventory.length === 0 ? (
+        <div className="bg-white rounded-2xl shadow-sm border p-12 text-center">
+          <div className="text-gray-400 mb-2">No plots match your search criteria</div>
+          <button onClick={clearAllFilters} className="text-sm text-blue-600 hover:text-blue-800">Clear all filters</button>
+        </div>
+      ) : (
         <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
           <table className="w-full">
             <thead><tr className="border-b border-gray-100">
@@ -550,7 +697,7 @@ function InventoryView() {
               <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Action</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
-              {inventory.map(i => (
+              {filteredInventory.map(i => (
                 <tr key={i.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{i.inventory_id}</td>
                   <td className="px-6 py-4 text-sm">{i.project_name}</td>
@@ -731,6 +878,35 @@ function TransactionsView() {
   const [customerDetails, setCustomerDetails] = useState(null);
   const [brokerDetails, setBrokerDetails] = useState(null);
 
+  // Search filters - separate fields for precision
+  const [customerName, setCustomerName] = useState('');
+  const [unitNumber, setUnitNumber] = useState('');
+  const [txnId, setTxnId] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+
+  // Filter transactions - exact match for unit# and txn ID, partial for customer
+  const filteredTransactions = transactions.filter(t => {
+    // Customer name - partial match (for discovery)
+    if (customerName && !t.customer_name?.toLowerCase().includes(customerName.toLowerCase())) return false;
+    // Unit number - EXACT match
+    if (unitNumber && t.unit_number?.toLowerCase() !== unitNumber.toLowerCase()) return false;
+    // Transaction ID - EXACT match (or starts with for partial ID entry)
+    if (txnId && !t.transaction_id?.toLowerCase().startsWith(txnId.toLowerCase())) return false;
+    // Status filter
+    if (statusFilter && t.status !== statusFilter) return false;
+    return true;
+  });
+
+  const clearFilters = () => {
+    setCustomerName('');
+    setUnitNumber('');
+    setTxnId('');
+    setStatusFilter('');
+    setFilter({ project_id: '' });
+  };
+
+  const hasActiveFilters = customerName || unitNumber || txnId || statusFilter || filter.project_id;
+
   const loadCustomerDetails = async (customerId) => {
     try {
       const res = await api.get(`/customers/${customerId}/details`);
@@ -800,14 +976,82 @@ function TransactionsView() {
         </div>
       )}
 
-      <div className="flex gap-4">
-        <select value={filter.project_id} onChange={e => setFilter({...filter, project_id: e.target.value})} className="border rounded-lg px-3 py-2 text-sm">
-          <option value="">All Projects</option>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+      {/* Search Filters */}
+      <div className="bg-white rounded-2xl shadow-sm border p-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+          {/* Customer Name - partial match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
+            <input
+              type="text"
+              placeholder="Search name..."
+              value={customerName}
+              onChange={e => setCustomerName(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          {/* Unit # - exact match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Unit #</label>
+            <input
+              type="text"
+              placeholder="Exact unit#"
+              value={unitNumber}
+              onChange={e => setUnitNumber(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          {/* Transaction ID - exact/prefix match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Transaction ID</label>
+            <input
+              type="text"
+              placeholder="TX-001..."
+              value={txnId}
+              onChange={e => setTxnId(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          {/* Project */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Project</label>
+            <select value={filter.project_id} onChange={e => setFilter({...filter, project_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Projects</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          {/* Status */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Status</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          {/* Clear */}
+          <div className="flex items-center">
+            {hasActiveFilters && (
+              <button onClick={clearFilters} className="px-3 py-2 text-sm text-red-600 hover:text-red-800 font-medium">
+                Clear All
+              </button>
+            )}
+          </div>
+        </div>
+        {hasActiveFilters && (
+          <div className="mt-3 pt-3 border-t text-sm text-gray-600">
+            <span className="font-medium">{filteredTransactions.length}</span> of {transactions.length} transactions
+          </div>
+        )}
       </div>
 
-      {loading ? <Loader /> : transactions.length === 0 ? <Empty msg="No transactions yet" /> : (
+      {loading ? <Loader /> : transactions.length === 0 ? <Empty msg="No transactions yet" /> : filteredTransactions.length === 0 ? (
+        <div className="bg-white rounded-2xl shadow-sm border p-12 text-center">
+          <div className="text-gray-400 mb-2">No transactions match your search</div>
+          <button onClick={clearFilters} className="text-sm text-blue-600 hover:text-blue-800">Clear filters</button>
+        </div>
+      ) : (
         <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
           <table className="w-full">
             <thead><tr className="border-b border-gray-100">
@@ -821,13 +1065,13 @@ function TransactionsView() {
               <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Action</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
-              {transactions.map(t => (
+              {filteredTransactions.map(t => (
                 <tr key={t.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => viewDetails(t)}>
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{t.transaction_id}</td>
                   <td className="px-6 py-4">
                     <div className="text-sm font-medium">
                       {t.customer_id ? (
-                        <button onClick={() => loadCustomerDetails(t.customer_id)} className="text-blue-600 hover:text-blue-800 hover:underline">
+                        <button onClick={(e) => { e.stopPropagation(); loadCustomerDetails(t.customer_id); }} className="text-blue-600 hover:text-blue-800 hover:underline">
                           {t.customer_name}
                         </button>
                       ) : (
@@ -1388,6 +1632,41 @@ function ReceiptsView() {
     notes: '', created_by_rep_id: '', allocations: []
   });
 
+  // Search & Filter state for receipts list - separate fields for precision
+  const [customerFilter, setCustomerFilter] = useState('');
+  const [unitFilter, setUnitFilter] = useState('');
+  const [receiptIdFilter, setReceiptIdFilter] = useState('');
+  const [methodFilter, setMethodFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  // Filter receipts - exact match for unit#, partial for customer
+  const filteredReceipts = receipts.filter(r => {
+    // Customer name - partial match
+    if (customerFilter && !r.customer_name?.toLowerCase().includes(customerFilter.toLowerCase())) return false;
+    // Unit number - EXACT match
+    if (unitFilter && r.unit_number?.toLowerCase() !== unitFilter.toLowerCase()) return false;
+    // Receipt ID - prefix match
+    if (receiptIdFilter && !r.receipt_id?.toLowerCase().startsWith(receiptIdFilter.toLowerCase())) return false;
+    // Payment method filter
+    if (methodFilter && r.payment_method !== methodFilter) return false;
+    // Date range filter
+    if (dateFrom && r.payment_date < dateFrom) return false;
+    if (dateTo && r.payment_date > dateTo) return false;
+    return true;
+  });
+
+  const clearFilters = () => {
+    setCustomerFilter('');
+    setUnitFilter('');
+    setReceiptIdFilter('');
+    setMethodFilter('');
+    setDateFrom('');
+    setDateTo('');
+  };
+
+  const hasActiveFilters = customerFilter || unitFilter || receiptIdFilter || methodFilter || dateFrom || dateTo;
+
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
     try {
@@ -1481,7 +1760,90 @@ function ReceiptsView() {
         </>
       )}
 
-      {loading ? <Loader /> : receipts.length === 0 ? <Empty msg="No receipts recorded" /> : (
+      {/* Search Filters */}
+      <div className="bg-white rounded-2xl shadow-sm border p-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end">
+          {/* Customer - partial match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
+            <input
+              type="text"
+              placeholder="Search name..."
+              value={customerFilter}
+              onChange={e => setCustomerFilter(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          {/* Unit # - exact match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Unit #</label>
+            <input
+              type="text"
+              placeholder="Exact unit#"
+              value={unitFilter}
+              onChange={e => setUnitFilter(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          {/* Receipt ID - prefix match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Receipt ID</label>
+            <input
+              type="text"
+              placeholder="RCP-001..."
+              value={receiptIdFilter}
+              onChange={e => setReceiptIdFilter(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          {/* Method */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Method</label>
+            <select value={methodFilter} onChange={e => setMethodFilter(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Methods</option>
+              <option value="cash">Cash</option>
+              <option value="cheque">Cheque</option>
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="online">Online</option>
+            </select>
+          </div>
+          {/* From Date */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">From</label>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+          </div>
+          {/* To Date */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">To</label>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+          </div>
+          {/* Clear */}
+          <div className="flex items-center">
+            {hasActiveFilters && (
+              <button onClick={clearFilters} className="px-3 py-2 text-sm text-red-600 hover:text-red-800 font-medium">
+                Clear All
+              </button>
+            )}
+          </div>
+        </div>
+        {hasActiveFilters && (
+          <div className="mt-3 pt-3 border-t flex items-center justify-between text-sm">
+            <div className="text-gray-600">
+              <span className="font-medium">{filteredReceipts.length}</span> receipts found
+            </div>
+            <div className="text-gray-600">
+              Total: <span className="font-semibold text-green-600">{formatCurrency(filteredReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0))}</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {loading ? <Loader /> : receipts.length === 0 ? <Empty msg="No receipts recorded" /> : filteredReceipts.length === 0 ? (
+        <div className="bg-white rounded-2xl shadow-sm border p-12 text-center">
+          <div className="text-gray-400 mb-2">No receipts match your search</div>
+          <button onClick={clearFilters} className="text-sm text-blue-600 hover:text-blue-800">Clear filters</button>
+        </div>
+      ) : (
         <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
           <table className="w-full">
             <thead><tr className="border-b border-gray-100">
@@ -1493,7 +1855,7 @@ function ReceiptsView() {
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Date</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
-              {receipts.map(r => (
+              {filteredReceipts.map(r => (
                 <tr key={r.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedReceipt(r); setShowDetailModal(true); }}>
                   <td className="px-6 py-4">
                     <div className="text-sm font-mono text-gray-900">{r.receipt_id}</div>
@@ -2190,6 +2552,35 @@ function PaymentsView() {
     approved_by_rep_id: '', status: 'completed', allocations: []
   });
 
+  // Search state
+  // Search filters - separate fields for precision
+  const [paymentIdFilter, setPaymentIdFilter] = useState('');
+  const [referenceFilter, setReferenceFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  // Filter payments - prefix match for IDs
+  const filteredPayments = payments.filter(p => {
+    // Payment ID - prefix match
+    if (paymentIdFilter && !p.payment_id?.toLowerCase().startsWith(paymentIdFilter.toLowerCase())) return false;
+    // Reference number - prefix match
+    if (referenceFilter && !p.reference_number?.toLowerCase().startsWith(referenceFilter.toLowerCase())) return false;
+    // Date range filter
+    if (dateFrom && p.payment_date < dateFrom) return false;
+    if (dateTo && p.payment_date > dateTo) return false;
+    return true;
+  });
+
+  const clearAllFilters = () => {
+    setPaymentIdFilter('');
+    setReferenceFilter('');
+    setDateFrom('');
+    setDateTo('');
+    setFilter({ payment_type: '', status: '', broker_id: '', rep_id: '', creditor_id: '' });
+  };
+
+  const hasActiveFilters = paymentIdFilter || referenceFilter || dateFrom || dateTo || filter.payment_type || filter.status || filter.broker_id || filter.rep_id || filter.creditor_id;
+
   useEffect(() => { loadData(); }, [filter]);
   const loadData = async () => {
     try {
@@ -2309,9 +2700,51 @@ function PaymentsView() {
         </>
       )}
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl border p-4">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      {/* Search & Filters */}
+      <div className="bg-white rounded-xl border p-4 space-y-4">
+        {/* Search Row */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+          {/* Payment ID - prefix match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Payment ID</label>
+            <input
+              type="text"
+              placeholder="PAY-001..."
+              value={paymentIdFilter}
+              onChange={e => setPaymentIdFilter(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          {/* Reference - prefix match */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Reference #</label>
+            <input
+              type="text"
+              placeholder="Ref number..."
+              value={referenceFilter}
+              onChange={e => setReferenceFilter(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">From Date</label>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">To Date</label>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          {hasActiveFilters && (
+            <button onClick={clearAllFilters} className="px-3 py-2 text-sm text-red-600 hover:text-red-800 font-medium">
+              Clear All
+            </button>
+          )}
+        </div>
+
+        {/* Filter Row */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 pt-3 border-t">
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Type</label>
             <select value={filter.payment_type} onChange={e => setFilter({...filter, payment_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
               <option value="">All Types</option>
@@ -2348,9 +2781,26 @@ function PaymentsView() {
             </select>
           </div>
         </div>
+
+        {/* Results Summary */}
+        {hasActiveFilters && (
+          <div className="pt-3 border-t flex items-center justify-between text-sm">
+            <div className="text-gray-600">
+              <span className="font-medium">{filteredPayments.length}</span> payments found
+            </div>
+            <div className="text-gray-600">
+              Total: <span className="font-semibold text-red-600">{formatCurrency(filteredPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0))}</span>
+            </div>
+          </div>
+        )}
       </div>
 
-      {loading ? <Loader /> : payments.length === 0 ? <Empty msg="No payments recorded" /> : (
+      {loading ? <Loader /> : payments.length === 0 ? <Empty msg="No payments recorded" /> : filteredPayments.length === 0 ? (
+        <div className="bg-white rounded-2xl shadow-sm border p-12 text-center">
+          <div className="text-gray-400 mb-2">No payments match your search</div>
+          <button onClick={clearAllFilters} className="text-sm text-blue-600 hover:text-blue-800">Clear all filters</button>
+        </div>
+      ) : (
         <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
           <table className="w-full">
             <thead><tr className="border-b border-gray-100">
@@ -2363,7 +2813,7 @@ function PaymentsView() {
               <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
-              {payments.map(p => (
+              {filteredPayments.map(p => (
                 <tr key={p.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedPayment(p); setShowDetailModal(true); }}>
                   <td className="px-6 py-4">
                     <div className="text-sm font-mono text-gray-900">{p.payment_id}</div>
