@@ -1,18 +1,20 @@
-version: '3.8'
+# Sitara CRM / Orbit - LOCAL DEVELOPMENT
+# Default: docker compose up (uses these local dev ports)
+# Production: docker compose -f docker-compose.yml -f docker-compose.prod.yml up
 
 services:
   db:
     image: postgres:15-alpine
-    container_name: sitara_v3_db
+    container_name: orbit_dev_db
     environment:
       POSTGRES_USER: sitara
       POSTGRES_PASSWORD: sitara123
       POSTGRES_DB: sitara_crm
     volumes:
-      - sitara_v3_postgres:/var/lib/postgresql/data
+      - orbit_dev_postgres:/var/lib/postgresql/data
       - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-      - "5440:5432"
+      - "5440:5432"    # LOCAL DEV PORT
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sitara -d sitara_crm"]
       interval: 5s
@@ -21,27 +23,28 @@ services:
 
   backend:
     build: ./backend
-    container_name: sitara_v3_backend
+    container_name: orbit_dev_api
     environment:
       DATABASE_URL: postgresql://sitara:sitara123@db:5432/sitara_crm
-      SECRET_KEY: sitara-secret-key-2024-change-in-prod
+      SECRET_KEY: dev-secret-key-for-local-testing
     ports:
-      - "8010:8000"
+      - "8010:8000"    # LOCAL DEV PORT
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
+      - ./media:/app/media
 
   frontend:
     build: ./frontend
-    container_name: sitara_v3_frontend
+    container_name: orbit_dev_web
     ports:
-      - "5180:5173"
+      - "5180:5173"    # LOCAL DEV PORT
     volumes:
       - ./frontend/src:/app/src
     depends_on:
       - backend
 
 volumes:
-  sitara_v3_postgres:
+  orbit_dev_postgres:

@@ -1,0 +1,50 @@
+# Sitara CRM / Orbit - PRODUCTION OVERRIDES
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Or use: .\START_PROD.ps1
+
+services:
+  db:
+    container_name: sitara_crm_db
+    environment:
+      POSTGRES_PASSWORD: sitara_secure_2024
+    ports:
+      - "5435:5432"    # PRODUCTION PORT
+    volumes:
+      - sitara_prod_postgres:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    restart: unless-stopped
+
+  backend:
+    container_name: sitara_crm_api
+    environment:
+      DATABASE_URL: postgresql://sitara:sitara_secure_2024@db:5432/sitara_crm
+      SECRET_KEY: sitara-production-key-change-this
+    ports:
+      - "8001:8000"    # PRODUCTION PORT
+    volumes:
+      - ./media:/app/media
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    image: nginx:alpine
+    container_name: sitara_crm_web
+    ports:
+      - "8081:80"      # PRODUCTION PORT
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html
+      - ./nginx:/etc/nginx/conf.d
+    build: !reset null
+    restart: unless-stopped
+
+volumes:
+  sitara_prod_postgres:
+
+networks:
+  default:
+    name: sitara_crm_network
