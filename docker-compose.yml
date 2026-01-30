@@ -11,8 +11,7 @@ services:
       POSTGRES_PASSWORD: sitara123
       POSTGRES_DB: sitara_crm
     volumes:
-      - orbit_dev_postgres:/var/lib/postgresql/data
-      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - radius2_sitara_v3_postgres:/var/lib/postgresql/data
     ports:
       - "5440:5432"    # LOCAL DEV PORT
     healthcheck:
@@ -35,6 +34,7 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./media:/app/media
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   frontend:
     build: ./frontend
@@ -47,4 +47,5 @@ services:
       - backend
 
 volumes:
-  orbit_dev_postgres:
+  radius2_sitara_v3_postgres:
+    external: true

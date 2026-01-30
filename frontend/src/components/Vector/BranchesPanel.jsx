@@ -185,16 +185,26 @@ export default function BranchesPanel({ vectorState }) {
                 <div>
                   <div className="font-semibold text-red-800 text-sm">Status Map</div>
                   <div className="text-red-700 text-xs mt-1">
-                    SOLD vs AVAILABLE
+                    Plot Status Overview
                   </div>
                 </div>
-                <div className="text-right">
+                <div className="text-right space-y-0.5">
                   <div className="text-xs">
                     <span className="text-red-600 font-semibold">{lastSyncResult.soldCount || 0}</span> sold
                   </div>
                   <div className="text-xs">
                     <span className="text-green-600 font-semibold">{lastSyncResult.availableCount || 0}</span> available
                   </div>
+                  {(lastSyncResult.buybackPendingCount > 0) && (
+                    <div className="text-xs">
+                      <span className="text-amber-600 font-semibold">{lastSyncResult.buybackPendingCount}</span> buyback pending
+                    </div>
+                  )}
+                  {(lastSyncResult.resoldCount > 0) && (
+                    <div className="text-xs">
+                      <span className="text-purple-600 font-semibold">{lastSyncResult.resoldCount}</span> resold
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="text-[10px] text-gray-500 mt-2">Click to load this map</div>

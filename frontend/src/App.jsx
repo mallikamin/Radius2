@@ -192,8 +192,8 @@ export default function App() {
     
     // Role-based access rules
     const roleAccess = {
-      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector', 'settings'],
-      manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'media', 'vector'],
+      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'buybacks', 'costing', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector', 'settings'],
+      manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'buybacks', 'costing', 'reports', 'interactions', 'customers', 'brokers', 'media', 'vector'],
       user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'media', 'vector'],
       viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'media', 'vector']
     };
@@ -213,6 +213,8 @@ export default function App() {
   const financialTabs = [
     { id: 'receipts', label: 'Receipts' },
     { id: 'payments', label: 'Payments' },
+    { id: 'buybacks', label: 'Buybacks' },
+    { id: 'costing', label: 'Costing' },
     { id: 'reports', label: 'Reports' }
   ].filter(tab => canAccess(tab.id));
   
@@ -314,6 +316,8 @@ export default function App() {
         {activeTab === 'transactions' && <TransactionsView />}
         {activeTab === 'receipts' && <ReceiptsView />}
         {activeTab === 'payments' && <PaymentsView />}
+        {activeTab === 'buybacks' && <BuybacksView />}
+        {activeTab === 'costing' && <CostingView />}
         {activeTab === 'reports' && <ReportsView />}
         {activeTab === 'interactions' && <InteractionsView />}
         {activeTab === 'customers' && <CustomersView />}
@@ -506,6 +510,7 @@ function InventoryView() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showSellModal, setShowSellModal] = useState(false);
+  const [showBuybackModal, setShowBuybackModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
   const [form, setForm] = useState({ project_id: '', unit_number: '', unit_type: 'plot', block: '', area_marla: '', rate_per_marla: '', factor_details: '', notes: '' });
   const [importFile, setImportFile] = useState(null);
@@ -645,6 +650,7 @@ function InventoryView() {
   };
 
   const openSellModal = (item) => { setSelectedItem(item); setShowSellModal(true); };
+  const openBuybackModal = (item) => { setSelectedItem(item); setShowBuybackModal(true); };
 
   // View mode icon components
   const ViewModeIcons = {
@@ -727,6 +733,7 @@ function InventoryView() {
               <option value="">All Status</option>
               <option value="available">Available</option>
               <option value="sold">Sold</option>
+              <option value="buyback_pending">Buyback Pending</option>
               <option value="reserved">Reserved</option>
             </select>
           </div>
@@ -789,6 +796,7 @@ function InventoryView() {
                 <div className="overflow-auto flex-1">
                   <table className="w-full">
                     <thead className="sticky top-0 bg-white z-10"><tr className="border-b border-gray-100">
+                      {!filter.project_id && <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Project</th>}
                       <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Unit</th>
                       <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Block</th>
                       <th className="text-right text-xs font-medium text-gray-500 uppercase px-4 py-3">Area</th>
@@ -804,16 +812,18 @@ function InventoryView() {
                           onClick={() => handleRowClick(i)}
                           className={`cursor-pointer transition-colors ${highlightedUnit?.toLowerCase() === i.unit_number?.toLowerCase() ? 'bg-blue-50 ring-1 ring-blue-200' : 'hover:bg-gray-50'}`}
                         >
+                          {!filter.project_id && <td className="px-4 py-3 text-sm text-gray-600">{i.project_name || '—'}</td>}
                           <td className="px-4 py-3 text-sm font-medium">{i.unit_number}</td>
                           <td className="px-4 py-3 text-sm text-gray-500">{i.block || '—'}</td>
                           <td className="px-4 py-3 text-sm text-right">{i.area_marla}M</td>
                           <td className="px-4 py-3 text-sm text-right">{formatCurrency(i.rate_per_marla)}</td>
                           <td className="px-4 py-3 text-center">
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.status === 'available' ? 'bg-green-50 text-green-700' : i.status === 'sold' ? 'bg-blue-50 text-blue-700' : 'bg-yellow-50 text-yellow-700'}`}>{i.status}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.status === 'available' ? 'bg-green-50 text-green-700' : i.status === 'sold' ? 'bg-blue-50 text-blue-700' : i.status === 'buyback_pending' ? 'bg-amber-50 text-amber-700' : 'bg-yellow-50 text-yellow-700'}`}>{i.status}</span>
                           </td>
                           {viewMode === 'table' && (
                             <td className="px-4 py-3 text-right">
                               {i.status === 'available' && <button onClick={(e) => { e.stopPropagation(); openSellModal(i); }} className="text-sm text-blue-600 hover:text-blue-800 font-medium">Sell</button>}
+                              {i.status === 'sold' && <button onClick={(e) => { e.stopPropagation(); openBuybackModal(i); }} className="text-sm text-orange-600 hover:text-orange-800 font-medium">Buyback</button>}
                             </td>
                           )}
                         </tr>
@@ -896,7 +906,198 @@ function InventoryView() {
       )}
 
       {showSellModal && selectedItem && <SellModal item={selectedItem} onClose={() => setShowSellModal(false)} onSuccess={() => { setShowSellModal(false); loadData(); }} />}
+      {showBuybackModal && selectedItem && <InitiateBuybackModal item={selectedItem} onClose={() => setShowBuybackModal(false)} onSuccess={() => { setShowBuybackModal(false); loadData(); }} />}
     </div>
+  );
+}
+
+// ============================================
+// INITIATE BUYBACK MODAL
+// ============================================
+function InitiateBuybackModal({ item, transaction: txnProp, onClose, onSuccess }) {
+  const [loading, setLoading] = useState(!txnProp);
+  const [transaction, setTransaction] = useState(txnProp || null);
+  const [inventoryItem, setInventoryItem] = useState(item || null);
+  const [form, setForm] = useState({
+    buyback_profit_rate: 5.0,
+    reinventory_markup_rate: 2.0,
+    settlement_type: 'full',
+    settlement_amount: '',
+    reason: '',
+    notes: ''
+  });
+
+  useEffect(() => {
+    // If transaction provided directly (from Transactions view), load inventory item
+    if (txnProp && !item) {
+      const loadInventory = async () => {
+        try {
+          const res = await api.get('/inventory', { params: { status: 'sold' } });
+          const inv = res.data?.find(i => i.unit_number === txnProp.unit_number && i.project_name === txnProp.project_name);
+          if (inv) setInventoryItem(inv);
+        } catch (e) { console.error('Error loading inventory:', e); }
+        finally { setLoading(false); }
+      };
+      loadInventory();
+      return;
+    }
+    // If item provided (from Inventory view), find the transaction
+    if (item && !txnProp) {
+      const loadTransaction = async () => {
+        try {
+          const res = await api.get('/transactions');
+          const txn = res.data?.find(t => t.inventory_id === item.id || t.unit_number === item.unit_number);
+          if (txn) setTransaction(txn);
+        } catch (e) { console.error('Error loading transaction:', e); }
+        finally { setLoading(false); }
+      };
+      loadTransaction();
+    }
+  }, [item, txnProp]);
+
+  const formatCurrency = (val) => val ? `Rs ${Number(val).toLocaleString()}` : '-';
+
+  const areaMarla = inventoryItem?.area_marla || transaction?.area_marla || 0;
+  const originalPrice = transaction ? parseFloat(transaction.total_value) : parseFloat(areaMarla) * parseFloat(inventoryItem?.rate_per_marla || 0);
+  const buybackPrice = originalPrice * (1 + form.buyback_profit_rate / 100);
+  const reinventoryPrice = buybackPrice * (1 + form.reinventory_markup_rate / 100);
+  const newRatePerMarla = areaMarla > 0 ? reinventoryPrice / parseFloat(areaMarla) : 0;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!transaction) { alert('No active transaction found for this unit'); return; }
+
+    try {
+      const payload = {
+        transaction_id: transaction.id,
+        buyback_profit_rate: parseFloat(form.buyback_profit_rate),
+        reinventory_markup_rate: parseFloat(form.reinventory_markup_rate),
+        settlement_type: form.settlement_type,
+        reason: form.reason,
+        notes: form.notes
+      };
+      if (form.settlement_type !== 'full' && form.settlement_amount) {
+        payload.settlement_amount = parseFloat(form.settlement_amount);
+      }
+
+      await api.post('/buybacks', payload);
+      onSuccess();
+    } catch (e) { alert(e.response?.data?.detail || 'Error initiating buyback'); }
+  };
+
+  if (loading) return <Modal title="Initiate Buyback" onClose={onClose}><div className="p-6 text-center text-gray-500">Loading...</div></Modal>;
+  if (!transaction) return <Modal title="Initiate Buyback" onClose={onClose}><div className="p-6 text-center text-red-500">No active transaction found for this unit</div></Modal>;
+
+  const unitNumber = inventoryItem?.unit_number || transaction?.unit_number || 'Unknown';
+  const projectName = inventoryItem?.project_name || transaction?.project_name || '';
+
+  return (
+    <Modal title={`Buyback: ${unitNumber}${projectName ? ` (${projectName})` : ''}`} onClose={onClose} wide>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Original Transaction Info */}
+        <div className="bg-gray-50 rounded-lg p-4">
+          <div className="text-xs font-medium text-gray-500 uppercase mb-2">Original Transaction</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div><span className="text-gray-500">Customer:</span> <span className="font-medium">{transaction.customer_name}</span></div>
+            <div><span className="text-gray-500">Original Price:</span> <span className="font-medium">{formatCurrency(originalPrice)}</span></div>
+            <div><span className="text-gray-500">Area:</span> <span className="font-medium">{areaMarla} Marla</span></div>
+            <div><span className="text-gray-500">Transaction:</span> <span className="font-medium font-mono">{transaction.transaction_id}</span></div>
+          </div>
+        </div>
+
+        {/* Buyback Configuration */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Buyback Profit %</label>
+            <input type="number" step="0.1" value={form.buyback_profit_rate}
+              onChange={e => setForm({ ...form, buyback_profit_rate: parseFloat(e.target.value) || 0 })}
+              className="w-full px-3 py-2 text-sm border rounded-lg" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Buyback Price</label>
+            <div className="px-3 py-2 bg-orange-50 rounded-lg text-sm font-semibold text-orange-700">
+              {formatCurrency(buybackPrice)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Re-inventory Markup %</label>
+            <input type="number" step="0.1" value={form.reinventory_markup_rate}
+              onChange={e => setForm({ ...form, reinventory_markup_rate: parseFloat(e.target.value) || 0 })}
+              className="w-full px-3 py-2 text-sm border rounded-lg" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">New Listing Price</label>
+            <div className="px-3 py-2 bg-green-50 rounded-lg text-sm font-semibold text-green-700">
+              {formatCurrency(reinventoryPrice)}
+              <span className="text-xs font-normal text-gray-500 ml-2">({formatCurrency(newRatePerMarla)}/marla)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Settlement Type */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Settlement Type</label>
+          <select value={form.settlement_type} onChange={e => setForm({ ...form, settlement_type: e.target.value })}
+            className="w-full px-3 py-2 text-sm border rounded-lg">
+            <option value="full">Full Payment (Pay full buyback price)</option>
+            <option value="partial">Partial Payment (Deduct outstanding)</option>
+            <option value="settlement">Negotiated Settlement</option>
+          </select>
+        </div>
+
+        {form.settlement_type !== 'full' && (
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Settlement Amount</label>
+            <input type="number" value={form.settlement_amount}
+              onChange={e => setForm({ ...form, settlement_amount: e.target.value })}
+              placeholder={`Buyback price: ${formatCurrency(buybackPrice)}`}
+              className="w-full px-3 py-2 text-sm border rounded-lg" />
+          </div>
+        )}
+
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Reason for Buyback (Optional)</label>
+          <input value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })}
+            placeholder="e.g., Customer request, Financial difficulty"
+            className="w-full px-3 py-2 text-sm border rounded-lg" />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Notes (Optional)</label>
+          <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2}
+            className="w-full px-3 py-2 text-sm border rounded-lg" />
+        </div>
+
+        {/* Summary */}
+        <div className="bg-blue-50 rounded-lg p-4">
+          <div className="text-xs font-medium text-blue-900 uppercase mb-2">Summary</div>
+          <div className="grid grid-cols-3 gap-4 text-sm">
+            <div>
+              <div className="text-blue-600">Pay to Customer</div>
+              <div className="font-semibold text-lg">{formatCurrency(form.settlement_type === 'full' ? buybackPrice : (form.settlement_amount || buybackPrice))}</div>
+            </div>
+            <div>
+              <div className="text-blue-600">New Listing Value</div>
+              <div className="font-semibold text-lg">{formatCurrency(reinventoryPrice)}</div>
+            </div>
+            <div>
+              <div className="text-blue-600">Profit Given</div>
+              <div className="font-semibold text-lg">{form.buyback_profit_rate}%</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+          <button type="submit" className="px-6 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium">
+            Initiate Buyback
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -1019,6 +1220,8 @@ function TransactionsView() {
   const [selectedBroker, setSelectedBroker] = useState(null);
   const [customerDetails, setCustomerDetails] = useState(null);
   const [brokerDetails, setBrokerDetails] = useState(null);
+  const [showBuybackModal, setShowBuybackModal] = useState(false);
+  const [buybackTransaction, setBuybackTransaction] = useState(null);
 
   // Search filters - separate fields for precision
   const [customerName, setCustomerName] = useState('');
@@ -1169,6 +1372,7 @@ function TransactionsView() {
               <option value="">All Status</option>
               <option value="active">Active</option>
               <option value="completed">Completed</option>
+              <option value="bought_back">Bought Back</option>
               <option value="cancelled">Cancelled</option>
             </select>
           </div>
@@ -1233,8 +1437,15 @@ function TransactionsView() {
                   <td className="px-6 py-4 text-sm text-right font-medium">{formatCurrency(t.total_value)}</td>
                   <td className="px-6 py-4 text-sm text-right text-green-600">{formatCurrency(t.total_paid)}</td>
                   <td className="px-6 py-4 text-sm text-right text-amber-600">{formatCurrency(t.balance)}</td>
-                  <td className="px-6 py-4 text-center"><span className={`px-2 py-1 rounded-full text-xs font-medium ${t.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{t.status}</span></td>
-                  <td className="px-6 py-4 text-right"><button onClick={(e) => { e.stopPropagation(); viewDetails(t); }} className="text-sm text-blue-600 hover:text-blue-800">View</button></td>
+                  <td className="px-6 py-4 text-center"><span className={`px-2 py-1 rounded-full text-xs font-medium ${t.status === 'active' ? 'bg-green-50 text-green-700' : t.status === 'bought_back' ? 'bg-orange-50 text-orange-700' : 'bg-gray-100 text-gray-600'}`}>{t.status}</span></td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <button onClick={(e) => { e.stopPropagation(); viewDetails(t); }} className="text-sm text-blue-600 hover:text-blue-800">View</button>
+                      {t.status === 'active' && (
+                        <button onClick={(e) => { e.stopPropagation(); setBuybackTransaction(t); setShowBuybackModal(true); }} className="text-sm text-orange-600 hover:text-orange-800 font-medium">Buyback</button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1246,6 +1457,13 @@ function TransactionsView() {
 
       {showModal && <NewTransactionModal onClose={() => setShowModal(false)} onSuccess={() => { setShowModal(false); loadData(); }} />}
       {selectedTxn && <TransactionDetailModal txn={selectedTxn} onClose={() => setSelectedTxn(null)} onUpdate={loadData} />}
+      {showBuybackModal && buybackTransaction && (
+        <InitiateBuybackModal
+          transaction={buybackTransaction}
+          onClose={() => { setShowBuybackModal(false); setBuybackTransaction(null); }}
+          onSuccess={() => { setShowBuybackModal(false); setBuybackTransaction(null); loadData(); }}
+        />
+      )}
       
       {selectedCustomer && customerDetails && (
         <CustomerDetailModal 
@@ -3155,6 +3373,879 @@ function PaymentDetailModal({ payment, onClose }) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+// ============================================
+// BUYBACKS VIEW
+// ============================================
+function BuybacksView() {
+  const [buybacks, setBuybacks] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState({ status: '', project_id: '' });
+  const [showModal, setShowModal] = useState(false);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showInitiateModal, setShowInitiateModal] = useState(false);
+  const [selectedBuyback, setSelectedBuyback] = useState(null);
+  const [searchId, setSearchId] = useState('');
+  const [searchUnit, setSearchUnit] = useState('');
+
+  useEffect(() => { loadData(); }, [filter]);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (filter.status) params.status = filter.status;
+      if (filter.project_id) params.project_id = filter.project_id;
+
+      const [bbRes, sumRes, projRes] = await Promise.all([
+        api.get('/buybacks', { params }).catch(() => ({ data: [] })),
+        api.get('/buybacks/summary').catch(() => ({ data: null })),
+        api.get('/projects').catch(() => ({ data: [] }))
+      ]);
+      setBuybacks(bbRes.data || []);
+      setSummary(sumRes.data);
+      setProjects(projRes.data || []);
+    } catch (e) { console.error('Error loading buybacks:', e); }
+    finally { setLoading(false); }
+  };
+
+  const filteredBuybacks = buybacks.filter(b => {
+    if (searchId && !b.buyback_id?.toLowerCase().includes(searchId.toLowerCase())) return false;
+    if (searchUnit && !b.unit_number?.toLowerCase().includes(searchUnit.toLowerCase())) return false;
+    return true;
+  });
+
+  const formatCurrency = (val) => val ? `Rs ${Number(val).toLocaleString()}` : '-';
+
+  const getStatusBadge = (status) => {
+    const colors = {
+      pending: 'bg-amber-50 text-amber-700',
+      approved: 'bg-blue-50 text-blue-700',
+      in_progress: 'bg-purple-50 text-purple-700',
+      completed: 'bg-green-50 text-green-700',
+      cancelled: 'bg-gray-100 text-gray-600'
+    };
+    return <span className={`px-2 py-1 rounded-full text-xs font-medium ${colors[status] || 'bg-gray-100 text-gray-600'}`}>{status}</span>;
+  };
+
+  const handleApproveBuyback = async (buyback) => {
+    if (!confirm(`Approve buyback ${buyback.buyback_id}?`)) return;
+    try {
+      await api.post(`/buybacks/${buyback.id}/approve`, {});
+      loadData();
+    } catch (e) { alert(e.response?.data?.detail || 'Error approving'); }
+  };
+
+  const handleCompleteBuyback = async (buyback) => {
+    if (!confirm(`Complete buyback ${buyback.buyback_id}? This will return the plot to inventory.`)) return;
+    try {
+      await api.post(`/buybacks/${buyback.id}/complete`, {});
+      loadData();
+    } catch (e) { alert(e.response?.data?.detail || 'Error completing'); }
+  };
+
+  const handleCancelBuyback = async (buyback) => {
+    if (!confirm(`Cancel buyback ${buyback.buyback_id}?`)) return;
+    try {
+      await api.delete(`/buybacks/${buyback.id}`);
+      loadData();
+    } catch (e) { alert(e.response?.data?.detail || 'Error cancelling'); }
+  };
+
+  if (loading) return <div className="p-6 text-center text-gray-500">Loading buybacks...</div>;
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">Buybacks</h1>
+          <p className="text-sm text-gray-500 mt-1">Manage plot buybacks and re-inventory</p>
+        </div>
+        <button onClick={() => setShowInitiateModal(true)} className="bg-orange-600 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-orange-700 flex items-center gap-2">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+          New Buyback
+        </button>
+      </div>
+
+      {/* Summary Cards */}
+      {summary && (
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+          <SummaryCard label="Total Buybacks" value={summary.total_buybacks} />
+          <SummaryCard label="Pending" value={summary.by_status?.pending || 0} />
+          <SummaryCard label="Approved" value={summary.by_status?.approved || 0} />
+          <SummaryCard label="In Progress" value={summary.by_status?.in_progress || 0} />
+          <SummaryCard label="Completed" value={summary.by_status?.completed || 0} />
+          <SummaryCard label="Total Value" value={formatCurrency(summary.total_buyback_value)} sub={`Paid: ${formatCurrency(summary.total_paid_out)}`} />
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="bg-white rounded-2xl shadow-sm border p-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Buyback ID</label>
+            <input value={searchId} onChange={e => setSearchId(e.target.value)} placeholder="BBK-..." className="w-full px-3 py-2 text-sm border rounded-lg" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Unit Number</label>
+            <input value={searchUnit} onChange={e => setSearchUnit(e.target.value)} placeholder="Search unit" className="w-full px-3 py-2 text-sm border rounded-lg" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <select value={filter.status} onChange={e => setFilter({ ...filter, status: e.target.value })} className="w-full px-3 py-2 text-sm border rounded-lg">
+              <option value="">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="in_progress">In Progress</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Project</label>
+            <select value={filter.project_id} onChange={e => setFilter({ ...filter, project_id: e.target.value })} className="w-full px-3 py-2 text-sm border rounded-lg">
+              <option value="">All Projects</option>
+              {projects.map(p => <option key={p.id} value={p.project_id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button onClick={() => { setFilter({ status: '', project_id: '' }); setSearchId(''); setSearchUnit(''); }} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Clear Filters</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Results Count */}
+      <div className="text-sm text-gray-500">
+        Showing {filteredBuybacks.length} buyback{filteredBuybacks.length !== 1 ? 's' : ''}
+      </div>
+
+      {/* Table */}
+      {filteredBuybacks.length === 0 ? (
+        <div className="bg-white rounded-2xl shadow-sm border p-12 text-center">
+          <div className="text-gray-400 mb-2">No buybacks found</div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Buyback ID</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Unit</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Customer</th>
+                  <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Original Price</th>
+                  <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Buyback Price</th>
+                  <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Balance Due</th>
+                  <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
+                  <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {filteredBuybacks.map(b => (
+                  <tr key={b.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedBuyback(b); setShowDetailModal(true); }}>
+                    <td className="px-6 py-4">
+                      <div className="text-sm font-mono font-medium text-gray-900">{b.buyback_id}</div>
+                      <div className="text-xs text-gray-500">{b.buyback_date}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm font-medium text-gray-900">{b.unit_number}</div>
+                      <div className="text-xs text-gray-500">{b.project_name} {b.block && `• Block ${b.block}`}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900">{b.customer_name}</div>
+                      <div className="text-xs text-gray-500">{b.customer_mobile}</div>
+                    </td>
+                    <td className="px-6 py-4 text-right text-sm text-gray-600">{formatCurrency(b.original_sale_price)}</td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="text-sm font-medium text-orange-600">{formatCurrency(b.buyback_price)}</div>
+                      <div className="text-xs text-gray-500">+{b.buyback_profit_rate}%</div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="text-sm font-medium text-amber-600">{formatCurrency(b.balance_due)}</div>
+                      <div className="text-xs text-gray-500">Paid: {formatCurrency(b.amount_paid_to_customer)}</div>
+                    </td>
+                    <td className="px-6 py-4 text-center">{getStatusBadge(b.status)}</td>
+                    <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center justify-center gap-2">
+                        {b.status === 'pending' && (
+                          <>
+                            <button onClick={() => handleApproveBuyback(b)} className="text-xs text-blue-600 hover:text-blue-800 font-medium">Approve</button>
+                            <button onClick={() => handleCancelBuyback(b)} className="text-xs text-red-600 hover:text-red-800 font-medium">Cancel</button>
+                          </>
+                        )}
+                        {(b.status === 'approved' || b.status === 'in_progress') && (
+                          <button onClick={() => handleCompleteBuyback(b)} className="text-xs text-green-600 hover:text-green-800 font-medium">Complete</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Detail Modal */}
+      {showDetailModal && selectedBuyback && (
+        <BuybackDetailModal
+          buybackId={selectedBuyback.id}
+          onClose={() => { setShowDetailModal(false); setSelectedBuyback(null); }}
+          onUpdate={loadData}
+        />
+      )}
+
+      {/* Initiate Buyback Modal */}
+      {showInitiateModal && (
+        <BuybackInitiatorModal
+          onClose={() => setShowInitiateModal(false)}
+          onSuccess={() => { setShowInitiateModal(false); loadData(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// BUYBACK INITIATOR MODAL - Select Project & Sold Unit
+// ============================================
+function BuybackInitiatorModal({ onClose, onSuccess }) {
+  const [projects, setProjects] = useState([]);
+  const [soldInventory, setSoldInventory] = useState([]);
+  const [selectedProject, setSelectedProject] = useState('');
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingUnits, setLoadingUnits] = useState(false);
+  const [searchUnit, setSearchUnit] = useState('');
+
+  useEffect(() => {
+    const loadProjects = async () => {
+      try {
+        const res = await api.get('/projects');
+        setProjects(res.data || []);
+      } catch (e) { console.error(e); }
+      finally { setLoading(false); }
+    };
+    loadProjects();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedProject) {
+      setSoldInventory([]);
+      return;
+    }
+    const loadSoldUnits = async () => {
+      setLoadingUnits(true);
+      try {
+        const res = await api.get('/inventory', { params: { project_id: selectedProject, status: 'sold' } });
+        setSoldInventory(res.data || []);
+      } catch (e) { console.error(e); }
+      finally { setLoadingUnits(false); }
+    };
+    loadSoldUnits();
+  }, [selectedProject]);
+
+  const filteredUnits = soldInventory.filter(i =>
+    !searchUnit || i.unit_number?.toLowerCase().includes(searchUnit.toLowerCase())
+  );
+
+  const formatCurrency = (val) => val ? `Rs ${Number(val).toLocaleString()}` : '-';
+
+  if (selectedItem) {
+    return <InitiateBuybackModal item={selectedItem} onClose={onClose} onSuccess={onSuccess} />;
+  }
+
+  return (
+    <Modal title="Initiate New Buyback" onClose={onClose} wide>
+      <div className="space-y-4">
+        {/* Project Selector */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Select Project</label>
+          <select
+            value={selectedProject}
+            onChange={e => { setSelectedProject(e.target.value); setSearchUnit(''); }}
+            className="w-full px-3 py-2 text-sm border rounded-lg"
+          >
+            <option value="">Choose a project...</option>
+            {projects.map(p => (
+              <option key={p.id} value={p.id}>{p.name} ({p.stats?.sold || 0} sold units)</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Sold Units List */}
+        {selectedProject && (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Search Unit</label>
+              <input
+                type="text"
+                value={searchUnit}
+                onChange={e => setSearchUnit(e.target.value)}
+                placeholder="Search by unit number..."
+                className="w-full px-3 py-2 text-sm border rounded-lg"
+              />
+            </div>
+
+            <div className="border rounded-lg overflow-hidden max-h-80 overflow-y-auto">
+              {loadingUnits ? (
+                <div className="p-6 text-center text-gray-500">Loading sold units...</div>
+              ) : filteredUnits.length === 0 ? (
+                <div className="p-6 text-center text-gray-500">
+                  {soldInventory.length === 0 ? 'No sold units in this project' : 'No units match your search'}
+                </div>
+              ) : (
+                <table className="w-full">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr className="text-xs text-gray-500 uppercase">
+                      <th className="text-left px-4 py-2">Unit</th>
+                      <th className="text-left px-4 py-2">Block</th>
+                      <th className="text-right px-4 py-2">Area</th>
+                      <th className="text-right px-4 py-2">Value</th>
+                      <th className="text-center px-4 py-2">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredUnits.map(item => (
+                      <tr key={item.id} className="hover:bg-orange-50 transition-colors">
+                        <td className="px-4 py-3 text-sm font-medium">{item.unit_number}</td>
+                        <td className="px-4 py-3 text-sm text-gray-500">{item.block || '—'}</td>
+                        <td className="px-4 py-3 text-sm text-right">{item.area_marla}M</td>
+                        <td className="px-4 py-3 text-sm text-right">{formatCurrency(item.area_marla * item.rate_per_marla)}</td>
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => setSelectedItem(item)}
+                            className="px-3 py-1 text-xs bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium"
+                          >
+                            Select
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="text-sm text-gray-500 text-center">
+              {filteredUnits.length} sold unit{filteredUnits.length !== 1 ? 's' : ''} available for buyback
+            </div>
+          </>
+        )}
+
+        <div className="flex justify-end pt-4 border-t">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Buyback Detail Modal
+function BuybackDetailModal({ buybackId, onClose, onUpdate }) {
+  const [buyback, setBuyback] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [showLedgerForm, setShowLedgerForm] = useState(false);
+  const [ledgerForm, setLedgerForm] = useState({ amount: '', payment_method: 'bank_transfer', reference_number: '', notes: '' });
+
+  useEffect(() => { loadBuyback(); }, [buybackId]);
+
+  const loadBuyback = async () => {
+    try {
+      const res = await api.get(`/buybacks/${buybackId}`);
+      setBuyback(res.data);
+    } catch (e) { console.error('Error loading buyback:', e); }
+    finally { setLoading(false); }
+  };
+
+  const formatCurrency = (val) => val ? `Rs ${Number(val).toLocaleString()}` : '-';
+
+  const handleAddLedgerEntry = async (e) => {
+    e.preventDefault();
+    if (!ledgerForm.amount || parseFloat(ledgerForm.amount) <= 0) { alert('Enter valid amount'); return; }
+    try {
+      await api.post(`/buybacks/${buybackId}/ledger`, {
+        entry_type: 'payment_to_customer',
+        amount: parseFloat(ledgerForm.amount),
+        payment_method: ledgerForm.payment_method,
+        reference_number: ledgerForm.reference_number,
+        notes: ledgerForm.notes
+      });
+      setShowLedgerForm(false);
+      setLedgerForm({ amount: '', payment_method: 'bank_transfer', reference_number: '', notes: '' });
+      loadBuyback();
+      onUpdate();
+    } catch (e) { alert(e.response?.data?.detail || 'Error adding entry'); }
+  };
+
+  const handleDeleteLedgerEntry = async (entryId) => {
+    if (!confirm('Delete this ledger entry?')) return;
+    try {
+      await api.delete(`/buybacks/${buybackId}/ledger/${entryId}`);
+      loadBuyback();
+      onUpdate();
+    } catch (e) { alert(e.response?.data?.detail || 'Error deleting entry'); }
+  };
+
+  if (loading) return <Modal title="Buyback Details" onClose={onClose} wide><div className="p-6 text-center text-gray-500">Loading...</div></Modal>;
+  if (!buyback) return <Modal title="Buyback Details" onClose={onClose} wide><div className="p-6 text-center text-red-500">Buyback not found</div></Modal>;
+
+  const statusColors = {
+    pending: 'bg-amber-100 text-amber-800',
+    approved: 'bg-blue-100 text-blue-800',
+    in_progress: 'bg-purple-100 text-purple-800',
+    completed: 'bg-green-100 text-green-800',
+    cancelled: 'bg-gray-100 text-gray-600'
+  };
+
+  return (
+    <Modal title={`Buyback: ${buyback.buyback_id}`} onClose={onClose} wide>
+      <div className="space-y-6">
+        {/* Status Badge */}
+        <div className="flex items-center justify-between">
+          <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusColors[buyback.status]}`}>
+            {buyback.status?.toUpperCase()}
+          </span>
+          <span className="text-sm text-gray-500">Date: {buyback.buyback_date}</span>
+        </div>
+
+        {/* Basic Info Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="text-xs text-gray-500">Unit</div>
+            <div className="text-sm font-medium">{buyback.inventory?.unit_number}</div>
+            <div className="text-xs text-gray-500">{buyback.project?.name}</div>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="text-xs text-gray-500">Customer</div>
+            <div className="text-sm font-medium">{buyback.customer?.name}</div>
+            <div className="text-xs text-gray-500">{buyback.customer?.mobile}</div>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="text-xs text-gray-500">Original Transaction</div>
+            <div className="text-sm font-medium font-mono">{buyback.transaction?.transaction_id}</div>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="text-xs text-gray-500">Area</div>
+            <div className="text-sm font-medium">{buyback.inventory?.area_marla} Marla</div>
+          </div>
+        </div>
+
+        {/* Financial Summary */}
+        <div className="bg-orange-50 rounded-xl p-4">
+          <h4 className="text-sm font-semibold text-orange-900 mb-3">Financial Summary</h4>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <div className="text-orange-600">Original Sale Price</div>
+              <div className="font-semibold">{formatCurrency(buyback.original_sale_price)}</div>
+            </div>
+            <div>
+              <div className="text-orange-600">Buyback Price (+{buyback.buyback_profit_rate}%)</div>
+              <div className="font-semibold">{formatCurrency(buyback.buyback_price)}</div>
+            </div>
+            <div>
+              <div className="text-orange-600">Re-inventory Price (+{buyback.reinventory_markup_rate}%)</div>
+              <div className="font-semibold">{formatCurrency(buyback.reinventory_price)}</div>
+            </div>
+            <div>
+              <div className="text-orange-600">Company Cost</div>
+              <div className="font-semibold">{formatCurrency(buyback.company_cost)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Payment Progress */}
+        <div className="bg-white border rounded-xl p-4">
+          <div className="flex justify-between items-center mb-3">
+            <h4 className="text-sm font-semibold text-gray-900">Payment to Customer</h4>
+            {buyback.status !== 'completed' && buyback.status !== 'cancelled' && (
+              <button onClick={() => setShowLedgerForm(true)} className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+                + Add Payment
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-4 text-sm mb-4">
+            <div>
+              <div className="text-gray-500">Settlement Amount</div>
+              <div className="font-semibold">{formatCurrency(buyback.settlement_amount)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Total Paid</div>
+              <div className="font-semibold text-green-600">{formatCurrency(buyback.amount_paid_to_customer)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Balance Due</div>
+              <div className="font-semibold text-amber-600">{formatCurrency(buyback.balance_due)}</div>
+            </div>
+          </div>
+
+          {/* Progress Bar */}
+          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-green-500 transition-all"
+              style={{ width: `${Math.min(100, (buyback.amount_paid_to_customer / buyback.settlement_amount) * 100)}%` }}
+            />
+          </div>
+
+          {/* Ledger Entries */}
+          {buyback.ledger?.length > 0 && (
+            <div className="mt-4 space-y-2">
+              <div className="text-xs font-medium text-gray-500 uppercase">Payment History</div>
+              {buyback.ledger.map(entry => (
+                <div key={entry.id} className="flex justify-between items-center text-sm p-2 bg-gray-50 rounded">
+                  <div>
+                    <span className="font-medium">{formatCurrency(entry.amount)}</span>
+                    <span className="text-gray-500 ml-2">{entry.payment_method}</span>
+                    {entry.reference_number && <span className="text-gray-400 ml-2">#{entry.reference_number}</span>}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-gray-500 text-xs">{entry.payment_date}</span>
+                    {buyback.status !== 'completed' && (
+                      <button onClick={() => handleDeleteLedgerEntry(entry.id)} className="text-red-500 hover:text-red-700 text-xs">Delete</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add Ledger Entry Form */}
+          {showLedgerForm && (
+            <form onSubmit={handleAddLedgerEntry} className="mt-4 p-4 bg-blue-50 rounded-lg space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Amount *</label>
+                  <input type="number" value={ledgerForm.amount} onChange={e => setLedgerForm({ ...ledgerForm, amount: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border rounded" placeholder="Enter amount" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Payment Method</label>
+                  <select value={ledgerForm.payment_method} onChange={e => setLedgerForm({ ...ledgerForm, payment_method: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border rounded">
+                    <option value="bank_transfer">Bank Transfer</option>
+                    <option value="cash">Cash</option>
+                    <option value="cheque">Cheque</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Reference Number</label>
+                <input value={ledgerForm.reference_number} onChange={e => setLedgerForm({ ...ledgerForm, reference_number: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border rounded" placeholder="Transaction/Cheque #" />
+              </div>
+              <div className="flex gap-2">
+                <button type="submit" className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Add Payment</button>
+                <button type="button" onClick={() => setShowLedgerForm(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+              </div>
+            </form>
+          )}
+        </div>
+
+        {/* Installments from Original Transaction */}
+        {buyback.installments?.length > 0 && (
+          <div className="bg-white border rounded-xl p-4">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3">Original Transaction Installments</h4>
+            <div className="space-y-2">
+              {buyback.installments.map((inst, idx) => (
+                <div key={idx} className="flex justify-between items-center text-sm p-2 bg-gray-50 rounded">
+                  <div>
+                    <span className="font-medium">Installment {inst.number}</span>
+                    <span className="text-gray-500 ml-2">{formatCurrency(inst.amount)}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-gray-500 text-xs">Paid: {formatCurrency(inst.amount_paid)}</span>
+                    <span className={`px-2 py-0.5 rounded text-xs ${
+                      inst.status === 'paid' ? 'bg-green-100 text-green-700' :
+                      inst.status === 'cleared_buyback' ? 'bg-blue-100 text-blue-700' :
+                      inst.status === 'partial' ? 'bg-amber-100 text-amber-700' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>{inst.status}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Notes */}
+        {(buyback.reason || buyback.notes) && (
+          <div className="bg-gray-50 rounded-xl p-4">
+            {buyback.reason && <div className="text-sm"><span className="font-medium">Reason:</span> {buyback.reason}</div>}
+            {buyback.notes && <div className="text-sm text-gray-600 mt-1">{buyback.notes}</div>}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ============================================
+// COSTING VIEW
+// ============================================
+function CostingView() {
+  const [projects, setProjects] = useState([]);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [projectCosting, setProjectCosting] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [showPlotModal, setShowPlotModal] = useState(false);
+  const [selectedPlot, setSelectedPlot] = useState(null);
+  const [plotCosting, setPlotCosting] = useState(null);
+
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  useEffect(() => {
+    if (selectedProject) loadProjectCosting(selectedProject);
+  }, [selectedProject]);
+
+  const loadProjects = async () => {
+    try {
+      const res = await api.get('/projects');
+      setProjects(res.data || []);
+      if (res.data?.length > 0) setSelectedProject(res.data[0].project_id);
+    } catch (e) { console.error('Error loading projects:', e); }
+    finally { setLoading(false); }
+  };
+
+  const loadProjectCosting = async (projectId) => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/costing/project/${projectId}`);
+      setProjectCosting(res.data);
+    } catch (e) { console.error('Error loading costing:', e); }
+    finally { setLoading(false); }
+  };
+
+  const loadPlotCosting = async (inventoryId) => {
+    try {
+      const res = await api.get(`/costing/plot/${inventoryId}`);
+      setPlotCosting(res.data);
+      setShowPlotModal(true);
+    } catch (e) { console.error('Error loading plot costing:', e); }
+  };
+
+  const formatCurrency = (val) => val ? `Rs ${Number(val).toLocaleString()}` : '-';
+
+  if (loading && !projectCosting) return <div className="p-6 text-center text-gray-500">Loading costing data...</div>;
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">Costing Analysis</h1>
+          <p className="text-sm text-gray-500 mt-1">Project and plot-level cost breakdown</p>
+        </div>
+        <div>
+          <select
+            value={selectedProject || ''}
+            onChange={e => setSelectedProject(e.target.value)}
+            className="px-4 py-2 border rounded-lg text-sm"
+          >
+            {projects.map(p => <option key={p.id} value={p.project_id}>{p.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {projectCosting && (
+        <>
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            <SummaryCard label="Total Units" value={projectCosting.summary.total_units} />
+            <SummaryCard label="Available" value={projectCosting.summary.available_units} />
+            <SummaryCard label="Sold" value={projectCosting.summary.sold_units} />
+            <SummaryCard label="Buyback Pending" value={projectCosting.summary.buyback_pending_units} />
+            <SummaryCard label="Total Buybacks" value={projectCosting.summary.total_buybacks} sub={`Completed: ${projectCosting.summary.completed_buybacks}`} />
+            <SummaryCard label="Profit Paid" value={formatCurrency(projectCosting.summary.total_profit_paid)} />
+          </div>
+
+          {/* Financial Summary */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white rounded-2xl shadow-sm border p-5">
+              <div className="text-xs font-medium text-gray-400 uppercase">Current Total Value</div>
+              <div className="mt-2 text-2xl font-semibold text-gray-900">{formatCurrency(projectCosting.summary.total_current_value)}</div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border p-5">
+              <div className="text-xs font-medium text-gray-400 uppercase">Total Company Cost</div>
+              <div className="mt-2 text-2xl font-semibold text-orange-600">{formatCurrency(projectCosting.summary.total_company_cost)}</div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border p-5">
+              <div className="text-xs font-medium text-gray-400 uppercase">Total Buyback Value</div>
+              <div className="mt-2 text-2xl font-semibold text-purple-600">{formatCurrency(projectCosting.summary.total_buyback_value)}</div>
+            </div>
+          </div>
+
+          {/* Units Table */}
+          <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+            <div className="p-4 border-b">
+              <h3 className="text-sm font-semibold text-gray-900">Unit-wise Costing</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Unit</th>
+                    <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Area (Marla)</th>
+                    <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Rate/Marla</th>
+                    <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Current Value</th>
+                    <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Company Cost</th>
+                    <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Net Margin</th>
+                    <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Buybacks</th>
+                    <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {projectCosting.units.map(unit => (
+                    <tr key={unit.inventory_id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedPlot(unit); loadPlotCosting(unit.inventory_id); }}>
+                      <td className="px-6 py-4">
+                        <div className="text-sm font-medium text-gray-900">{unit.unit_number}</div>
+                        <div className="text-xs text-gray-500">{unit.block && `Block ${unit.block}`}</div>
+                      </td>
+                      <td className="px-6 py-4 text-right text-sm">{unit.area_marla}</td>
+                      <td className="px-6 py-4 text-right text-sm">{formatCurrency(unit.rate_per_marla)}</td>
+                      <td className="px-6 py-4 text-right text-sm font-medium">{formatCurrency(unit.current_value)}</td>
+                      <td className="px-6 py-4 text-right text-sm text-orange-600">{formatCurrency(unit.company_cost)}</td>
+                      <td className="px-6 py-4 text-right text-sm">
+                        <span className={unit.net_margin >= 0 ? 'text-green-600' : 'text-red-600'}>
+                          {formatCurrency(unit.net_margin)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        {unit.buyback_count > 0 ? (
+                          <span className="px-2 py-1 bg-purple-50 text-purple-700 rounded-full text-xs">{unit.buyback_count}</span>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          unit.status === 'available' ? 'bg-green-50 text-green-700' :
+                          unit.status === 'sold' ? 'bg-blue-50 text-blue-700' :
+                          unit.status === 'buyback_pending' ? 'bg-amber-50 text-amber-700' :
+                          'bg-gray-100 text-gray-600'
+                        }`}>{unit.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Plot Costing Modal */}
+      {showPlotModal && plotCosting && (
+        <Modal title={`Costing: ${plotCosting.unit_number}`} onClose={() => { setShowPlotModal(false); setPlotCosting(null); }} wide>
+          <div className="space-y-6">
+            {/* Basic Info */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-500">Unit</div>
+                <div className="text-sm font-medium">{plotCosting.unit_number}</div>
+                <div className="text-xs text-gray-500">{plotCosting.project?.name}</div>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-500">Area</div>
+                <div className="text-sm font-medium">{plotCosting.area_marla} Marla</div>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-500">Current Rate</div>
+                <div className="text-sm font-medium">{formatCurrency(plotCosting.current_rate_per_marla)}/marla</div>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-500">Buyback Count</div>
+                <div className="text-sm font-medium">{plotCosting.buyback_count}</div>
+              </div>
+            </div>
+
+            {/* Value Summary */}
+            <div className="bg-blue-50 rounded-xl p-4">
+              <h4 className="text-sm font-semibold text-blue-900 mb-3">Value Summary</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <div className="text-blue-600">Current Value</div>
+                  <div className="font-semibold">{formatCurrency(plotCosting.current_value)}</div>
+                </div>
+                <div>
+                  <div className="text-blue-600">Original Value</div>
+                  <div className="font-semibold">{formatCurrency(plotCosting.original_value)}</div>
+                </div>
+                <div>
+                  <div className="text-blue-600">Company Cost</div>
+                  <div className="font-semibold text-orange-600">{formatCurrency(plotCosting.company_cost)}</div>
+                </div>
+                <div>
+                  <div className="text-blue-600">Status</div>
+                  <div className="font-semibold">{plotCosting.status}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Costing Breakdown */}
+            {plotCosting.costing_breakdown && (
+              <div className="bg-orange-50 rounded-xl p-4">
+                <h4 className="text-sm font-semibold text-orange-900 mb-3">Cost Breakdown</h4>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <div className="text-orange-600">Total Profit Paid</div>
+                    <div className="font-semibold">{formatCurrency(plotCosting.costing_breakdown.total_profit_paid)}</div>
+                  </div>
+                  <div>
+                    <div className="text-orange-600">Total Commission Paid</div>
+                    <div className="font-semibold">{formatCurrency(plotCosting.costing_breakdown.total_commission_paid)}</div>
+                  </div>
+                  <div>
+                    <div className="text-orange-600">Total Deductions</div>
+                    <div className="font-semibold">{formatCurrency(plotCosting.costing_breakdown.total_deductions)}</div>
+                  </div>
+                  <div>
+                    <div className="text-orange-600">Net Price/Marla</div>
+                    <div className="font-semibold text-green-600">{formatCurrency(plotCosting.costing_breakdown.net_price_per_marla)}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Buyback History */}
+            {plotCosting.buyback_history?.length > 0 && (
+              <div className="bg-white border rounded-xl p-4">
+                <h4 className="text-sm font-semibold text-gray-900 mb-3">Buyback History</h4>
+                <div className="space-y-3">
+                  {plotCosting.buyback_history.map((bb, idx) => (
+                    <div key={idx} className="p-3 bg-gray-50 rounded-lg">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="text-sm font-medium">{bb.buyback_id}</div>
+                          <div className="text-xs text-gray-500">Customer: {bb.customer_name}</div>
+                        </div>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          bb.status === 'completed' ? 'bg-green-100 text-green-700' :
+                          bb.status === 'in_progress' ? 'bg-purple-100 text-purple-700' :
+                          'bg-gray-100 text-gray-600'
+                        }`}>{bb.status}</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 mt-2 text-xs">
+                        <div><span className="text-gray-500">Sale:</span> {formatCurrency(bb.original_sale_price)}</div>
+                        <div><span className="text-gray-500">Buyback:</span> {formatCurrency(bb.buyback_price)}</div>
+                        <div><span className="text-gray-500">Profit:</span> {formatCurrency(bb.profit_amount)} ({bb.profit_rate}%)</div>
+                        <div><span className="text-gray-500">Re-inv:</span> {formatCurrency(bb.reinventory_price)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 

@@ -122,6 +122,11 @@ class Inventory(Base):
     plot_coordinates = Column(JSONB, nullable=True)  # {x, y, width, height}
     plot_offset = Column(JSONB, nullable=True)  # {offset_x, offset_y, rotation}
     is_manual_plot = Column(String(10), default="false")  # "true" or "false" as string for compatibility
+    # Buyback & Costing fields
+    buyback_count = Column(Integer, default=0)  # Number of times this plot was bought back
+    last_buyback_id = Column(UUID(as_uuid=True))  # FK added via migration
+    company_cost = Column(Numeric(15, 2))  # Company's acquisition cost for this unit
+    original_listing_price = Column(Numeric(15, 2))  # Original price before any buybacks
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -143,9 +148,14 @@ class Transaction(Base):
     installment_cycle = Column(String(20), default="bi-annual")
     num_installments = Column(Integer, default=4)
     first_due_date = Column(Date, nullable=False)
-    status = Column(String(20), default="active")
+    status = Column(String(20), default="active")  # active, bought_back, cancelled
     notes = Column(Text)
     booking_date = Column(Date, default=date.today)
+    # Buyback tracking
+    buyback_id = Column(UUID(as_uuid=True))  # FK added via migration, links to buyback if bought back
+    is_resale = Column(String(10), default="false")  # "true" if this transaction is a resale after buyback
+    resale_commission_rate = Column(Numeric(5, 2))  # Custom commission rate for resales
+    original_buyback_id = Column(UUID(as_uuid=True))  # If resale, links to the buyback that made inventory available
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -282,6 +292,101 @@ class MediaFile(Base):
     file_size = Column(Integer)
     uploaded_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     description = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+
+# ============================================
+# BUYBACK MODELS
+# ============================================
+class Buyback(Base):
+    __tablename__ = "buybacks"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    buyback_id = Column(String(20), unique=True, nullable=False)
+
+    # Links to original records
+    original_transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=False)
+    inventory_id = Column(UUID(as_uuid=True), ForeignKey("inventory.id"), nullable=False)
+    original_customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), nullable=False)
+
+    # Financial details
+    original_sale_price = Column(Numeric(15, 2), nullable=False)
+    buyback_price = Column(Numeric(15, 2), nullable=False)
+    buyback_profit_rate = Column(Numeric(5, 2), default=5.00)
+    reinventory_price = Column(Numeric(15, 2), nullable=False)
+    reinventory_markup_rate = Column(Numeric(5, 2), default=2.00)
+    original_commission_amount = Column(Numeric(15, 2), default=0)
+
+    # Costing
+    company_cost_auto = Column(Numeric(15, 2))
+    company_cost_manual = Column(Numeric(15, 2))
+    company_cost_override = Column(String(10), default="false")
+
+    # Settlement
+    settlement_type = Column(String(30), default="full")  # full, partial, settlement
+    settlement_amount = Column(Numeric(15, 2))
+    amount_paid_to_customer = Column(Numeric(15, 2), default=0)
+
+    # Metadata
+    reason = Column(Text)
+    notes = Column(Text)
+
+    # Status & Workflow
+    status = Column(String(20), default="pending")  # pending, approved, in_progress, completed, cancelled
+    initiated_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    approved_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    approved_at = Column(DateTime)
+
+    # Dates
+    buyback_date = Column(Date, default=date.today)
+    completion_date = Column(Date)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class BuybackLedger(Base):
+    __tablename__ = "buyback_ledger"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ledger_id = Column(String(20), unique=True, nullable=False)
+
+    buyback_id = Column(UUID(as_uuid=True), ForeignKey("buybacks.id"), nullable=False)
+
+    # Entry details
+    entry_type = Column(String(30), nullable=False)  # payment_to_customer, adjustment, settlement
+    amount = Column(Numeric(15, 2), nullable=False)
+
+    # Payment details
+    payment_method = Column(String(50))  # cash, cheque, bank_transfer
+    reference_number = Column(String(100))
+    payment_date = Column(Date, default=date.today)
+
+    notes = Column(Text)
+    created_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    created_at = Column(DateTime, server_default=func.now())
+
+class PlotHistory(Base):
+    __tablename__ = "plot_history"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    inventory_id = Column(UUID(as_uuid=True), ForeignKey("inventory.id"), nullable=False)
+
+    # Event details
+    event_type = Column(String(30), nullable=False)  # initial_listing, sale, buyback, resale, price_change
+    event_date = Column(Date, nullable=False)
+
+    # Ownership tracking
+    previous_owner_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"))  # NULL for initial listing
+    new_owner_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"))       # NULL for buyback
+
+    # Linked records
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id"))
+    buyback_id = Column(UUID(as_uuid=True), ForeignKey("buybacks.id"))
+
+    # Financial snapshot at time of event
+    price_at_event = Column(Numeric(15, 2))
+    rate_per_marla = Column(Numeric(15, 2))
+
+    # Metadata
+    notes = Column(Text)
+    created_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     created_at = Column(DateTime, server_default=func.now())
 
 # ============================================
@@ -476,35 +581,68 @@ def sync_vector_branches_from_orbit(project_id, db: Session):
 
     # Get current inventory and transactions
     inventory_items = db.query(Inventory).filter(Inventory.project_id == project_id).all()
-    transactions = db.query(Transaction).filter(Transaction.project_id == project_id).all()
+    transactions = db.query(Transaction).filter(
+        Transaction.project_id == project_id,
+        Transaction.status == "active"  # Only active transactions count as sold
+    ).all()
 
-    # Build sold units set
+    # Build status sets from inventory
     sold_units = set()
-    for txn in transactions:
-        if txn.unit_number:
-            sold_units.add(txn.unit_number.upper())
-    for item in inventory_items:
-        if item.status and item.status.lower() == 'sold' and item.unit_number:
-            sold_units.add(item.unit_number.upper())
+    buyback_pending_units = set()
+    resold_units = set()  # Available units that were previously bought back
 
-    # Build annotation arrays
+    for item in inventory_items:
+        if not item.unit_number:
+            continue
+        unit_upper = item.unit_number.upper()
+        status = (item.status or '').lower()
+
+        if status == 'sold':
+            sold_units.add(unit_upper)
+        elif status == 'buyback_pending':
+            buyback_pending_units.add(unit_upper)
+        elif status == 'available' and item.buyback_count and item.buyback_count > 0:
+            resold_units.add(unit_upper)
+
+    # Also check active transactions for sold status
+    for txn in transactions:
+        if txn.unit_number and txn.status == "active":
+            sold_units.add(txn.unit_number.upper())
+
+    # Build annotation arrays by status
     sold_plot_ids = []
     sold_plot_nums = []
     available_plot_ids = []
     available_plot_nums = []
+    buyback_pending_plot_ids = []
+    buyback_pending_plot_nums = []
+    resold_plot_ids = []
+    resold_plot_nums = []
 
     for item in inventory_items:
         unit_num = item.unit_number
         if not unit_num:
             continue
         plot_id = plot_map.get(unit_num) or plot_map.get(unit_num.upper())
-        if plot_id:
-            if unit_num.upper() in sold_units:
-                sold_plot_ids.append(plot_id)
-                sold_plot_nums.append(unit_num)
-            else:
-                available_plot_ids.append(plot_id)
-                available_plot_nums.append(unit_num)
+        if not plot_id:
+            continue
+
+        unit_upper = unit_num.upper()
+        status = (item.status or '').lower()
+
+        if unit_upper in buyback_pending_units or status == 'buyback_pending':
+            buyback_pending_plot_ids.append(plot_id)
+            buyback_pending_plot_nums.append(unit_num)
+        elif unit_upper in sold_units or status == 'sold':
+            sold_plot_ids.append(plot_id)
+            sold_plot_nums.append(unit_num)
+        elif unit_upper in resold_units:
+            # Plots that are available but have been bought back before
+            resold_plot_ids.append(plot_id)
+            resold_plot_nums.append(unit_num)
+        elif status == 'available':
+            available_plot_ids.append(plot_id)
+            available_plot_nums.append(unit_num)
 
     # Generate annotations
     current_time = int(time_module.time() * 1000)
@@ -515,7 +653,7 @@ def sync_vector_branches_from_orbit(project_id, db: Session):
             "id": f"auto_sold_{current_time}",
             "note": "SOLD",
             "cat": "SOLD",
-            "color": "#ef4444",
+            "color": "#ef4444",  # Red
             "plotIds": sold_plot_ids,
             "plotNums": sold_plot_nums,
             "fontSize": 12,
@@ -527,9 +665,9 @@ def sync_vector_branches_from_orbit(project_id, db: Session):
     if available_plot_ids:
         inventory_annotation = {
             "id": f"auto_inventory_{current_time}",
-            "note": "INVENTORY",
-            "cat": "INVENTORY",
-            "color": "#22c55e",
+            "note": "AVAILABLE",
+            "cat": "AVAILABLE",
+            "color": "#22c55e",  # Green
             "plotIds": available_plot_ids,
             "plotNums": available_plot_nums,
             "fontSize": 12,
@@ -537,19 +675,62 @@ def sync_vector_branches_from_orbit(project_id, db: Session):
             "isAutoGenerated": True
         }
 
-    # Update system_branches
+    buyback_pending_annotation = None
+    if buyback_pending_plot_ids:
+        buyback_pending_annotation = {
+            "id": f"auto_buyback_pending_{current_time}",
+            "note": "BUYBACK PENDING",
+            "cat": "BUYBACK_PENDING",
+            "color": "#f59e0b",  # Amber
+            "plotIds": buyback_pending_plot_ids,
+            "plotNums": buyback_pending_plot_nums,
+            "fontSize": 12,
+            "rotation": 0,
+            "isAutoGenerated": True
+        }
+
+    resold_annotation = None
+    if resold_plot_ids:
+        resold_annotation = {
+            "id": f"auto_resold_{current_time}",
+            "note": "RESOLD",
+            "cat": "RESOLD",
+            "color": "#8b5cf6",  # Purple - indicates previously bought back, now available
+            "plotIds": resold_plot_ids,
+            "plotNums": resold_plot_nums,
+            "fontSize": 12,
+            "rotation": 0,
+            "isAutoGenerated": True
+        }
+
+    # Build annotations list
+    sales_annotations = []
+    if sales_annotation:
+        sales_annotations.append(sales_annotation)
+    if buyback_pending_annotation:
+        sales_annotations.append(buyback_pending_annotation)
+
+    inventory_annotations = []
+    if inventory_annotation:
+        inventory_annotations.append(inventory_annotation)
+    if resold_annotation:
+        inventory_annotations.append(resold_annotation)
+
+    # Update system_branches with all status types
     vector_project.system_branches = {
         "sales": {
-            "annotations": [sales_annotation] if sales_annotation else [],
+            "annotations": sales_annotations,
             "lastSyncAt": datetime.utcnow().isoformat(),
             "transactionCount": len(transactions),
-            "plotCount": len(sold_plot_ids)
+            "plotCount": len(sold_plot_ids),
+            "buybackPendingCount": len(buyback_pending_plot_ids)
         },
         "inventory": {
-            "annotations": [inventory_annotation] if inventory_annotation else [],
+            "annotations": inventory_annotations,
             "lastSyncAt": datetime.utcnow().isoformat(),
             "unitCount": len(inventory_items),
-            "plotCount": len(available_plot_ids)
+            "availableCount": len(available_plot_ids),
+            "resoldCount": len(resold_plot_ids)
         }
     }
     vector_project.updated_at = func.now()
@@ -2488,6 +2669,831 @@ def delete_payment(pid: str, db: Session = Depends(get_db)):
     
     db.delete(p); db.commit()
     return {"message": "Payment deleted"}
+
+# ============================================
+# BUYBACK API
+# ============================================
+
+def generate_buyback_id(db: Session):
+    """Generate next buyback ID (BBK-XXXX)"""
+    result = db.execute(text("SELECT MAX(CAST(SUBSTRING(buyback_id FROM 5) AS INTEGER)) FROM buybacks WHERE buyback_id LIKE 'BBK-%'")).scalar()
+    next_num = (result or 0) + 1
+    return f"BBK-{next_num:04d}"
+
+def generate_ledger_id(db: Session):
+    """Generate next ledger ID (BBL-XXXXX)"""
+    result = db.execute(text("SELECT MAX(CAST(SUBSTRING(ledger_id FROM 5) AS INTEGER)) FROM buyback_ledger WHERE ledger_id LIKE 'BBL-%'")).scalar()
+    next_num = (result or 0) + 1
+    return f"BBL-{next_num:05d}"
+
+@app.get("/api/buybacks")
+def list_buybacks(
+    status: str = None, project_id: str = None, customer_id: str = None,
+    start_date: str = None, end_date: str = None, limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """List all buybacks with filters"""
+    q = db.query(Buyback)
+
+    if status:
+        q = q.filter(Buyback.status == status)
+    if project_id:
+        # Filter by project via inventory
+        proj = db.query(Project).filter((Project.id == project_id) | (Project.project_id == project_id)).first()
+        if proj:
+            inv_ids = [i.id for i in db.query(Inventory).filter(Inventory.project_id == proj.id).all()]
+            q = q.filter(Buyback.inventory_id.in_(inv_ids))
+    if customer_id:
+        cust = db.query(Customer).filter((Customer.id == customer_id) | (Customer.customer_id == customer_id) | (Customer.mobile == customer_id)).first()
+        if cust:
+            q = q.filter(Buyback.original_customer_id == cust.id)
+    if start_date:
+        q = q.filter(Buyback.buyback_date >= date.fromisoformat(start_date))
+    if end_date:
+        q = q.filter(Buyback.buyback_date <= date.fromisoformat(end_date))
+
+    buybacks = q.order_by(Buyback.created_at.desc()).limit(limit).all()
+    result = []
+
+    for b in buybacks:
+        txn = db.query(Transaction).filter(Transaction.id == b.original_transaction_id).first()
+        inv = db.query(Inventory).filter(Inventory.id == b.inventory_id).first()
+        cust = db.query(Customer).filter(Customer.id == b.original_customer_id).first()
+        proj = db.query(Project).filter(Project.id == inv.project_id).first() if inv else None
+        initiator = db.query(CompanyRep).filter(CompanyRep.id == b.initiated_by_rep_id).first() if b.initiated_by_rep_id else None
+
+        result.append({
+            "id": str(b.id),
+            "buyback_id": b.buyback_id,
+            "transaction_id": txn.transaction_id if txn else None,
+            "inventory_id": inv.inventory_id if inv else None,
+            "unit_number": inv.unit_number if inv else None,
+            "block": inv.block if inv else None,
+            "area_marla": float(inv.area_marla) if inv else None,
+            "project_name": proj.name if proj else None,
+            "project_id": proj.project_id if proj else None,
+            "customer_name": cust.name if cust else None,
+            "customer_mobile": cust.mobile if cust else None,
+            "original_sale_price": float(b.original_sale_price),
+            "buyback_price": float(b.buyback_price),
+            "buyback_profit_rate": float(b.buyback_profit_rate),
+            "reinventory_price": float(b.reinventory_price),
+            "reinventory_markup_rate": float(b.reinventory_markup_rate),
+            "company_cost": float(b.company_cost_manual or b.company_cost_auto or 0),
+            "settlement_type": b.settlement_type,
+            "settlement_amount": float(b.settlement_amount) if b.settlement_amount else None,
+            "amount_paid_to_customer": float(b.amount_paid_to_customer or 0),
+            "balance_due": float((b.settlement_amount or b.buyback_price) - (b.amount_paid_to_customer or 0)),
+            "reason": b.reason,
+            "status": b.status,
+            "initiated_by": initiator.name if initiator else None,
+            "buyback_date": str(b.buyback_date) if b.buyback_date else None,
+            "completion_date": str(b.completion_date) if b.completion_date else None,
+            "created_at": str(b.created_at)
+        })
+
+    return result
+
+@app.get("/api/buybacks/summary")
+def get_buybacks_summary(project_id: str = None, db: Session = Depends(get_db)):
+    """Get buyback statistics"""
+    q = db.query(Buyback)
+
+    if project_id:
+        proj = db.query(Project).filter((Project.id == project_id) | (Project.project_id == project_id)).first()
+        if proj:
+            inv_ids = [i.id for i in db.query(Inventory).filter(Inventory.project_id == proj.id).all()]
+            q = q.filter(Buyback.inventory_id.in_(inv_ids))
+
+    today = date.today()
+    month_start = today.replace(day=1)
+
+    total_buybacks = q.count()
+    pending_count = q.filter(Buyback.status == "pending").count()
+    approved_count = q.filter(Buyback.status == "approved").count()
+    in_progress_count = q.filter(Buyback.status == "in_progress").count()
+    completed_count = q.filter(Buyback.status == "completed").count()
+    cancelled_count = q.filter(Buyback.status == "cancelled").count()
+
+    total_buyback_value = q.filter(Buyback.status == "completed").with_entities(func.sum(Buyback.buyback_price)).scalar() or 0
+    total_paid_out = q.filter(Buyback.status == "completed").with_entities(func.sum(Buyback.amount_paid_to_customer)).scalar() or 0
+
+    month_completed = q.filter(Buyback.completion_date >= month_start, Buyback.status == "completed").count()
+    month_value = q.filter(Buyback.completion_date >= month_start, Buyback.status == "completed").with_entities(func.sum(Buyback.buyback_price)).scalar() or 0
+
+    # Pending payments (approved/in_progress with balance due)
+    pending_payments = 0
+    active_buybacks = db.query(Buyback).filter(Buyback.status.in_(["approved", "in_progress"])).all()
+    for b in active_buybacks:
+        settlement = float(b.settlement_amount or b.buyback_price)
+        paid = float(b.amount_paid_to_customer or 0)
+        pending_payments += (settlement - paid)
+
+    return {
+        "total_buybacks": total_buybacks,
+        "by_status": {
+            "pending": pending_count,
+            "approved": approved_count,
+            "in_progress": in_progress_count,
+            "completed": completed_count,
+            "cancelled": cancelled_count
+        },
+        "total_buyback_value": float(total_buyback_value),
+        "total_paid_out": float(total_paid_out),
+        "pending_payments": pending_payments,
+        "month_completed": month_completed,
+        "month_value": float(month_value)
+    }
+
+@app.get("/api/buybacks/{bid}")
+def get_buyback(bid: str, db: Session = Depends(get_db)):
+    """Get buyback details with ledger"""
+    b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Buyback not found")
+
+    txn = db.query(Transaction).filter(Transaction.id == b.original_transaction_id).first()
+    inv = db.query(Inventory).filter(Inventory.id == b.inventory_id).first()
+    cust = db.query(Customer).filter(Customer.id == b.original_customer_id).first()
+    proj = db.query(Project).filter(Project.id == inv.project_id).first() if inv else None
+    initiator = db.query(CompanyRep).filter(CompanyRep.id == b.initiated_by_rep_id).first() if b.initiated_by_rep_id else None
+    approver = db.query(CompanyRep).filter(CompanyRep.id == b.approved_by_rep_id).first() if b.approved_by_rep_id else None
+
+    # Get ledger entries
+    ledger_entries = db.query(BuybackLedger).filter(BuybackLedger.buyback_id == b.id).order_by(BuybackLedger.payment_date.desc()).all()
+    ledger = []
+    for le in ledger_entries:
+        rep = db.query(CompanyRep).filter(CompanyRep.id == le.created_by_rep_id).first() if le.created_by_rep_id else None
+        ledger.append({
+            "id": str(le.id),
+            "ledger_id": le.ledger_id,
+            "entry_type": le.entry_type,
+            "amount": float(le.amount),
+            "payment_method": le.payment_method,
+            "reference_number": le.reference_number,
+            "payment_date": str(le.payment_date) if le.payment_date else None,
+            "notes": le.notes,
+            "created_by": rep.name if rep else None,
+            "created_at": str(le.created_at)
+        })
+
+    # Get installments status from original transaction
+    installments = []
+    if txn:
+        insts = db.query(Installment).filter(Installment.transaction_id == txn.id).order_by(Installment.installment_number).all()
+        for inst in insts:
+            installments.append({
+                "number": inst.installment_number,
+                "amount": float(inst.amount),
+                "amount_paid": float(inst.amount_paid or 0),
+                "status": inst.status,
+                "due_date": str(inst.due_date) if inst.due_date else None
+            })
+
+    return {
+        "id": str(b.id),
+        "buyback_id": b.buyback_id,
+        "transaction": {
+            "id": str(txn.id) if txn else None,
+            "transaction_id": txn.transaction_id if txn else None,
+            "booking_date": str(txn.booking_date) if txn and txn.booking_date else None,
+            "total_value": float(txn.total_value) if txn else None,
+            "broker_commission_rate": float(txn.broker_commission_rate) if txn and txn.broker_commission_rate else None
+        },
+        "inventory": {
+            "id": str(inv.id) if inv else None,
+            "inventory_id": inv.inventory_id if inv else None,
+            "unit_number": inv.unit_number if inv else None,
+            "block": inv.block if inv else None,
+            "area_marla": float(inv.area_marla) if inv else None,
+            "current_rate": float(inv.rate_per_marla) if inv else None,
+            "status": inv.status if inv else None
+        },
+        "customer": {
+            "id": str(cust.id) if cust else None,
+            "customer_id": cust.customer_id if cust else None,
+            "name": cust.name if cust else None,
+            "mobile": cust.mobile if cust else None
+        },
+        "project": {
+            "id": str(proj.id) if proj else None,
+            "project_id": proj.project_id if proj else None,
+            "name": proj.name if proj else None
+        },
+        "original_sale_price": float(b.original_sale_price),
+        "buyback_price": float(b.buyback_price),
+        "buyback_profit_rate": float(b.buyback_profit_rate),
+        "reinventory_price": float(b.reinventory_price),
+        "reinventory_markup_rate": float(b.reinventory_markup_rate),
+        "original_commission_amount": float(b.original_commission_amount or 0),
+        "company_cost_auto": float(b.company_cost_auto) if b.company_cost_auto else None,
+        "company_cost_manual": float(b.company_cost_manual) if b.company_cost_manual else None,
+        "company_cost_override": b.company_cost_override,
+        "company_cost": float(b.company_cost_manual or b.company_cost_auto or 0),
+        "settlement_type": b.settlement_type,
+        "settlement_amount": float(b.settlement_amount) if b.settlement_amount else float(b.buyback_price),
+        "amount_paid_to_customer": float(b.amount_paid_to_customer or 0),
+        "balance_due": float((b.settlement_amount or b.buyback_price) - (b.amount_paid_to_customer or 0)),
+        "reason": b.reason,
+        "notes": b.notes,
+        "status": b.status,
+        "initiated_by": {"id": str(initiator.id), "name": initiator.name, "rep_id": initiator.rep_id} if initiator else None,
+        "approved_by": {"id": str(approver.id), "name": approver.name, "rep_id": approver.rep_id} if approver else None,
+        "approved_at": str(b.approved_at) if b.approved_at else None,
+        "buyback_date": str(b.buyback_date) if b.buyback_date else None,
+        "completion_date": str(b.completion_date) if b.completion_date else None,
+        "created_at": str(b.created_at),
+        "ledger": ledger,
+        "installments": installments
+    }
+
+@app.post("/api/buybacks")
+def create_buyback(data: dict, db: Session = Depends(get_db)):
+    """Initiate a buyback for a sold transaction"""
+    # Find original transaction
+    txn = db.query(Transaction).filter(
+        (Transaction.id == data.get("transaction_id")) |
+        (Transaction.transaction_id == data.get("transaction_id"))
+    ).first()
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if txn.status != "active":
+        raise HTTPException(status_code=400, detail=f"Transaction is not active (status: {txn.status})")
+
+    # Check if already has pending buyback
+    existing = db.query(Buyback).filter(
+        Buyback.original_transaction_id == txn.id,
+        Buyback.status.in_(["pending", "approved", "in_progress"])
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Transaction already has an active buyback ({existing.buyback_id})")
+
+    # Get inventory
+    inv = db.query(Inventory).filter(Inventory.id == txn.inventory_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventory not found")
+    if inv.status != "sold":
+        raise HTTPException(status_code=400, detail=f"Inventory is not sold (status: {inv.status})")
+
+    # Get initiator
+    initiator = None
+    if data.get("initiated_by_rep_id"):
+        initiator = db.query(CompanyRep).filter(
+            (CompanyRep.id == data["initiated_by_rep_id"]) | (CompanyRep.rep_id == data["initiated_by_rep_id"])
+        ).first()
+
+    # Calculate prices
+    original_price = float(txn.total_value)
+    commission_rate = float(txn.broker_commission_rate or 0)
+    commission_amount = original_price * commission_rate / 100
+
+    profit_rate = float(data.get("buyback_profit_rate", 5.0))
+    markup_rate = float(data.get("reinventory_markup_rate", 2.0))
+
+    buyback_price = original_price * (1 + profit_rate / 100)
+    reinventory_price = buyback_price * (1 + markup_rate / 100)
+
+    # Calculate company cost (what the company nets after all is said and done)
+    # Net = Original Sale - Commission Paid - Buyback Profit Paid
+    company_cost = original_price - commission_amount - (original_price * profit_rate / 100)
+
+    # Settlement amount (may be negotiated)
+    settlement_type = data.get("settlement_type", "full")
+    if settlement_type == "full":
+        settlement_amount = buyback_price
+    else:
+        settlement_amount = float(data.get("settlement_amount", buyback_price))
+
+    # Create buyback
+    buyback = Buyback(
+        buyback_id=generate_buyback_id(db),
+        original_transaction_id=txn.id,
+        inventory_id=inv.id,
+        original_customer_id=txn.customer_id,
+        original_sale_price=original_price,
+        buyback_price=buyback_price,
+        buyback_profit_rate=profit_rate,
+        reinventory_price=reinventory_price,
+        reinventory_markup_rate=markup_rate,
+        original_commission_amount=commission_amount,
+        company_cost_auto=company_cost,
+        settlement_type=settlement_type,
+        settlement_amount=settlement_amount,
+        reason=data.get("reason"),
+        notes=data.get("notes"),
+        status="pending",
+        initiated_by_rep_id=initiator.id if initiator else None,
+        buyback_date=date.fromisoformat(data["buyback_date"]) if data.get("buyback_date") else date.today()
+    )
+    db.add(buyback)
+
+    # Update inventory status
+    inv.status = "buyback_pending"
+
+    # Create plot history entry
+    history = PlotHistory(
+        inventory_id=inv.id,
+        event_type="buyback_initiated",
+        event_date=buyback.buyback_date,
+        previous_owner_id=txn.customer_id,
+        transaction_id=txn.id,
+        price_at_event=buyback_price,
+        rate_per_marla=float(inv.rate_per_marla),
+        notes=f"Buyback initiated: {data.get('reason', 'No reason specified')}",
+        created_by_rep_id=initiator.id if initiator else None
+    )
+    db.add(history)
+
+    db.commit()
+    db.refresh(buyback)
+
+    # Sync Vector branches to reflect buyback_pending status
+    sync_vector_branches_from_orbit(inv.project_id, db)
+
+    return {
+        "message": "Buyback initiated",
+        "id": str(buyback.id),
+        "buyback_id": buyback.buyback_id,
+        "status": buyback.status,
+        "original_sale_price": float(buyback.original_sale_price),
+        "buyback_price": float(buyback.buyback_price),
+        "reinventory_price": float(buyback.reinventory_price),
+        "company_cost": float(buyback.company_cost_auto)
+    }
+
+@app.put("/api/buybacks/{bid}")
+def update_buyback(bid: str, data: dict, db: Session = Depends(get_db)):
+    """Update buyback details (rates, settlement, notes)"""
+    b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Buyback not found")
+
+    if b.status == "completed":
+        raise HTTPException(status_code=400, detail="Cannot update completed buyback")
+
+    # Recalculate if rates changed
+    if "buyback_profit_rate" in data or "reinventory_markup_rate" in data:
+        profit_rate = float(data.get("buyback_profit_rate", b.buyback_profit_rate))
+        markup_rate = float(data.get("reinventory_markup_rate", b.reinventory_markup_rate))
+        original_price = float(b.original_sale_price)
+
+        buyback_price = original_price * (1 + profit_rate / 100)
+        reinventory_price = buyback_price * (1 + markup_rate / 100)
+        commission = float(b.original_commission_amount or 0)
+        company_cost = original_price - commission - (original_price * profit_rate / 100)
+
+        b.buyback_profit_rate = profit_rate
+        b.reinventory_markup_rate = markup_rate
+        b.buyback_price = buyback_price
+        b.reinventory_price = reinventory_price
+        b.company_cost_auto = company_cost
+
+        # Update settlement if it was full
+        if b.settlement_type == "full":
+            b.settlement_amount = buyback_price
+
+    # Update other fields
+    if "settlement_type" in data:
+        b.settlement_type = data["settlement_type"]
+    if "settlement_amount" in data:
+        b.settlement_amount = float(data["settlement_amount"])
+    if "reason" in data:
+        b.reason = data["reason"]
+    if "notes" in data:
+        b.notes = data["notes"]
+    if "company_cost_manual" in data:
+        b.company_cost_manual = float(data["company_cost_manual"])
+        b.company_cost_override = "true"
+
+    db.commit()
+    return {"message": "Buyback updated", "buyback_id": b.buyback_id}
+
+@app.delete("/api/buybacks/{bid}")
+def cancel_buyback(bid: str, db: Session = Depends(get_db)):
+    """Cancel a pending buyback"""
+    b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Buyback not found")
+
+    if b.status not in ["pending", "approved"]:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel buyback with status: {b.status}")
+
+    # Restore inventory status
+    inv = db.query(Inventory).filter(Inventory.id == b.inventory_id).first()
+    if inv and inv.status == "buyback_pending":
+        inv.status = "sold"
+
+    b.status = "cancelled"
+
+    # Add history entry
+    history = PlotHistory(
+        inventory_id=b.inventory_id,
+        event_type="buyback_cancelled",
+        event_date=date.today(),
+        buyback_id=b.id,
+        notes="Buyback cancelled"
+    )
+    db.add(history)
+
+    db.commit()
+
+    # Sync Vector branches to reflect status change back to sold
+    if inv:
+        sync_vector_branches_from_orbit(inv.project_id, db)
+
+    return {"message": "Buyback cancelled", "buyback_id": b.buyback_id}
+
+@app.post("/api/buybacks/{bid}/approve")
+def approve_buyback(bid: str, data: dict, db: Session = Depends(get_db)):
+    """Approve a pending buyback"""
+    b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Buyback not found")
+
+    if b.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Buyback is not pending (status: {b.status})")
+
+    approver = None
+    if data.get("approved_by_rep_id"):
+        approver = db.query(CompanyRep).filter(
+            (CompanyRep.id == data["approved_by_rep_id"]) | (CompanyRep.rep_id == data["approved_by_rep_id"])
+        ).first()
+
+    b.status = "approved"
+    b.approved_by_rep_id = approver.id if approver else None
+    b.approved_at = datetime.utcnow()
+
+    db.commit()
+    return {
+        "message": "Buyback approved",
+        "buyback_id": b.buyback_id,
+        "status": b.status,
+        "approved_at": str(b.approved_at)
+    }
+
+@app.post("/api/buybacks/{bid}/complete")
+def complete_buyback(bid: str, data: dict, db: Session = Depends(get_db)):
+    """Complete buyback and re-add inventory"""
+    b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Buyback not found")
+
+    if b.status not in ["approved", "in_progress"]:
+        raise HTTPException(status_code=400, detail=f"Buyback must be approved first (status: {b.status})")
+
+    inv = db.query(Inventory).filter(Inventory.id == b.inventory_id).first()
+    txn = db.query(Transaction).filter(Transaction.id == b.original_transaction_id).first()
+
+    # 1. Update original transaction
+    if txn:
+        txn.status = "bought_back"
+        txn.buyback_id = b.id
+
+    # 2. Clear pending installments
+    if txn:
+        pending_installments = db.query(Installment).filter(
+            Installment.transaction_id == txn.id,
+            Installment.status.in_(["pending", "partial"])
+        ).all()
+        for inst in pending_installments:
+            inst.status = "cleared_buyback"
+            inst.notes = f"Cleared via buyback {b.buyback_id}" + (f" | {inst.notes}" if inst.notes else "")
+
+    # 3. Update inventory for re-listing
+    if inv:
+        # Store original price if not already stored
+        if not inv.original_listing_price:
+            inv.original_listing_price = float(inv.area_marla) * float(inv.rate_per_marla)
+
+        inv.status = "available"
+        inv.rate_per_marla = float(b.reinventory_price) / float(inv.area_marla)
+        inv.buyback_count = (inv.buyback_count or 0) + 1
+        inv.last_buyback_id = b.id
+        inv.company_cost = float(b.company_cost_manual or b.company_cost_auto or 0)
+
+    # 4. Create plot history entry
+    history = PlotHistory(
+        inventory_id=b.inventory_id,
+        event_type="buyback",
+        event_date=data.get("completion_date") and date.fromisoformat(data["completion_date"]) or date.today(),
+        previous_owner_id=txn.customer_id if txn else None,
+        new_owner_id=None,  # Now company-owned
+        transaction_id=txn.id if txn else None,
+        buyback_id=b.id,
+        price_at_event=float(b.buyback_price),
+        rate_per_marla=float(inv.rate_per_marla) if inv else None,
+        notes=b.reason
+    )
+    db.add(history)
+
+    # 5. Update buyback record
+    b.status = "completed"
+    b.completion_date = data.get("completion_date") and date.fromisoformat(data["completion_date"]) or date.today()
+    if data.get("final_notes"):
+        b.notes = (b.notes or "") + f"\n\nCompletion: {data['final_notes']}"
+
+    db.commit()
+
+    # Sync Vector branches to reflect plot is now available (and mark as resold if applicable)
+    if inv:
+        sync_vector_branches_from_orbit(inv.project_id, db)
+
+    return {
+        "message": "Buyback completed",
+        "buyback_id": b.buyback_id,
+        "status": "completed",
+        "inventory_status": inv.status if inv else None,
+        "new_rate_per_marla": float(inv.rate_per_marla) if inv else None
+    }
+
+# Buyback Ledger Endpoints
+@app.get("/api/buybacks/{bid}/ledger")
+def get_buyback_ledger(bid: str, db: Session = Depends(get_db)):
+    """Get all ledger entries for a buyback"""
+    b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Buyback not found")
+
+    entries = db.query(BuybackLedger).filter(BuybackLedger.buyback_id == b.id).order_by(BuybackLedger.payment_date.desc()).all()
+    result = []
+    for e in entries:
+        rep = db.query(CompanyRep).filter(CompanyRep.id == e.created_by_rep_id).first() if e.created_by_rep_id else None
+        result.append({
+            "id": str(e.id),
+            "ledger_id": e.ledger_id,
+            "entry_type": e.entry_type,
+            "amount": float(e.amount),
+            "payment_method": e.payment_method,
+            "reference_number": e.reference_number,
+            "payment_date": str(e.payment_date) if e.payment_date else None,
+            "notes": e.notes,
+            "created_by": rep.name if rep else None,
+            "created_at": str(e.created_at)
+        })
+
+    return {
+        "buyback_id": b.buyback_id,
+        "settlement_amount": float(b.settlement_amount or b.buyback_price),
+        "total_paid": float(b.amount_paid_to_customer or 0),
+        "balance_due": float((b.settlement_amount or b.buyback_price) - (b.amount_paid_to_customer or 0)),
+        "entries": result
+    }
+
+@app.post("/api/buybacks/{bid}/ledger")
+def add_ledger_entry(bid: str, data: dict, db: Session = Depends(get_db)):
+    """Record a payment to customer"""
+    b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Buyback not found")
+
+    if b.status == "completed":
+        raise HTTPException(status_code=400, detail="Buyback is already completed")
+    if b.status == "cancelled":
+        raise HTTPException(status_code=400, detail="Buyback is cancelled")
+
+    # Get rep
+    rep = None
+    if data.get("created_by_rep_id"):
+        rep = db.query(CompanyRep).filter(
+            (CompanyRep.id == data["created_by_rep_id"]) | (CompanyRep.rep_id == data["created_by_rep_id"])
+        ).first()
+
+    amount = float(data.get("amount", 0))
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    entry = BuybackLedger(
+        ledger_id=generate_ledger_id(db),
+        buyback_id=b.id,
+        entry_type=data.get("entry_type", "payment_to_customer"),
+        amount=amount,
+        payment_method=data.get("payment_method"),
+        reference_number=data.get("reference_number"),
+        payment_date=date.fromisoformat(data["payment_date"]) if data.get("payment_date") else date.today(),
+        notes=data.get("notes"),
+        created_by_rep_id=rep.id if rep else None
+    )
+    db.add(entry)
+
+    # Update buyback total paid
+    b.amount_paid_to_customer = float(b.amount_paid_to_customer or 0) + amount
+
+    # Update status to in_progress if it was approved
+    if b.status == "approved":
+        b.status = "in_progress"
+
+    db.commit()
+    db.refresh(entry)
+
+    settlement = float(b.settlement_amount or b.buyback_price)
+    total_paid = float(b.amount_paid_to_customer or 0)
+
+    return {
+        "message": "Ledger entry created",
+        "ledger_id": entry.ledger_id,
+        "total_paid": total_paid,
+        "balance_remaining": settlement - total_paid
+    }
+
+@app.delete("/api/buybacks/{bid}/ledger/{lid}")
+def delete_ledger_entry(bid: str, lid: str, db: Session = Depends(get_db)):
+    """Reverse a ledger entry"""
+    b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Buyback not found")
+
+    entry = db.query(BuybackLedger).filter(
+        (BuybackLedger.id == lid) | (BuybackLedger.ledger_id == lid),
+        BuybackLedger.buyback_id == b.id
+    ).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Ledger entry not found")
+
+    # Reverse the amount
+    b.amount_paid_to_customer = max(0, float(b.amount_paid_to_customer or 0) - float(entry.amount))
+
+    db.delete(entry)
+    db.commit()
+
+    return {"message": "Ledger entry deleted", "new_total_paid": float(b.amount_paid_to_customer)}
+
+# Plot History Endpoint
+@app.get("/api/inventory/{iid}/history")
+def get_plot_history(iid: str, db: Session = Depends(get_db)):
+    """Get ownership timeline for a plot"""
+    inv = db.query(Inventory).filter(
+        (Inventory.id == iid) | (Inventory.inventory_id == iid)
+    ).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventory not found")
+
+    proj = db.query(Project).filter(Project.id == inv.project_id).first()
+
+    # Get all history entries
+    entries = db.query(PlotHistory).filter(PlotHistory.inventory_id == inv.id).order_by(PlotHistory.event_date.desc(), PlotHistory.created_at.desc()).all()
+
+    history = []
+    for h in entries:
+        prev_owner = db.query(Customer).filter(Customer.id == h.previous_owner_id).first() if h.previous_owner_id else None
+        new_owner = db.query(Customer).filter(Customer.id == h.new_owner_id).first() if h.new_owner_id else None
+        txn = db.query(Transaction).filter(Transaction.id == h.transaction_id).first() if h.transaction_id else None
+        buyback = db.query(Buyback).filter(Buyback.id == h.buyback_id).first() if h.buyback_id else None
+
+        history.append({
+            "id": str(h.id),
+            "event_type": h.event_type,
+            "event_date": str(h.event_date) if h.event_date else None,
+            "previous_owner": {"name": prev_owner.name, "customer_id": prev_owner.customer_id} if prev_owner else None,
+            "new_owner": {"name": new_owner.name, "customer_id": new_owner.customer_id} if new_owner else None,
+            "transaction_id": txn.transaction_id if txn else None,
+            "buyback_id": buyback.buyback_id if buyback else None,
+            "price_at_event": float(h.price_at_event) if h.price_at_event else None,
+            "rate_per_marla": float(h.rate_per_marla) if h.rate_per_marla else None,
+            "notes": h.notes,
+            "created_at": str(h.created_at)
+        })
+
+    return {
+        "inventory_id": inv.inventory_id,
+        "unit_number": inv.unit_number,
+        "block": inv.block,
+        "area_marla": float(inv.area_marla),
+        "current_rate": float(inv.rate_per_marla),
+        "current_status": inv.status,
+        "buyback_count": inv.buyback_count or 0,
+        "project": {"project_id": proj.project_id, "name": proj.name} if proj else None,
+        "company_cost": float(inv.company_cost) if inv.company_cost else None,
+        "original_listing_price": float(inv.original_listing_price) if inv.original_listing_price else None,
+        "history": history
+    }
+
+# Costing Endpoints
+@app.get("/api/costing/project/{pid}")
+def get_project_costing(pid: str, db: Session = Depends(get_db)):
+    """Get project-level costing summary"""
+    proj = db.query(Project).filter((Project.id == pid) | (Project.project_id == pid)).first()
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    inventory = db.query(Inventory).filter(Inventory.project_id == proj.id).all()
+
+    total_units = len(inventory)
+    available_units = sum(1 for i in inventory if i.status == "available")
+    sold_units = sum(1 for i in inventory if i.status == "sold")
+    buyback_pending_units = sum(1 for i in inventory if i.status == "buyback_pending")
+
+    # Calculate values
+    total_current_value = sum(float(i.area_marla) * float(i.rate_per_marla) for i in inventory)
+    total_company_cost = sum(float(i.company_cost or 0) for i in inventory if i.company_cost)
+    total_original_value = sum(float(i.original_listing_price or i.area_marla * i.rate_per_marla) for i in inventory)
+
+    # Buyback stats
+    buybacks = db.query(Buyback).filter(Buyback.inventory_id.in_([i.id for i in inventory])).all()
+    total_buybacks = len(buybacks)
+    completed_buybacks = sum(1 for b in buybacks if b.status == "completed")
+    total_buyback_value = sum(float(b.buyback_price) for b in buybacks if b.status == "completed")
+    total_profit_paid = sum(float(b.original_sale_price) * float(b.buyback_profit_rate) / 100 for b in buybacks if b.status == "completed")
+
+    # Per-unit breakdown
+    units = []
+    for inv in inventory:
+        current_value = float(inv.area_marla) * float(inv.rate_per_marla)
+        company_cost = float(inv.company_cost) if inv.company_cost else current_value
+        units.append({
+            "inventory_id": inv.inventory_id,
+            "unit_number": inv.unit_number,
+            "block": inv.block,
+            "area_marla": float(inv.area_marla),
+            "rate_per_marla": float(inv.rate_per_marla),
+            "current_value": current_value,
+            "company_cost": company_cost,
+            "net_margin": current_value - company_cost,
+            "status": inv.status,
+            "buyback_count": inv.buyback_count or 0
+        })
+
+    return {
+        "project_id": proj.project_id,
+        "project_name": proj.name,
+        "summary": {
+            "total_units": total_units,
+            "available_units": available_units,
+            "sold_units": sold_units,
+            "buyback_pending_units": buyback_pending_units,
+            "total_current_value": total_current_value,
+            "total_company_cost": total_company_cost,
+            "total_original_value": total_original_value,
+            "total_buybacks": total_buybacks,
+            "completed_buybacks": completed_buybacks,
+            "total_buyback_value": total_buyback_value,
+            "total_profit_paid": total_profit_paid
+        },
+        "units": units
+    }
+
+@app.get("/api/costing/plot/{iid}")
+def get_plot_costing(iid: str, db: Session = Depends(get_db)):
+    """Get plot-level costing details"""
+    inv = db.query(Inventory).filter((Inventory.id == iid) | (Inventory.inventory_id == iid)).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventory not found")
+
+    proj = db.query(Project).filter(Project.id == inv.project_id).first()
+
+    current_value = float(inv.area_marla) * float(inv.rate_per_marla)
+    company_cost = float(inv.company_cost) if inv.company_cost else None
+    original_value = float(inv.original_listing_price) if inv.original_listing_price else current_value
+
+    # Get all buybacks for this plot
+    buybacks = db.query(Buyback).filter(Buyback.inventory_id == inv.id).order_by(Buyback.buyback_date.desc()).all()
+    buyback_history = []
+    total_profit_paid = 0
+    total_commission_paid = 0
+
+    for b in buybacks:
+        cust = db.query(Customer).filter(Customer.id == b.original_customer_id).first()
+        if b.status == "completed":
+            profit = float(b.original_sale_price) * float(b.buyback_profit_rate) / 100
+            total_profit_paid += profit
+            total_commission_paid += float(b.original_commission_amount or 0)
+
+        buyback_history.append({
+            "buyback_id": b.buyback_id,
+            "customer_name": cust.name if cust else None,
+            "original_sale_price": float(b.original_sale_price),
+            "buyback_price": float(b.buyback_price),
+            "profit_rate": float(b.buyback_profit_rate),
+            "profit_amount": float(b.original_sale_price) * float(b.buyback_profit_rate) / 100,
+            "reinventory_price": float(b.reinventory_price),
+            "status": b.status,
+            "buyback_date": str(b.buyback_date) if b.buyback_date else None
+        })
+
+    # Net Price per Marla = Current Rate - (Total Profit Paid + Total Commission) / Area
+    deductions_per_marla = (total_profit_paid + total_commission_paid) / float(inv.area_marla) if inv.area_marla else 0
+    net_price_per_marla = float(inv.rate_per_marla) - deductions_per_marla if inv.buyback_count else float(inv.rate_per_marla)
+
+    return {
+        "inventory_id": inv.inventory_id,
+        "unit_number": inv.unit_number,
+        "block": inv.block,
+        "project": {"project_id": proj.project_id, "name": proj.name} if proj else None,
+        "area_marla": float(inv.area_marla),
+        "current_rate_per_marla": float(inv.rate_per_marla),
+        "current_value": current_value,
+        "original_value": original_value,
+        "company_cost": company_cost,
+        "status": inv.status,
+        "buyback_count": inv.buyback_count or 0,
+        "costing_breakdown": {
+            "total_profit_paid": total_profit_paid,
+            "total_commission_paid": total_commission_paid,
+            "total_deductions": total_profit_paid + total_commission_paid,
+            "deductions_per_marla": deductions_per_marla,
+            "net_price_per_marla": net_price_per_marla
+        },
+        "buyback_history": buyback_history
+    }
 
 # ============================================
 # DASHBOARD API

@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS projects (
     location VARCHAR(255),
     description TEXT,
     status VARCHAR(20) DEFAULT 'active',
+    -- Vector Map fields (for InventoryMapViewer feature)
+    map_pdf_base64 TEXT,
+    map_name VARCHAR(255),
+    map_size JSONB,
+    vector_metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -115,6 +120,8 @@ CREATE TABLE IF NOT EXISTS company_reps (
     name VARCHAR(255) NOT NULL,
     mobile VARCHAR(20),
     email VARCHAR(255),
+    password_hash VARCHAR(255),
+    role VARCHAR(50) DEFAULT 'user',
     status VARCHAR(20) DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -149,6 +156,10 @@ CREATE TABLE IF NOT EXISTS inventory (
     status VARCHAR(20) DEFAULT 'available',
     factor_details TEXT,
     notes TEXT,
+    -- Vector Map fields (plot coordinates for map rendering)
+    plot_coordinates JSONB,
+    plot_offset JSONB,
+    is_manual_plot VARCHAR(10) DEFAULT 'false',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
