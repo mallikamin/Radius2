@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { downloadProjectJSON } from '../../utils/projectLoader';
+import { rotateSelectedPlots } from '../../utils/plotUtils';
 import axios from 'axios';
 
 export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool, setTool, displayMode, setDisplayMode, onZoomIn, onZoomOut, onFitToScreen }) {
@@ -344,6 +345,51 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
               {t.icon || t.label}
             </button>
           ))}
+        </div>
+
+        <div className="w-px h-5 bg-gray-700 mx-1" />
+
+        {/* Rotation Buttons */}
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => {
+              if (vectorState.selected && vectorState.selected.size > 0) {
+                const newRotations = rotateSelectedPlots(vectorState.selected, vectorState.plotRotations, -15);
+                vectorState.setPlotRotations(newRotations);
+              }
+            }}
+            className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
+            style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
+            title="Rotate selected -15°"
+          >
+            ↶
+          </button>
+          <button
+            onClick={() => {
+              if (vectorState.selected && vectorState.selected.size > 0) {
+                const newRotations = rotateSelectedPlots(vectorState.selected, vectorState.plotRotations, 15);
+                vectorState.setPlotRotations(newRotations);
+              }
+            }}
+            className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
+            style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
+            title="Rotate selected +15°"
+          >
+            ↷
+          </button>
+          <button
+            onClick={() => {
+              if (vectorState.selected && vectorState.selected.size > 0) {
+                const newRotations = rotateSelectedPlots(vectorState.selected, vectorState.plotRotations, 0, true);
+                vectorState.setPlotRotations(newRotations);
+              }
+            }}
+            className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
+            style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
+            title="Reset rotation"
+          >
+            ⟲
+          </button>
         </div>
 
         <div className="w-px h-5 bg-gray-700 mx-1" />

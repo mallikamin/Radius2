@@ -191,6 +191,12 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
         const isSel = vectorState.selected.has(p.id);
         const isHovered = hoveredPlotId === p.id;
 
+        // Skip plots not in active annotation when filtered view is active
+        if (isFilteredView) {
+          if (anno && anno.id !== activeView) return;
+          if (!anno) return;
+        }
+
         // Skip non-annotated manual plots if hide setting is on
         if (vectorState.hideNonAnnotatedManualPlots && p.manual && !anno) {
           if (isSel || isHovered) {
@@ -215,20 +221,42 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
           return;
         }
 
-        // Draw manual plot indicator
+        // Draw manual plot indicator (clean pill style)
         if (p.manual && !anno) {
-          ctx.strokeStyle = '#f59e0b';
-          ctx.lineWidth = 1;
-          ctx.setLineDash([3, 3]);
-          const size = Math.max((p.w || 20), (p.h || 14)) * 1.3;
-          ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
-          ctx.setLineDash([]);
+          const mFont = 'bold 10px Arial';
+          ctx.font = mFont;
+          const mTextW = ctx.measureText(p.n).width;
+          const mw = Math.max(mTextW + 8, 18);
+          const mh = 14;
+          const mx = p.x - mw / 2;
+          const my = p.y - mh / 2;
+          const mr = 3; // border radius
 
-          ctx.fillStyle = '#f59e0b';
-          ctx.font = 'bold 8px Arial';
-          ctx.textAlign = 'right';
-          ctx.textBaseline = 'top';
-          ctx.fillText('M', p.x + size / 2 - 2, p.y - size / 2 + 2);
+          // Rounded rect background
+          ctx.fillStyle = '#f8f8f8';
+          ctx.beginPath();
+          ctx.moveTo(mx + mr, my);
+          ctx.lineTo(mx + mw - mr, my);
+          ctx.arcTo(mx + mw, my, mx + mw, my + mr, mr);
+          ctx.lineTo(mx + mw, my + mh - mr);
+          ctx.arcTo(mx + mw, my + mh, mx + mw - mr, my + mh, mr);
+          ctx.lineTo(mx + mr, my + mh);
+          ctx.arcTo(mx, my + mh, mx, my + mh - mr, mr);
+          ctx.lineTo(mx, my + mr);
+          ctx.arcTo(mx, my, mx + mr, my, mr);
+          ctx.closePath();
+          ctx.fill();
+
+          // Border
+          ctx.strokeStyle = '#9ca3af';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // Text
+          ctx.fillStyle = '#374151';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(p.n, p.x, p.y);
         }
 
         if (anno || isSel || p.manual || isHovered) {
@@ -347,11 +375,27 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
             ctx.textBaseline = 'middle';
             ctx.fillText(displayText, drawX, drawY);
           } else if (p.manual) {
-            // Manual plot text
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 3;
-            ctx.strokeText(displayText, drawX, drawY);
-            ctx.fillStyle = '#333';
+            // Manual plot - clean pill style with border
+            ctx.fillStyle = '#f8f8f8';
+            ctx.globalAlpha = 0.9;
+            const mr = 3;
+            ctx.beginPath();
+            ctx.moveTo(bx + mr, by);
+            ctx.lineTo(bx + bw - mr, by);
+            ctx.arcTo(bx + bw, by, bx + bw, by + mr, mr);
+            ctx.lineTo(bx + bw, by + bh - mr);
+            ctx.arcTo(bx + bw, by + bh, bx + bw - mr, by + bh, mr);
+            ctx.lineTo(bx + mr, by + bh);
+            ctx.arcTo(bx, by + bh, bx, by + bh - mr, mr);
+            ctx.lineTo(bx, by + mr);
+            ctx.arcTo(bx, by, bx + mr, by, mr);
+            ctx.closePath();
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = '#9ca3af';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = '#374151';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(displayText, drawX, drawY);
@@ -593,38 +637,35 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     
     // Handle add plot tool - works anywhere on map
     if (tool === 'add') {
-      // Try to auto-detect plot number from nearby text in PDF
       let suggestedPlotNum = '';
       try {
-        // Check if there's text near the click position (within 50px radius)
-        // This would require PDF text extraction at click point
-        // For now, we'll prompt but could enhance with OCR/text detection
-        const nearbyPlots = vectorState.plots.filter(p => {
-          const dx = p.x - mx;
-          const dy = p.y - my;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          return dist < 100; // Within 100 units
-        });
-        
-        // Suggest next plot number based on existing plots
-        if (nearbyPlots.length > 0) {
-          const plotNums = nearbyPlots
-            .map(p => {
-              const match = String(p.n).match(/(\d+)/);
-              return match ? parseInt(match[1]) : null;
-            })
-            .filter(n => n !== null)
-            .sort((a, b) => a - b);
-          
-          if (plotNums.length > 0) {
-            const maxNum = Math.max(...plotNums);
-            suggestedPlotNum = String(maxNum + 1);
+        // Strategy: Use last manually added plot number + 1 as primary suggestion.
+        // Fall back to global max plot number + 1.
+        const manualPlots = vectorState.plots.filter(p => p.manual);
+        const allNums = vectorState.plots
+          .map(p => { const m = String(p.n).match(/^(\d+)/); return m ? parseInt(m[1]) : null; })
+          .filter(n => n !== null);
+
+        if (manualPlots.length > 0) {
+          // Use the last manual plot added (highest ID = most recent)
+          const lastManual = manualPlots.reduce((a, b) => (a.id > b.id ? a : b));
+          const lastMatch = String(lastManual.n).match(/^(\d+)/);
+          if (lastMatch) {
+            const nextNum = parseInt(lastMatch[1]) + 1;
+            // Check if this number already exists
+            const exists = vectorState.plots.some(p => String(p.n) === String(nextNum));
+            suggestedPlotNum = exists ? '' : String(nextNum);
           }
         }
+
+        // Fallback: global max + 1
+        if (!suggestedPlotNum && allNums.length > 0) {
+          suggestedPlotNum = String(Math.max(...allNums) + 1);
+        }
       } catch (err) {
-        console.warn('Error in plot number detection:', err);
+        console.warn('Error in plot number suggestion:', err);
       }
-      
+
       const plotNum = prompt('Enter plot number:' + (suggestedPlotNum ? ` (suggested: ${suggestedPlotNum})` : ''), suggestedPlotNum);
       if (plotNum && plotNum.trim()) {
         const newPlot = {

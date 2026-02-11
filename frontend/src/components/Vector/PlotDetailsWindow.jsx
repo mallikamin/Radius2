@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { exportPlotDetailsToPDF } from '../../utils/exportUtils';
+import { exportPlotDetailsToPDF, exportProposalPDF } from '../../utils/exportUtils';
 
 export default function PlotDetailsWindow({ vectorState }) {
   const [visible, setVisible] = useState(false);
@@ -141,26 +141,10 @@ export default function PlotDetailsWindow({ vectorState }) {
             {/* Annotation info */}
             {anno && (
               <div className="bg-gray-50 p-2 rounded mb-3">
-                <div className="flex justify-between mb-1">
-                  <span className="text-gray-600">Annotation:</span>
-                  <span className="font-semibold" style={{ color: anno.color }}>
-                    {anno.note}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Plots in group:</span>
-                  <span className="font-semibold">{anno.plotIds.length}</span>
-                </div>
+                <div className="text-sm font-bold text-gray-800 mb-1">{anno.note}</div>
+                <div className="text-gray-500">{anno.plotIds.length} plots in group</div>
               </div>
             )}
-
-            {/* Coordinates */}
-            <div className="mb-3">
-              <div className="text-gray-600 mb-1">Coordinates:</div>
-              <div className="font-mono text-sm">
-                X: {Math.round(plot.x)}, Y: {Math.round(plot.y)}
-              </div>
-            </div>
 
             {/* Area (Marla) */}
             {inv.marla && (
@@ -253,9 +237,9 @@ export default function PlotDetailsWindow({ vectorState }) {
             <button
               onClick={() => {
                 // Copy functionality
-                const text = `Plot: ${plot.n}\nCoordinates: ${Math.round(plot.x)}, ${Math.round(plot.y)}\n${
+                const text = `Plot: ${plot.n}\n${
                   anno ? `Annotation: ${anno.note}\n` : ''
-                }${inv.marla ? `Marla: ${inv.marla}\n` : ''}${inv.totalValue ? `Total Value: ${formatCurrency(inv.totalValue)}\n` : ''}`;
+                }${inv.marla ? `Area: ${inv.marla} Marla\n` : ''}${inv.totalValue ? `Value: ${formatCurrency(inv.totalValue)}\n` : ''}${inv.owner ? `Owner: ${inv.owner}\n` : ''}`;
                 navigator.clipboard.writeText(text);
                 alert('Copied to clipboard');
               }}
@@ -275,6 +259,21 @@ export default function PlotDetailsWindow({ vectorState }) {
               title={vectorState.selected.size > 0 ? `Export ${vectorState.selected.size} selected plots` : 'Export this plot'}
             >
               📄 Export PDF {vectorState.selected.size > 0 ? `(${vectorState.selected.size})` : ''}
+            </button>
+            <button
+              onClick={() => {
+                const plotsToExport = vectorState.selected.size > 0
+                  ? Array.from(vectorState.selected).map(id => vectorState.plots.find(p => p.id === id)).filter(Boolean)
+                  : [plot];
+                exportProposalPDF(plotsToExport, vectorState,
+                  { owner: true, value: true, area: true, status: true, notes: true, ratePerMarla: true, dimensions: true, coordinates: false, annotationInfo: true },
+                  { zoomLevels: [1.0, 0.50], quality: 2, includeLegend: true, includeHeader: true, separateFiles: false }
+                );
+              }}
+              className="flex-1 px-2 py-1 text-xs bg-orange-600 text-white rounded hover:bg-orange-700 mt-1"
+              title="Export proposal PDF with map views + details"
+            >
+              📑 Proposal
             </button>
           </div>
         </>

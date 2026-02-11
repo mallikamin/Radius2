@@ -42,6 +42,16 @@ def get_db():
     finally:
         db.close()
 
+def find_entity(db, model, id_field_name, value):
+    """Safely lookup by UUID id or string entity_id (handles non-UUID strings)"""
+    try:
+        uuid.UUID(str(value))
+        return db.query(model).filter(
+            (model.id == value) | (getattr(model, id_field_name) == value)
+        ).first()
+    except ValueError:
+        return db.query(model).filter(getattr(model, id_field_name) == value).first()
+
 # ============================================
 # MODELS
 # ============================================
@@ -388,6 +398,24 @@ class PlotHistory(Base):
     notes = Column(Text)
     created_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     created_at = Column(DateTime, server_default=func.now())
+
+# ============================================
+# DELETION REQUESTS (Soft-delete approval workflow)
+# ============================================
+class DeletionRequest(Base):
+    __tablename__ = "deletion_requests"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_id = Column(String(20), unique=True, nullable=False)
+    entity_type = Column(String(50), nullable=False)
+    entity_id = Column(UUID(as_uuid=True), nullable=False)
+    entity_name = Column(String(255))
+    requested_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    requested_at = Column(DateTime, server_default=func.now())
+    reason = Column(Text)
+    status = Column(String(20), default="pending")
+    reviewed_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    reviewed_at = Column(DateTime)
+    rejection_reason = Column(Text)
 
 # ============================================
 # VECTOR MODELS
@@ -1107,11 +1135,23 @@ def update_customer(cid: str, data: dict, db: Session = Depends(get_db)):
     return {"message": "Customer updated"}
 
 @app.delete("/api/customers/{cid}")
-def delete_customer(cid: str, db: Session = Depends(get_db)):
-    c = db.query(Customer).filter((Customer.id == cid) | (Customer.customer_id == cid)).first()
+def delete_customer(cid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    c = find_entity(db, Customer, "customer_id", cid)
     if not c: raise HTTPException(404, "Customer not found")
-    db.delete(c); db.commit()
-    return {"message": "Customer deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        db.delete(c); db.commit()
+        return {"message": "Customer deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="customer", entity_id=c.id, entity_name=c.name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 @app.get("/api/customers/template/download")
 def download_customer_template():
@@ -1251,11 +1291,23 @@ def update_broker(bid: str, data: dict, db: Session = Depends(get_db)):
     return {"message": "Broker updated"}
 
 @app.delete("/api/brokers/{bid}")
-def delete_broker(bid: str, db: Session = Depends(get_db)):
-    b = db.query(Broker).filter((Broker.id == bid) | (Broker.broker_id == bid)).first()
+def delete_broker(bid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    b = find_entity(db, Broker, "broker_id", bid)
     if not b: raise HTTPException(404, "Broker not found")
-    db.delete(b); db.commit()
-    return {"message": "Broker deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        db.delete(b); db.commit()
+        return {"message": "Broker deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="broker", entity_id=b.id, entity_name=b.name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 @app.get("/api/brokers/template/download")
 def download_broker_template():
@@ -1358,11 +1410,27 @@ def update_project(pid: str, data: dict, db: Session = Depends(get_db)):
     return {"message": "Project updated"}
 
 @app.delete("/api/projects/{pid}")
-def delete_project(pid: str, db: Session = Depends(get_db)):
-    p = db.query(Project).filter((Project.id == pid) | (Project.project_id == pid)).first()
+def delete_project(pid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    p = find_entity(db, Project, "project_id", pid)
     if not p: raise HTTPException(404, "Project not found")
-    db.delete(p); db.commit()
-    return {"message": "Project deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        try:
+            db.delete(p); db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(400, "Cannot delete project with linked inventory. Remove inventory first.")
+        return {"message": "Project deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="project", entity_id=p.id, entity_name=p.name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 # ============================================
 # COMPANY REPS API
@@ -1371,7 +1439,7 @@ def delete_project(pid: str, db: Session = Depends(get_db)):
 def list_reps(db: Session = Depends(get_db)):
     reps = db.query(CompanyRep).order_by(CompanyRep.created_at.desc()).all()
     return [{"id": str(r.id), "rep_id": r.rep_id, "name": r.name, "mobile": r.mobile,
-             "email": r.email, "status": r.status} for r in reps]
+             "email": r.email, "status": r.status, "role": r.role} for r in reps]
 
 @app.post("/api/company-reps")
 def create_rep(data: dict, db: Session = Depends(get_db), current_user: CompanyRep = Depends(require_role(["admin"]))):
@@ -1410,11 +1478,23 @@ def update_rep(rid: str, data: dict, db: Session = Depends(get_db), current_user
     return {"message": "Rep updated"}
 
 @app.delete("/api/company-reps/{rid}")
-def delete_rep(rid: str, db: Session = Depends(get_db)):
-    r = db.query(CompanyRep).filter((CompanyRep.id == rid) | (CompanyRep.rep_id == rid)).first()
+def delete_rep(rid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    r = find_entity(db, CompanyRep, "rep_id", rid)
     if not r: raise HTTPException(404, "Rep not found")
-    db.delete(r); db.commit()
-    return {"message": "Rep deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        db.delete(r); db.commit()
+        return {"message": "Rep deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="company_rep", entity_id=r.id, entity_name=r.name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 # ============================================
 # INVENTORY API
@@ -1523,18 +1603,31 @@ def update_inventory(iid: str, data: dict, db: Session = Depends(get_db)):
     return {"message": "Inventory updated"}
 
 @app.delete("/api/inventory/{iid}")
-def delete_inventory(iid: str, db: Session = Depends(get_db)):
-    i = db.query(Inventory).filter((Inventory.id == iid) | (Inventory.inventory_id == iid)).first()
+def delete_inventory(iid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    i = find_entity(db, Inventory, "inventory_id", iid)
     if not i: raise HTTPException(404, "Inventory not found")
-    project_id = i.project_id
-    db.delete(i); db.commit()
 
-    # Trigger Vector sync if project is linked
-    if project_id:
-        sync_vector_branches_from_orbit(project_id, db)
-        db.commit()
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
 
-    return {"message": "Inventory deleted"}
+    # Admin can delete directly
+    if current_user.role == "admin":
+        project_id = i.project_id
+        db.delete(i); db.commit()
+
+        # Trigger Vector sync if project is linked
+        if project_id:
+            sync_vector_branches_from_orbit(project_id, db)
+            db.commit()
+
+        return {"message": "Inventory deleted"}
+
+    # Non-admin: create deletion request
+    entity_name = i.unit_number if i.unit_number else str(i.id)
+    req = DeletionRequest(entity_type="inventory", entity_id=i.id, entity_name=entity_name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 @app.post("/api/inventory/bulk-import")
 async def bulk_import_inventory(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -1879,11 +1972,23 @@ def update_interaction(iid: str, data: dict, db: Session = Depends(get_db)):
     return {"message": "Interaction updated"}
 
 @app.delete("/api/interactions/{iid}")
-def delete_interaction(iid: str, db: Session = Depends(get_db)):
-    i = db.query(Interaction).filter((Interaction.id == iid) | (Interaction.interaction_id == iid)).first()
+def delete_interaction(iid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    i = find_entity(db, Interaction, "interaction_id", iid)
     if not i: raise HTTPException(404, "Interaction not found")
-    db.delete(i); db.commit()
-    return {"message": "Interaction deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        db.delete(i); db.commit()
+        return {"message": "Interaction deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="interaction", entity_id=i.id, entity_name=str(i.id), requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 # ============================================
 # CAMPAIGNS API
@@ -1959,11 +2064,23 @@ def update_campaign(cid: str, data: dict, db: Session = Depends(get_db)):
     return {"message": "Campaign updated"}
 
 @app.delete("/api/campaigns/{cid}")
-def delete_campaign(cid: str, db: Session = Depends(get_db)):
-    c = db.query(Campaign).filter((Campaign.id == cid) | (Campaign.campaign_id == cid)).first()
+def delete_campaign(cid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    c = find_entity(db, Campaign, "campaign_id", cid)
     if not c: raise HTTPException(404, "Campaign not found")
-    db.delete(c); db.commit()
-    return {"message": "Campaign deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        db.delete(c); db.commit()
+        return {"message": "Campaign deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="campaign", entity_id=c.id, entity_name=c.name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 # ============================================
 # LEADS API
@@ -2122,11 +2239,24 @@ def convert_lead(lid: str, data: dict, db: Session = Depends(get_db)):
     raise HTTPException(400, "Invalid conversion type")
 
 @app.delete("/api/leads/{lid}")
-def delete_lead(lid: str, db: Session = Depends(get_db)):
-    l = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
+def delete_lead(lid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    l = find_entity(db, Lead, "lead_id", lid)
     if not l: raise HTTPException(404, "Lead not found")
-    db.delete(l); db.commit()
-    return {"message": "Lead deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        db.delete(l); db.commit()
+        return {"message": "Lead deleted"}
+
+    # Non-admin: create deletion request
+    entity_name = l.name if l.name else str(l.id)
+    req = DeletionRequest(entity_type="lead", entity_id=l.id, entity_name=entity_name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 # ============================================
 # RECEIPTS API
@@ -2306,26 +2436,37 @@ def create_receipt(data: dict, db: Session = Depends(get_db)):
     return {"message": "Receipt created", "id": str(r.id), "receipt_id": r.receipt_id}
 
 @app.delete("/api/receipts/{rid}")
-def delete_receipt(rid: str, db: Session = Depends(get_db)):
-    r = db.query(Receipt).filter((Receipt.id == rid) | (Receipt.receipt_id == rid)).first()
+def delete_receipt(rid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    r = find_entity(db, Receipt, "receipt_id", rid)
     if not r: raise HTTPException(404, "Receipt not found")
-    
-    # Reverse allocations
-    allocations = db.query(ReceiptAllocation).filter(ReceiptAllocation.receipt_id == r.id).all()
-    for a in allocations:
-        inst = db.query(Installment).filter(Installment.id == a.installment_id).first()
-        if inst:
-            inst.amount_paid = max(0, float(inst.amount_paid or 0) - float(a.amount))
-            if float(inst.amount_paid) >= float(inst.amount):
-                inst.status = "paid"
-            elif float(inst.amount_paid) > 0:
-                inst.status = "partial"
-            else:
-                inst.status = "pending"
-        db.delete(a)
-    
-    db.delete(r); db.commit()
-    return {"message": "Receipt deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        # Reverse allocations
+        allocations = db.query(ReceiptAllocation).filter(ReceiptAllocation.receipt_id == r.id).all()
+        for a in allocations:
+            inst = db.query(Installment).filter(Installment.id == a.installment_id).first()
+            if inst:
+                inst.amount_paid = max(0, float(inst.amount_paid or 0) - float(a.amount))
+                if float(inst.amount_paid) >= float(inst.amount):
+                    inst.status = "paid"
+                elif float(inst.amount_paid) > 0:
+                    inst.status = "partial"
+                else:
+                    inst.status = "pending"
+            db.delete(a)
+
+        db.delete(r); db.commit()
+        return {"message": "Receipt deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="receipt", entity_id=r.id, entity_name=r.receipt_id, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 # ============================================
 # CREDITORS API
@@ -2371,11 +2512,23 @@ def update_creditor(cid: str, data: dict, db: Session = Depends(get_db)):
     return {"message": "Creditor updated"}
 
 @app.delete("/api/creditors/{cid}")
-def delete_creditor(cid: str, db: Session = Depends(get_db)):
-    c = db.query(Creditor).filter((Creditor.id == cid) | (Creditor.creditor_id == cid)).first()
+def delete_creditor(cid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    c = find_entity(db, Creditor, "creditor_id", cid)
     if not c: raise HTTPException(404, "Creditor not found")
-    db.delete(c); db.commit()
-    return {"message": "Creditor deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        db.delete(c); db.commit()
+        return {"message": "Creditor deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="creditor", entity_id=c.id, entity_name=c.name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 # ============================================
 # PAYMENTS API
@@ -2658,17 +2811,28 @@ def update_payment(pid: str, data: dict, db: Session = Depends(get_db)):
     return {"message": "Payment updated"}
 
 @app.delete("/api/payments/{pid}")
-def delete_payment(pid: str, db: Session = Depends(get_db)):
-    p = db.query(Payment).filter((Payment.id == pid) | (Payment.payment_id == pid)).first()
+def delete_payment(pid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    p = find_entity(db, Payment, "payment_id", pid)
     if not p: raise HTTPException(404, "Payment not found")
-    
-    # Delete allocations
-    allocations = db.query(PaymentAllocation).filter(PaymentAllocation.payment_id == p.id).all()
-    for a in allocations:
-        db.delete(a)
-    
-    db.delete(p); db.commit()
-    return {"message": "Payment deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        # Delete allocations
+        allocations = db.query(PaymentAllocation).filter(PaymentAllocation.payment_id == p.id).all()
+        for a in allocations:
+            db.delete(a)
+
+        db.delete(p); db.commit()
+        return {"message": "Payment deleted"}
+
+    # Non-admin: create deletion request
+    req = DeletionRequest(entity_type="payment", entity_id=p.id, entity_name=p.payment_id, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 # ============================================
 # BUYBACK API
@@ -4801,7 +4965,7 @@ def get_media_file_info(file_id: str, db: Session = Depends(get_db)):
     }
 
 @app.delete("/api/media/{file_id}")
-def delete_media_file(file_id: str, db: Session = Depends(get_db)):
+def delete_media_file(file_id: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     """Delete media file"""
     # Try to match by file_id (string) first, or by id (UUID) if file_id is a valid UUID
     try:
@@ -4814,17 +4978,134 @@ def delete_media_file(file_id: str, db: Session = Depends(get_db)):
     except (ValueError, TypeError):
         # If not a valid UUID, only match by file_id (string)
         media = db.query(MediaFile).filter(MediaFile.file_id == file_id).first()
-    
+
     if not media:
         raise HTTPException(404, "File not found")
-    
-    # Delete file from disk
-    file_path = Path(media.file_path)
-    if file_path.exists():
-        file_path.unlink()
-    
-    db.delete(media); db.commit()
-    return {"message": "File deleted"}
+
+    # Creator role cannot delete
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
+    # Admin can delete directly
+    if current_user.role == "admin":
+        # Delete file from disk
+        file_path = Path(media.file_path)
+        if file_path.exists():
+            file_path.unlink()
+
+        db.delete(media); db.commit()
+        return {"message": "File deleted"}
+
+    # Non-admin: create deletion request
+    entity_name = media.file_name if media.file_name else str(media.id)
+    req = DeletionRequest(entity_type="media", entity_id=media.id, entity_name=entity_name, requested_by=current_user.id)
+    db.add(req); db.commit(); db.refresh(req)
+    return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
+
+# ============================================
+# DELETION REQUESTS API
+# ============================================
+
+@app.get("/api/deletion-requests")
+def list_deletion_requests(status: str = None, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    q = db.query(DeletionRequest).order_by(DeletionRequest.requested_at.desc())
+    if status:
+        q = q.filter(DeletionRequest.status == status)
+    if current_user.role != "admin":
+        q = q.filter(DeletionRequest.requested_by == current_user.id)
+    requests = q.limit(200).all()
+    result = []
+    for r in requests:
+        requester = db.query(CompanyRep).filter(CompanyRep.id == r.requested_by).first()
+        reviewer = db.query(CompanyRep).filter(CompanyRep.id == r.reviewed_by).first() if r.reviewed_by else None
+        result.append({
+            "id": str(r.id), "request_id": r.request_id, "entity_type": r.entity_type,
+            "entity_id": str(r.entity_id), "entity_name": r.entity_name,
+            "requested_by": requester.name if requester else "Unknown",
+            "requested_by_id": str(r.requested_by) if r.requested_by else None,
+            "requested_at": str(r.requested_at), "reason": r.reason, "status": r.status,
+            "reviewed_by": reviewer.name if reviewer else None,
+            "reviewed_at": str(r.reviewed_at) if r.reviewed_at else None,
+            "rejection_reason": r.rejection_reason
+        })
+    return result
+
+@app.get("/api/deletion-requests/pending-count")
+def get_pending_deletion_count(db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+    count = db.query(DeletionRequest).filter(DeletionRequest.status == "pending").count()
+    return {"count": count}
+
+@app.post("/api/deletion-requests/{request_id}/approve")
+def approve_deletion_request(request_id: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(require_role(["admin"]))):
+    req = find_entity(db, DeletionRequest, "request_id", request_id)
+    if not req: raise HTTPException(404, "Deletion request not found")
+    if req.status != "pending": raise HTTPException(400, "Request is not pending")
+
+    # Map entity types to models
+    entity_map = {
+        "customer": Customer, "broker": Broker, "project": Project,
+        "company_rep": CompanyRep, "inventory": Inventory, "interaction": Interaction,
+        "campaign": Campaign, "lead": Lead, "receipt": Receipt,
+        "creditor": Creditor, "payment": Payment, "media": MediaFile
+    }
+    model_class = entity_map.get(req.entity_type)
+    if not model_class:
+        raise HTTPException(400, f"Unknown entity type: {req.entity_type}")
+
+    entity = db.query(model_class).filter(model_class.id == req.entity_id).first()
+    if not entity:
+        req.status = "approved"
+        req.reviewed_by = current_user.id
+        req.reviewed_at = datetime.utcnow()
+        db.commit()
+        return {"message": "Approved but entity already deleted"}
+
+    # Handle special cascading cases
+    if req.entity_type == "receipt":
+        allocations = db.query(ReceiptAllocation).filter(ReceiptAllocation.receipt_id == entity.id).all()
+        for a in allocations:
+            inst = db.query(Installment).filter(Installment.id == a.installment_id).first()
+            if inst:
+                inst.amount_paid = max(0, float(inst.amount_paid or 0) - float(a.amount))
+                if float(inst.amount_paid) >= float(inst.amount): inst.status = "paid"
+                elif float(inst.amount_paid) > 0: inst.status = "partial"
+                else: inst.status = "pending"
+            db.delete(a)
+    elif req.entity_type == "payment":
+        allocations = db.query(PaymentAllocation).filter(PaymentAllocation.payment_id == entity.id).all()
+        for a in allocations:
+            db.delete(a)
+    elif req.entity_type == "inventory":
+        project_id = entity.project_id
+        db.delete(entity)
+        db.flush()
+        if project_id:
+            try: sync_vector_branches_from_orbit(project_id, db)
+            except: pass
+        req.status = "approved"
+        req.reviewed_by = current_user.id
+        req.reviewed_at = datetime.utcnow()
+        db.commit()
+        return {"message": f"{req.entity_type} deletion approved and executed"}
+
+    db.delete(entity)
+    req.status = "approved"
+    req.reviewed_by = current_user.id
+    req.reviewed_at = datetime.utcnow()
+    db.commit()
+    return {"message": f"{req.entity_type} deletion approved and executed"}
+
+@app.post("/api/deletion-requests/{request_id}/reject")
+def reject_deletion_request(request_id: str, data: dict, db: Session = Depends(get_db), current_user: CompanyRep = Depends(require_role(["admin"]))):
+    req = find_entity(db, DeletionRequest, "request_id", request_id)
+    if not req: raise HTTPException(404, "Deletion request not found")
+    if req.status != "pending": raise HTTPException(400, "Request is not pending")
+    req.status = "rejected"
+    req.reviewed_by = current_user.id
+    req.reviewed_at = datetime.utcnow()
+    req.rejection_reason = data.get("reason", "")
+    db.commit()
+    return {"message": "Deletion request rejected"}
 
 # ============================================
 # VECTOR API ENDPOINTS
@@ -5248,15 +5529,24 @@ def delete_vector_project(
     current_user: CompanyRep = Depends(get_current_user)
 ):
     """Delete Vector project"""
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
     try:
         project_uuid = uuid.UUID(project_id)
         project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
     except (ValueError, TypeError):
         raise HTTPException(400, "Invalid project ID")
-    
+
     if not project:
         raise HTTPException(404, "Vector project not found")
-    
+
+    # Non-admin: create deletion request
+    if current_user.role != "admin":
+        req = DeletionRequest(entity_type="vector_project", entity_id=project.id, entity_name=project.name, requested_by=current_user.id)
+        db.add(req); db.commit(); db.refresh(req)
+        return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
+
     db.delete(project)
     db.commit()
     return {"message": "Vector project deleted"}
@@ -5694,19 +5984,22 @@ def delete_vector_annotation(
     current_user: CompanyRep = Depends(get_current_user)
 ):
     """Delete annotation"""
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+
     try:
         project_uuid = uuid.UUID(project_id)
     except (ValueError, TypeError):
         raise HTTPException(400, "Invalid project ID")
-    
+
     annotation = db.query(VectorAnnotation).filter(
         VectorAnnotation.project_id == project_uuid,
         VectorAnnotation.annotation_id == anno_id
     ).first()
-    
+
     if not annotation:
         raise HTTPException(404, "Annotation not found")
-    
+
     db.delete(annotation)
     db.commit()
     return {"message": "Annotation deleted"}
@@ -6813,6 +7106,10 @@ def cleanup_auto_generated_maps(
     current_user: CompanyRep = Depends(get_current_user)
 ):
     """Delete all auto-generated maps for a master project, keeping only the latest one of each type."""
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can cleanup auto-generated maps")
     try:
         project_uuid = uuid.UUID(project_id)
         master_project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
@@ -7267,6 +7564,10 @@ def clear_reconciliation_mapping(
     current_user: CompanyRep = Depends(get_current_user)
 ):
     """Clear all plot-to-inventory mappings."""
+    if current_user.role == "creator":
+        raise HTTPException(403, "Creator role cannot delete records")
+    if current_user.role != "admin":
+        raise HTTPException(403, "Only admin can clear reconciliation mappings")
     try:
         project_uuid = uuid.UUID(project_id)
         vector_project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()

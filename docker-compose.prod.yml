@@ -1,26 +1,52 @@
-# Sitara CRM / Orbit - PRODUCTION OVERRIDES
-# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-# Or use: .\START_PROD.ps1
+# Sitara CRM - Production Deployment (Office Server)
+# Branch: Prod11022026
+# Ports: PostgreSQL 5435, API 8001, Frontend (nginx) 8081
+#
+# DEPLOYMENT:
+#   1. Copy this file as docker-compose.yml on the server
+#   2. Run: docker compose up -d --build
+#   3. Run migration:
+#      docker cp backend\migrations\prod_11feb2026_migration.sql sitara_crm_db:/tmp/migration.sql
+#      docker exec -it sitara_crm_db psql -U sitara -d sitara_crm -f /tmp/migration.sql
+#
+# ROLLBACK:
+#   git checkout Prod30012026
+#   docker compose up -d --build
 
 services:
-  db:
+  postgres:
+    image: postgres:15-alpine
     container_name: sitara_crm_db
     environment:
+      POSTGRES_DB: sitara_crm
+      POSTGRES_USER: sitara
       POSTGRES_PASSWORD: sitara_secure_2024
     ports:
-      - "5435:5432"    # PRODUCTION PORT
+      - "5435:5432"
     volumes:
-      - sitara_prod_postgres:/var/lib/postgresql/data
+      - sitara_postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sitara -d sitara_crm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
-  backend:
+  api:
+    build: ./backend
     container_name: sitara_crm_api
-    environment:
-      DATABASE_URL: postgresql://sitara:sitara_secure_2024@db:5432/sitara_crm
-      SECRET_KEY: sitara-production-key-change-this
     ports:
-      - "8001:8000"    # PRODUCTION PORT
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql://sitara:sitara_secure_2024@postgres:5432/sitara_crm
+      SECRET_KEY: sitara-production-key-change-this-in-real-deployment
+      CORS_ORIGINS: http://localhost:8081,http://127.0.0.1:8081
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./media:/app/media
     healthcheck:
@@ -31,19 +57,21 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  frontend:
+  web:
     image: nginx:alpine
     container_name: sitara_crm_web
     ports:
-      - "8081:80"      # PRODUCTION PORT
+      - "8081:80"
     volumes:
       - ./frontend/dist:/usr/share/nginx/html
       - ./nginx:/etc/nginx/conf.d
-    build: !reset null
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  sitara_prod_postgres:
+  sitara_postgres_data:
 
 networks:
   default:

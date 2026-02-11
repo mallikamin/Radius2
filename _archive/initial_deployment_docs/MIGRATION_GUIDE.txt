@@ -1,0 +1,76 @@
+SITARA CRM - DATABASE MIGRATION GUIDE
+=====================================
+
+Follow these steps to migrate existing data to the new deployment.
+
+STEP 1: EXPORT FROM OLD SERVER
+------------------------------
+On the OLD server (where data currently exists):
+
+Option A - If using Docker:
+  docker exec sitara_v3_db pg_dump -U sitara sitara_crm > sitara_backup.sql
+
+Option B - If using local PostgreSQL:
+  set PGPASSWORD=sitara123
+  pg_dump -h localhost -p 5440 -U sitara sitara_crm > sitara_backup.sql
+
+Option C - Run the script:
+  .\EXPORT_DATABASE.ps1
+
+
+STEP 2: COPY BACKUP FILE
+------------------------
+Copy sitara_backup.sql to the NEW server's SitaraCRM folder.
+
+
+STEP 3: DEPLOY NEW VERSION (FRESH)
+----------------------------------
+On the NEW server:
+
+  cd C:\Docker\SitaraCRM
+  docker compose up -d --build
+
+Wait 30-60 seconds for containers to start.
+
+
+STEP 4: IMPORT DATA
+-------------------
+Option A - Run the script:
+  .\IMPORT_DATABASE.ps1
+
+Option B - Manual import:
+  docker cp sitara_backup.sql sitara_crm_db:/tmp/
+  docker exec sitara_crm_db psql -U sitara -d sitara_crm -f /tmp/backup.sql
+
+
+STEP 5: VERIFY
+--------------
+Open http://localhost:8081
+Check that all data is present.
+
+
+TROUBLESHOOTING
+---------------
+
+"Database already has data" errors:
+  # Reset database first
+  docker compose down -v
+  docker compose up -d --build
+  # Wait 30 seconds, then import
+
+"Connection refused" errors:
+  # Wait longer for database to start
+  docker compose ps   # Check all services running
+  docker compose logs postgres  # Check for errors
+
+Import seems stuck:
+  # Large databases take time
+  # Check progress: docker compose logs postgres
+
+
+ROLLBACK (if something goes wrong)
+----------------------------------
+1. Keep your sitara_backup.sql file safe
+2. docker compose down -v
+3. docker compose up -d --build
+4. Re-import: .\IMPORT_DATABASE.ps1

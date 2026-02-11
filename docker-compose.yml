@@ -1,51 +1,70 @@
-# Sitara CRM / Orbit - LOCAL DEVELOPMENT
-# Default: docker compose up (uses these local dev ports)
-# Production: docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+# Orbit CRM - Local Development
+# Local PC Port Configuration
+# PostgreSQL: 5440, API: 8010, Frontend: 5180
+#
+# Office Server (Sitara) uses: 5435/8001/8081
+# Do NOT use those ports locally
 
 services:
   db:
     image: postgres:15-alpine
     container_name: orbit_dev_db
     environment:
+      POSTGRES_DB: sitara_crm
       POSTGRES_USER: sitara
       POSTGRES_PASSWORD: sitara123
-      POSTGRES_DB: sitara_crm
-    volumes:
-      - radius2_sitara_v3_postgres:/var/lib/postgresql/data
     ports:
-      - "5440:5432"    # LOCAL DEV PORT
+      - "5440:5432"
+    volumes:
+      - orbit_dev_postgres:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sitara -d sitara_crm"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
-  backend:
+  api:
     build: ./backend
     container_name: orbit_dev_api
+    ports:
+      - "8010:8000"
     environment:
       DATABASE_URL: postgresql://sitara:sitara123@db:5432/sitara_crm
-      SECRET_KEY: dev-secret-key-for-local-testing
-    ports:
-      - "8010:8000"    # LOCAL DEV PORT
+      SECRET_KEY: orbit-local-dev-key
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
       - ./media:/app/media
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
-  frontend:
+  web:
     build: ./frontend
     container_name: orbit_dev_web
     ports:
-      - "5180:5173"    # LOCAL DEV PORT
+      - "5180:5173"
+    environment:
+      VITE_API_URL: http://localhost:8010
+    depends_on:
+      - api
     volumes:
       - ./frontend/src:/app/src
-    depends_on:
-      - backend
+    restart: unless-stopped
 
 volumes:
-  radius2_sitara_v3_postgres:
-    external: true
+  orbit_dev_postgres:
+
+networks:
+  default:
+    name: orbit_dev_network

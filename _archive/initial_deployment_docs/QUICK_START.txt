@@ -1,0 +1,46 @@
+SITARA CRM - QUICK START
+========================
+
+PORTS (Office Server):
+  Frontend: 8081  -> http://localhost:8081
+  API:      8001  -> http://localhost:8001/api
+  Database: 5435
+
+FIRST TIME SETUP:
+-----------------
+1. Extract radius2.zip to C:\Docker\SitaraCRM
+2. Open PowerShell as Administrator
+3. cd C:\Docker\SitaraCRM
+4. .\SETUP.ps1              (verify files)
+5. docker compose up -d --build
+6. Wait 30-60 seconds
+7. Open http://localhost:8081
+
+DAILY COMMANDS:
+---------------
+Start:   docker compose up -d
+Stop:    docker compose down  (or .\STOP.ps1)
+Restart: docker compose restart
+Status:  docker compose ps
+Logs:    docker compose logs
+
+REMOTE ACCESS:
+--------------
+From other computers: http://[server-ip]:8081
+May need firewall rule for port 8081
+
+RUNNING WITH VECTOR:
+--------------------
+Vector uses: 8080, 3001, 5433
+Sitara uses: 8081, 8001, 5435
+Both can run at the same time!
+
+RESET DATABASE (CAUTION - DELETES DATA):
+----------------------------------------
+docker compose down -v
+docker compose up -d --build
+
+PROBLEMS?
+---------
+1. Run: docker compose logs > logs.txt
+2. Share logs.txt with developer

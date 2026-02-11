@@ -108,6 +108,22 @@ export default function HoverPlotDetails({ vectorState }) {
           </div>
         )}
 
+        {/* Owner */}
+        {inv.owner && (
+          <div className="mb-1">
+            <span className="text-gray-600">Owner: </span>
+            <span className="font-semibold">{inv.owner}</span>
+          </div>
+        )}
+
+        {/* Status */}
+        {inv.status && (
+          <div className="mb-1">
+            <span className="text-gray-600">Status: </span>
+            <span className="font-semibold">{inv.status}</span>
+          </div>
+        )}
+
         {/* Notes */}
         {inv.notes && (
           <div className="mb-1">
@@ -115,11 +131,6 @@ export default function HoverPlotDetails({ vectorState }) {
             <span className="font-semibold text-sm">{inv.notes}</span>
           </div>
         )}
-
-        {/* Coordinates */}
-        <div className="mt-2 pt-2 border-t border-gray-200 text-gray-500 text-xs">
-          X: {Math.round(plot.x)}, Y: {Math.round(plot.y)}
-        </div>
       </div>
     </div>
   );
