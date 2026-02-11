@@ -5,7 +5,9 @@
 # DEPLOYMENT:
 #   1. Copy this file as docker-compose.yml on the server
 #   2. Run: docker compose up -d --build
-#   3. Run migration: docker exec -it sitara_crm_db psql -U sitara -d sitara_crm -f /tmp/migration.sql
+#   3. Run migration:
+#      docker cp backend\migrations\prod_11feb2026_migration.sql sitara_crm_db:/tmp/migration.sql
+#      docker exec -it sitara_crm_db psql -U sitara -d sitara_crm -f /tmp/migration.sql
 #
 # ROLLBACK:
 #   git checkout Prod30012026
@@ -39,6 +41,7 @@ services:
     environment:
       DATABASE_URL: postgresql://sitara:sitara_secure_2024@postgres:5432/sitara_crm
       SECRET_KEY: sitara-production-key-change-this-in-real-deployment
+      CORS_ORIGINS: http://localhost:8081,http://127.0.0.1:8081
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
     depends_on:
