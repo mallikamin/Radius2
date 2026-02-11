@@ -1,19 +1,22 @@
-# Sitara CRM - Production Deployment
-# Office Server Port Configuration
-# PostgreSQL: 5435, API: 8001, Frontend: 8081
+# Orbit CRM - Local Development
+# Local PC Port Configuration
+# PostgreSQL: 5440, API: 8010, Frontend: 5180
+#
+# Office Server (Sitara) uses: 5435/8001/8081
+# Do NOT use those ports locally
 
 services:
-  postgres:
+  db:
     image: postgres:15-alpine
-    container_name: sitara_crm_db
+    container_name: orbit_dev_db
     environment:
       POSTGRES_DB: sitara_crm
       POSTGRES_USER: sitara
-      POSTGRES_PASSWORD: sitara_secure_2024
+      POSTGRES_PASSWORD: sitara123
     ports:
-      - "5435:5432"
+      - "5440:5432"
     volumes:
-      - sitara_postgres_data:/var/lib/postgresql/data
+      - orbit_dev_postgres:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sitara -d sitara_crm"]
@@ -24,18 +27,19 @@ services:
 
   api:
     build: ./backend
-    container_name: sitara_crm_api
+    container_name: orbit_dev_api
     ports:
-      - "8001:8000"
+      - "8010:8000"
     environment:
-      DATABASE_URL: postgresql://sitara:sitara_secure_2024@postgres:5432/sitara_crm
-      SECRET_KEY: sitara-production-key-change-this-in-real-deployment
+      DATABASE_URL: postgresql://sitara:sitara123@db:5432/sitara_crm
+      SECRET_KEY: orbit-local-dev-key
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
     volumes:
+      - ./backend/app:/app/app
       - ./media:/app/media
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
@@ -46,21 +50,21 @@ services:
     restart: unless-stopped
 
   web:
-    image: nginx:alpine
-    container_name: sitara_crm_web
+    build: ./frontend
+    container_name: orbit_dev_web
     ports:
-      - "8081:80"
-    volumes:
-      - ./frontend/dist:/usr/share/nginx/html
-      - ./nginx:/etc/nginx/conf.d
+      - "5180:5173"
+    environment:
+      VITE_API_URL: http://localhost:8010
     depends_on:
-      api:
-        condition: service_healthy
+      - api
+    volumes:
+      - ./frontend/src:/app/src
     restart: unless-stopped
 
 volumes:
-  sitara_postgres_data:
+  orbit_dev_postgres:
 
 networks:
   default:
-    name: sitara_crm_network
+    name: orbit_dev_network

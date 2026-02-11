@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { exportInventoryToExcel, exportManualPlotsToExcel } from '../../utils/inventoryUtils';
-import { buildExportCanvasEnhanced } from '../../utils/exportUtils';
+import { buildExportCanvasEnhanced, exportProposalPDF } from '../../utils/exportUtils';
 import SelectionPanel from './SelectionPanel';
 import BrushPanel from './BrushPanel';
 import EraserPanel from './EraserPanel';
@@ -20,6 +20,14 @@ export default function Sidebar({ vectorState }) {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportMode, setExportMode] = useState('full');
   const [selectedAnnoIds, setSelectedAnnoIds] = useState(new Set());
+  const [exportType, setExportType] = useState('map'); // 'map' or 'proposal'
+  const [exportQuality, setExportQuality] = useState(2);
+  const [fieldConfig, setFieldConfig] = useState({
+    owner: true, value: true, area: true, status: true, notes: true,
+    ratePerMarla: true, dimensions: true, coordinates: false, annotationInfo: true
+  });
+  const [zoomLevels, setZoomLevels] = useState({ full: true, p75: false, p50: false, p25: false, single: false });
+  const [separateFiles, setSeparateFiles] = useState(false);
 
   // Expose tab switching for external access
   React.useEffect(() => {
@@ -119,142 +127,37 @@ export default function Sidebar({ vectorState }) {
       }}
     >
       {/* Tabs */}
-      <div className="flex flex-wrap border-b border-gray-300">
-        <button
-          onClick={() => setActiveTab('selection')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'selection' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Selection"
-        >
-          👆
-        </button>
-        <button
-          onClick={() => setActiveTab('annotations')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'annotations' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Annotations"
-        >
-          📝
-        </button>
-        <button
-          onClick={() => setActiveTab('plots')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'plots' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Manual Plots"
-        >
-          📍
-        </button>
-        <button
-          onClick={() => setActiveTab('inventory')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'inventory' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Inventory"
-        >
-          📊
-        </button>
-        <button
-          onClick={() => setActiveTab('brush')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'brush' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Brush Settings"
-        >
-          🖌️
-        </button>
-        <button
-          onClick={() => setActiveTab('eraser')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'eraser' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Eraser"
-        >
-          🧹
-        </button>
-        <button
-          onClick={() => setActiveTab('massrename')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'massrename' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Mass Rename"
-        >
-          🔄
-        </button>
-        <button
-          onClick={() => setActiveTab('search')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'search' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Search Plot"
-        >
-          🔍
-        </button>
-        <button
-          onClick={() => setActiveTab('labels')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'labels' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Labels"
-        >
-          🏷️
-        </button>
-        <button
-          onClick={() => setActiveTab('shapes')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'shapes' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Shapes"
-        >
-          ⬜
-        </button>
-        <button
-          onClick={() => setActiveTab('notes')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'notes' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Creator Notes"
-        >
-          📝
-        </button>
-        <button
-          onClick={() => setActiveTab('changelog')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'changelog' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Change Log"
-        >
-          📋
-        </button>
-        <button
-          onClick={() => setActiveTab('branches')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'branches' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Branches (ORBIT Sync)"
-        >
-          🔀
-        </button>
-        <button
-          onClick={() => setActiveTab('pan')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'pan' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Pan Settings"
-        >
-          ✋
-        </button>
-        <button
-          onClick={() => setActiveTab('settings')}
-          className={`px-2 py-2 text-xs font-medium ${
-            activeTab === 'settings' ? 'bg-gray-100 border-b-2 border-gray-900' : 'hover:bg-gray-50'
-          }`}
-          title="Settings"
-        >
-          ⚙️
-        </button>
+      <div className="grid grid-cols-5 border-b border-gray-300">
+        {[
+          { id: 'selection',   icon: '👆', label: 'Select' },
+          { id: 'annotations', icon: '📝', label: 'Annotate' },
+          { id: 'plots',       icon: '📍', label: 'Plots' },
+          { id: 'inventory',   icon: '📊', label: 'Inventory' },
+          { id: 'brush',       icon: '🖌️', label: 'Brush' },
+          { id: 'eraser',      icon: '🧹', label: 'Eraser' },
+          { id: 'massrename',  icon: '🔄', label: 'Rename' },
+          { id: 'search',      icon: '🔍', label: 'Search' },
+          { id: 'labels',      icon: '🏷️', label: 'Labels' },
+          { id: 'shapes',      icon: '⬜', label: 'Shapes' },
+          { id: 'notes',       icon: '📝', label: 'Notes' },
+          { id: 'changelog',   icon: '📋', label: 'Log' },
+          { id: 'branches',    icon: '🔀', label: 'Branches' },
+          { id: 'pan',         icon: '✋', label: 'Pan' },
+          { id: 'settings',    icon: '⚙️', label: 'Settings' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex flex-col items-center py-1.5 text-center ${
+              activeTab === tab.id
+                ? 'bg-gray-100 border-b-2 border-gray-900'
+                : 'hover:bg-gray-50'
+            }`}
+          >
+            <span className="text-sm leading-none">{tab.icon}</span>
+            <span className="text-[9px] leading-tight mt-0.5 text-gray-600 font-medium">{tab.label}</span>
+          </button>
+        ))}
       </div>
 
       {/* Content */}
@@ -456,81 +359,143 @@ export default function Sidebar({ vectorState }) {
       {/* Export Modal */}
       {showExportModal && (
         <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-4 w-80">
-            <h3 className="font-semibold mb-3">Export PDF</h3>
-            <div className="space-y-2 mb-4">
-              <label className="flex items-center">
-                <input
-                  type="radio"
-                  name="exportMode"
-                  value="full"
-                  checked={exportMode === 'full'}
-                  onChange={(e) => setExportMode(e.target.value)}
-                />
-                <span className="ml-2 text-sm">Full Map</span>
-              </label>
-              <label className="flex items-center">
-                <input
-                  type="radio"
-                  name="exportMode"
-                  value="single"
-                  checked={exportMode === 'single'}
-                  onChange={(e) => setExportMode(e.target.value)}
-                />
-                <span className="ml-2 text-sm">Single Annotation</span>
-              </label>
-              <label className="flex items-center">
-                <input
-                  type="radio"
-                  name="exportMode"
-                  value="multi"
-                  checked={exportMode === 'multi'}
-                  onChange={(e) => setExportMode(e.target.value)}
-                />
-                <span className="ml-2 text-sm">Multiple Annotations</span>
-              </label>
+          <div className="bg-white rounded-lg p-4 w-96 max-h-[90vh] overflow-y-auto">
+            <h3 className="font-semibold mb-3">Export Options</h3>
+
+            {/* Export Type Toggle */}
+            <div className="flex gap-1 mb-3 bg-gray-100 rounded p-1">
+              <button onClick={() => setExportType('map')}
+                className={`flex-1 px-2 py-1 text-xs rounded ${exportType === 'map' ? 'bg-white shadow font-semibold' : ''}`}>
+                Map Only
+              </button>
+              <button onClick={() => setExportType('proposal')}
+                className={`flex-1 px-2 py-1 text-xs rounded ${exportType === 'proposal' ? 'bg-white shadow font-semibold' : ''}`}>
+                Proposal PDF
+              </button>
             </div>
+
+            {/* Map Mode Selection */}
+            <div className="space-y-1 mb-3">
+              <div className="text-xs font-medium text-gray-600 mb-1">Map Mode</div>
+              {['full', 'single', 'multi'].map(m => (
+                <label key={m} className="flex items-center">
+                  <input type="radio" name="exportMode" value={m} checked={exportMode === m}
+                    onChange={(e) => setExportMode(e.target.value)} />
+                  <span className="ml-2 text-xs">{m === 'full' ? 'Full Map' : m === 'single' ? 'Single Annotation' : 'Multiple Annotations'}</span>
+                </label>
+              ))}
+            </div>
+
+            {/* Annotation Selection */}
             {(exportMode === 'single' || exportMode === 'multi') && (
-              <div className="mb-4 max-h-40 overflow-y-auto border border-gray-200 rounded p-2">
+              <div className="mb-3 max-h-32 overflow-y-auto border border-gray-200 rounded p-2">
                 {vectorState.annos.map(anno => (
                   <label key={anno.id} className="flex items-center mb-1">
-                    <input
-                      type="checkbox"
-                      checked={selectedAnnoIds.has(anno.id)}
+                    <input type="checkbox" checked={selectedAnnoIds.has(anno.id)}
                       onChange={(e) => {
                         const newSet = new Set(selectedAnnoIds);
-                        if (e.target.checked) {
-                          newSet.add(anno.id);
-                        } else {
-                          newSet.delete(anno.id);
-                        }
+                        if (e.target.checked) newSet.add(anno.id); else newSet.delete(anno.id);
                         setSelectedAnnoIds(newSet);
-                      }}
-                    />
-                    <span className="ml-2 text-sm flex items-center gap-2">
-                      <div
-                        className="w-3 h-3 rounded"
-                        style={{ backgroundColor: anno.color }}
-                      />
+                      }} />
+                    <span className="ml-2 text-xs flex items-center gap-1">
+                      <div className="w-3 h-3 rounded" style={{ backgroundColor: anno.color }} />
                       {anno.note || anno.cat}
                     </span>
                   </label>
                 ))}
               </div>
             )}
+
+            {/* Quality Selector */}
+            <div className="mb-3">
+              <div className="text-xs font-medium text-gray-600 mb-1">Quality</div>
+              <div className="flex gap-1">
+                {[{v: 1.5, l: 'Standard'}, {v: 2, l: 'High'}, {v: 3, l: 'Ultra'}].map(q => (
+                  <button key={q.v} onClick={() => setExportQuality(q.v)}
+                    className={`flex-1 px-2 py-1 text-xs rounded border ${exportQuality === q.v ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-300 hover:bg-gray-50'}`}>
+                    {q.l} ({q.v}x)
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Proposal-only Options */}
+            {exportType === 'proposal' && (
+              <>
+                {/* Zoom Level Selection */}
+                <div className="mb-3">
+                  <div className="text-xs font-medium text-gray-600 mb-1">Map Views (pages in PDF)</div>
+                  <div className="space-y-1">
+                    {[{k: 'full', l: '100% - Full Map'}, {k: 'p75', l: '75% - Wider context'}, {k: 'p50', l: '50% - Focused'}, {k: 'p25', l: '25% - Close-up'}, {k: 'single', l: 'Single Plot Only'}].map(z => (
+                      <label key={z.k} className="flex items-center">
+                        <input type="checkbox" checked={zoomLevels[z.k]}
+                          onChange={(e) => setZoomLevels(prev => ({...prev, [z.k]: e.target.checked}))} />
+                        <span className="ml-2 text-xs">{z.l}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Field Configuration */}
+                <div className="mb-3">
+                  <div className="text-xs font-medium text-gray-600 mb-1">Detail Fields</div>
+                  <div className="grid grid-cols-2 gap-1">
+                    {[{k: 'owner', l: 'Owner'}, {k: 'value', l: 'Total Value'}, {k: 'area', l: 'Area (Marla)'},
+                      {k: 'ratePerMarla', l: 'Rate/Marla'}, {k: 'dimensions', l: 'Dimensions'}, {k: 'status', l: 'Status'},
+                      {k: 'notes', l: 'Notes'}, {k: 'coordinates', l: 'Coordinates'}, {k: 'annotationInfo', l: 'Annotation'}
+                    ].map(f => (
+                      <label key={f.k} className="flex items-center">
+                        <input type="checkbox" checked={fieldConfig[f.k]}
+                          onChange={(e) => setFieldConfig(prev => ({...prev, [f.k]: e.target.checked}))} />
+                        <span className="ml-1 text-xs">{f.l}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Output Toggle */}
+                <div className="mb-3">
+                  <label className="flex items-center">
+                    <input type="checkbox" checked={separateFiles} onChange={(e) => setSeparateFiles(e.target.checked)} />
+                    <span className="ml-2 text-xs">Separate PDF per zoom level</span>
+                  </label>
+                </div>
+              </>
+            )}
+
+            {/* Action Buttons */}
             <div className="flex gap-2">
-              <button
-                onClick={() => setShowExportModal(false)}
-                className="flex-1 px-3 py-2 text-xs bg-gray-200 rounded hover:bg-gray-300"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleExportPDF}
-                className="flex-1 px-3 py-2 text-xs bg-gray-900 text-white rounded hover:bg-gray-800"
-              >
-                Export PDF
-              </button>
+              <button onClick={() => setShowExportModal(false)}
+                className="flex-1 px-3 py-2 text-xs bg-gray-200 rounded hover:bg-gray-300">Cancel</button>
+              {exportType === 'map' ? (
+                <button onClick={handleExportPDF}
+                  className="flex-1 px-3 py-2 text-xs bg-gray-900 text-white rounded hover:bg-gray-800">Export Map PDF</button>
+              ) : (
+                <button onClick={() => {
+                  // Get plots to export - selected plots or all annotated plots
+                  const selectedPlots = vectorState.selected && vectorState.selected.size > 0
+                    ? Array.from(vectorState.selected).map(id => vectorState.plots.find(p => p.id === id)).filter(Boolean)
+                    : vectorState.plots.filter(p => vectorState.annos.some(a => a.plotIds.includes(p.id)));
+
+                  if (selectedPlots.length === 0) { alert('No plots to export. Select plots or ensure annotations exist.'); return; }
+
+                  // Build zoom levels array
+                  const zooms = [];
+                  if (zoomLevels.full) zooms.push(1.0);
+                  if (zoomLevels.p75) zooms.push(0.75);
+                  if (zoomLevels.p50) zooms.push(0.50);
+                  if (zoomLevels.p25) zooms.push(0.25);
+                  if (zoomLevels.single) zooms.push(0); // 0 = single plot only
+                  if (zooms.length === 0) zooms.push(1.0);
+
+                  exportProposalPDF(selectedPlots, vectorState, fieldConfig, {
+                    zoomLevels: zooms, quality: exportQuality, includeLegend: true,
+                    includeHeader: true, separateFiles
+                  });
+                  setShowExportModal(false);
+                }}
+                  className="flex-1 px-3 py-2 text-xs bg-orange-600 text-white rounded hover:bg-orange-700">Export Proposal</button>
+              )}
             </div>
           </div>
         </div>

@@ -1,0 +1,75 @@
+# Sitara CRM - Production Deployment (Office Server)
+# Branch: Prod11022026
+# Ports: PostgreSQL 5435, API 8001, Frontend (nginx) 8081
+#
+# DEPLOYMENT:
+#   1. Copy this file as docker-compose.yml on the server
+#   2. Run: docker compose up -d --build
+#   3. Run migration: docker exec -it sitara_crm_db psql -U sitara -d sitara_crm -f /tmp/migration.sql
+#
+# ROLLBACK:
+#   git checkout Prod30012026
+#   docker compose up -d --build
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: sitara_crm_db
+    environment:
+      POSTGRES_DB: sitara_crm
+      POSTGRES_USER: sitara
+      POSTGRES_PASSWORD: sitara_secure_2024
+    ports:
+      - "5435:5432"
+    volumes:
+      - sitara_postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sitara -d sitara_crm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    container_name: sitara_crm_api
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql://sitara:sitara_secure_2024@postgres:5432/sitara_crm
+      SECRET_KEY: sitara-production-key-change-this-in-real-deployment
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./media:/app/media
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  web:
+    image: nginx:alpine
+    container_name: sitara_crm_web
+    ports:
+      - "8081:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html
+      - ./nginx:/etc/nginx/conf.d
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sitara_postgres_data:
+
+networks:
+  default:
+    name: sitara_crm_network

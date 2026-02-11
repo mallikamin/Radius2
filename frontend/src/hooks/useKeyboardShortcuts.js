@@ -39,40 +39,25 @@ export function useKeyboardShortcuts(vectorState) {
         return;
       }
 
-      // Arrow key movement for selected items
-      if (vectorState.selectedItem) {
+      // Arrow key movement for selected plots
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
         const moveAmount = e.shiftKey ? 10 : 1;
-        let dx = 0;
-        let dy = 0;
+        let dx = 0, dy = 0;
 
         switch (e.key) {
-          case 'ArrowLeft':
-            dx = -moveAmount;
-            break;
-          case 'ArrowRight':
-            dx = moveAmount;
-            break;
-          case 'ArrowUp':
-            dy = -moveAmount;
-            break;
-          case 'ArrowDown':
-            dy = moveAmount;
-            break;
-          default:
-            return;
+          case 'ArrowLeft':  dx = -moveAmount; break;
+          case 'ArrowRight': dx = moveAmount; break;
+          case 'ArrowUp':    dy = -moveAmount; break;
+          case 'ArrowDown':  dy = moveAmount; break;
         }
 
-        if (dx !== 0 || dy !== 0) {
+        // Move individually focused items (labels, shapes, manual plots)
+        if (vectorState.selectedItem) {
           e.preventDefault();
-          
-          // Move based on type
           if (vectorState.selectedItem.type === 'manualPlot') {
             const plot = vectorState.plots.find(p => p.id === vectorState.selectedItem.id);
             if (plot) {
-              vectorState.updatePlot(plot.id, {
-                x: plot.x + dx,
-                y: plot.y + dy
-              });
+              vectorState.updatePlot(plot.id, { x: plot.x + dx, y: plot.y + dy });
             }
           } else if (vectorState.selectedItem.type === 'label') {
             const label = vectorState.labels.find(l => l.id === vectorState.selectedItem.id);
@@ -98,8 +83,20 @@ export function useKeyboardShortcuts(vectorState) {
               });
             }
           }
+          return;
         }
-        return;
+
+        // Move selected plots (single or multi-select) via plotOffsets
+        if (vectorState.selected && vectorState.selected.size > 0) {
+          e.preventDefault();
+          const newOffsets = { ...vectorState.plotOffsets };
+          vectorState.selected.forEach(plotId => {
+            const current = newOffsets[plotId] || { ox: 0, oy: 0 };
+            newOffsets[plotId] = { ox: current.ox + dx, oy: current.oy + dy };
+          });
+          vectorState.setPlotOffsets(newOffsets);
+          return;
+        }
       }
 
       // Undo/Redo (Ctrl+Z / Ctrl+Y)

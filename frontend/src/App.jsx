@@ -84,6 +84,17 @@ function LoginView({ onLogin }) {
 }
 
 // ============================================
+// ROLE HELPER
+// ============================================
+function getUserRole() {
+  try {
+    const userStr = localStorage.getItem('user');
+    if (userStr) return JSON.parse(userStr).role || 'user';
+  } catch (e) {}
+  return 'user';
+}
+
+// ============================================
 // MAIN APP
 // ============================================
 export default function App() {
@@ -193,6 +204,7 @@ export default function App() {
     const roleAccess = {
       admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector', 'settings'],
       manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'media', 'vector'],
+      creator: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector'],
       user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'media', 'vector'],
       viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'media', 'vector']
     };
@@ -1391,9 +1403,22 @@ function CustomersView() {
   };
 
   const handleDelete = async (c) => {
-    if (!confirm(`Delete "${c.name}"?`)) return;
-    try { await api.delete(`/customers/${c.id}`); loadCustomers(); }
-    catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    const role = getUserRole();
+    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'admin') {
+      if (!confirm(`Delete "${c.name}"?`)) return;
+      try { await api.delete(`/customers/${c.id}`); loadCustomers(); }
+      catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } else {
+      const reason = prompt(`Request deletion of "${c.name}"?\nProvide a reason:`);
+      if (reason === null) return;
+      try {
+        const res = await api.delete(`/customers/${c.id}`, { data: { reason } });
+        if (res.data.pending) {
+          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
+        } else { loadCustomers(); }
+      } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    }
   };
 
   const openEdit = (c) => { setEditing(c); setForm({ name: c.name, mobile: c.mobile, address: c.address || '', cnic: c.cnic || '', email: c.email || '' }); setShowModal(true); };
@@ -1431,7 +1456,9 @@ function CustomersView() {
                   <td className="px-6 py-4 text-sm text-gray-500">{c.cnic || '—'}</td>
                   <td className="px-6 py-4 text-right">
                     <button onClick={() => openEdit(c)} className="text-gray-400 hover:text-gray-600 mr-3">Edit</button>
-                    <button onClick={() => handleDelete(c)} className="text-gray-400 hover:text-red-500">Delete</button>
+                    {getUserRole() !== 'creator' && (
+                      <button onClick={() => handleDelete(c)} className="text-gray-400 hover:text-red-500">{getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}</button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -1493,9 +1520,22 @@ function BrokersView() {
   };
 
   const handleDelete = async (b) => {
-    if (!confirm(`Delete "${b.name}"?`)) return;
-    try { await api.delete(`/brokers/${b.id}`); loadData(); }
-    catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    const role = getUserRole();
+    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'admin') {
+      if (!confirm(`Delete "${b.name}"?`)) return;
+      try { await api.delete(`/brokers/${b.id}`); loadData(); }
+      catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } else {
+      const reason = prompt(`Request deletion of "${b.name}"?\nProvide a reason:`);
+      if (reason === null) return;
+      try {
+        const res = await api.delete(`/brokers/${b.id}`, { data: { reason } });
+        if (res.data.pending) {
+          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
+        } else { loadData(); }
+      } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    }
   };
 
   const openEdit = (b) => { setEditing(b); setForm({ name: b.name, mobile: b.mobile, company: b.company || '', commission_rate: b.commission_rate }); setShowModal(true); };
@@ -1584,7 +1624,9 @@ function BrokersView() {
               </div>
               <div className="flex gap-2 mt-4">
                 <button onClick={() => openEdit(b)} className="flex-1 py-2 text-sm border rounded-lg hover:bg-gray-50">Edit</button>
-                <button onClick={() => handleDelete(b)} className="py-2 px-4 text-sm text-red-500 border rounded-lg hover:bg-red-50">Delete</button>
+                {getUserRole() !== 'creator' && (
+                  <button onClick={() => handleDelete(b)} className="py-2 px-4 text-sm text-red-500 border rounded-lg hover:bg-red-50">{getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}</button>
+                )}
               </div>
             </div>
           ))}
@@ -4305,14 +4347,53 @@ function SettingsView() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: '', mobile: '', email: '' });
+  const [form, setForm] = useState({ name: '', mobile: '', email: '', role: 'user', password: '' });
   const [settingsTab, setSettingsTab] = useState('reps');
+  const [deletionRequests, setDeletionRequests] = useState([]);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [delReqFilter, setDelReqFilter] = useState('pending');
 
-  useEffect(() => { loadReps(); }, []);
+  useEffect(() => { loadReps(); loadPendingCount(); }, []);
+  useEffect(() => { if (settingsTab === 'deletion-requests') loadDeletionRequests(); }, [settingsTab, delReqFilter]);
+
   const loadReps = async () => {
     try { const res = await api.get('/company-reps'); setReps(res.data); }
     catch (e) { console.error(e); }
     finally { setLoading(false); }
+  };
+
+  const loadDeletionRequests = async () => {
+    try {
+      const params = delReqFilter ? `?status=${delReqFilter}` : '';
+      const res = await api.get(`/deletion-requests${params}`);
+      setDeletionRequests(res.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadPendingCount = async () => {
+    try {
+      const res = await api.get('/deletion-requests/pending-count');
+      setPendingCount(res.data.count);
+    } catch (e) { console.error(e); }
+  };
+
+  const handleApproveDeletion = async (reqId) => {
+    if (!confirm('Approve this deletion request? The record will be permanently deleted.')) return;
+    try {
+      await api.post(`/deletion-requests/${reqId}/approve`);
+      loadDeletionRequests();
+      loadPendingCount();
+    } catch (e) { alert(e.response?.data?.detail || 'Error approving request'); }
+  };
+
+  const handleRejectDeletion = async (reqId) => {
+    const reason = prompt('Reason for rejection:');
+    if (reason === null) return;
+    try {
+      await api.post(`/deletion-requests/${reqId}/reject`, { reason });
+      loadDeletionRequests();
+      loadPendingCount();
+    } catch (e) { alert(e.response?.data?.detail || 'Error rejecting request'); }
   };
 
   const handleSubmit = async (e) => {
@@ -4320,17 +4401,30 @@ function SettingsView() {
     try {
       if (editing) { await api.put(`/company-reps/${editing.id}`, form); }
       else { await api.post('/company-reps', form); }
-      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', email: '' }); loadReps();
+      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', password: '' }); loadReps();
     } catch (e) { alert(e.response?.data?.detail || 'Error'); }
   };
 
   const handleDelete = async (r) => {
-    if (!confirm(`Delete "${r.name}"?`)) return;
-    try { await api.delete(`/company-reps/${r.id}`); loadReps(); }
-    catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    const role = getUserRole();
+    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'admin') {
+      if (!confirm(`Delete "${r.name}"?`)) return;
+      try { await api.delete(`/company-reps/${r.id}`); loadReps(); }
+      catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } else {
+      const reason = prompt(`Request deletion of "${r.name}"?\nProvide a reason:`);
+      if (reason === null) return;
+      try {
+        const res = await api.delete(`/company-reps/${r.id}`, { data: { reason } });
+        if (res.data.pending) {
+          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
+        } else { loadReps(); }
+      } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    }
   };
 
-  const openEdit = (r) => { setEditing(r); setForm({ name: r.name, mobile: r.mobile || '', email: r.email || '' }); setShowModal(true); };
+  const openEdit = (r) => { setEditing(r); setForm({ name: r.name, mobile: r.mobile || '', email: r.email || '', role: r.role || 'user', password: '' }); setShowModal(true); };
 
   return (
     <div className="space-y-6">
@@ -4355,11 +4449,100 @@ function SettingsView() {
         >
           Project Linking
         </button>
+        {getUserRole() === 'admin' && (
+          <button
+            onClick={() => setSettingsTab('deletion-requests')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+              settingsTab === 'deletion-requests' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Deletion Requests {pendingCount > 0 && <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">{pendingCount}</span>}
+          </button>
+        )}
       </div>
 
       {settingsTab === 'project-linking' && (
         <div className="bg-white rounded-2xl shadow-sm border">
           <OrphanTrackingPanel />
+        </div>
+      )}
+
+      {settingsTab === 'deletion-requests' && (
+        <div className="bg-white rounded-2xl shadow-sm border p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Deletion Requests</h3>
+              <p className="text-sm text-gray-500">Review and approve or reject deletion requests from team members</p>
+            </div>
+            <div className="flex gap-2">
+              {['pending', 'approved', 'rejected', ''].map(status => (
+                <button
+                  key={status || 'all'}
+                  onClick={() => setDelReqFilter(status)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg ${
+                    delReqFilter === status
+                      ? 'bg-gray-900 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {status === '' ? 'All' : status.charAt(0).toUpperCase() + status.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {deletionRequests.length === 0 ? (
+            <div className="text-center py-8 text-gray-400">No {delReqFilter || ''} deletion requests</div>
+          ) : (
+            <div className="divide-y">
+              {deletionRequests.map(req => (
+                <div key={req.id} className="py-4">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-mono text-gray-400">{req.request_id}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-xs ${
+                          req.status === 'pending' ? 'bg-yellow-50 text-yellow-700' :
+                          req.status === 'approved' ? 'bg-green-50 text-green-700' :
+                          'bg-red-50 text-red-700'
+                        }`}>{req.status}</span>
+                        <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700">{req.entity_type}</span>
+                      </div>
+                      <div className="font-medium text-gray-900">{req.entity_name || `${req.entity_type} #${req.entity_id}`}</div>
+                      <div className="text-sm text-gray-500 mt-1">
+                        Requested by <span className="font-medium">{req.requested_by_name || req.requested_by}</span>
+                        {req.requested_at && <span> on {new Date(req.requested_at).toLocaleDateString()}</span>}
+                      </div>
+                      {req.reason && <div className="text-sm text-gray-600 mt-1 bg-gray-50 p-2 rounded">Reason: {req.reason}</div>}
+                      {req.status !== 'pending' && req.reviewed_by && (
+                        <div className="text-xs text-gray-400 mt-2">
+                          {req.status === 'approved' ? 'Approved' : 'Rejected'} by {req.reviewed_by}
+                          {req.reviewed_at && <span> on {new Date(req.reviewed_at).toLocaleDateString()}</span>}
+                          {req.rejection_reason && <span className="block text-gray-500 mt-1">Rejection reason: {req.rejection_reason}</span>}
+                        </div>
+                      )}
+                    </div>
+                    {req.status === 'pending' && (
+                      <div className="flex gap-2 ml-4">
+                        <button
+                          onClick={() => handleApproveDeletion(req.id)}
+                          className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => handleRejectDeletion(req.id)}
+                          className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -4370,7 +4553,7 @@ function SettingsView() {
             <h3 className="text-lg font-semibold text-gray-900">Company Representatives</h3>
             <p className="text-sm text-gray-500">Sales reps that handle transactions</p>
           </div>
-          <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', email: '' }); setShowModal(true); }} 
+          <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', password: '' }); setShowModal(true); }}
             className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Rep</button>
         </div>
 
@@ -4384,13 +4567,16 @@ function SettingsView() {
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-mono text-gray-400">{r.rep_id}</span>
                     <span className={`px-2 py-0.5 rounded-full text-xs ${r.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.status}</span>
+                    <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700">{r.role || 'user'}</span>
                   </div>
                   <div className="font-medium text-gray-900">{r.name}</div>
                   <div className="text-sm text-gray-500">{r.mobile} {r.email && `• ${r.email}`}</div>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => openEdit(r)} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">Edit</button>
-                  <button onClick={() => handleDelete(r)} className="px-3 py-1.5 text-sm text-red-500 border rounded-lg hover:bg-red-50">Delete</button>
+                  {getUserRole() !== 'creator' && (
+                    <button onClick={() => handleDelete(r)} className="px-3 py-1.5 text-sm text-red-500 border rounded-lg hover:bg-red-50">{getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}</button>
+                  )}
                 </div>
               </div>
             ))}
@@ -4403,6 +4589,18 @@ function SettingsView() {
               <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
               <Input label="Mobile" value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} />
               <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                <select value={form.role || 'user'} onChange={e => setForm({...form, role: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-1 focus:ring-gray-900">
+                  <option value="admin">Admin</option>
+                  <option value="manager">Manager</option>
+                  <option value="creator">Creator</option>
+                  <option value="user">User</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+              </div>
+              <Input label="Password" type="password" value={form.password || ''} onChange={e => setForm({...form, password: e.target.value})} placeholder={editing ? 'Leave blank to keep current' : 'Set password'} />
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
                 <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">{editing ? 'Update' : 'Create'}</button>
@@ -4449,12 +4647,23 @@ function MediaView() {
   };
 
   const handleDelete = async (fileId) => {
-    if (!confirm('Delete this file?')) return;
-    try {
-      await api.delete(`/media/${fileId}`);
-      loadFiles();
-    } catch (e) {
-      alert('Error deleting file');
+    const role = getUserRole();
+    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'admin') {
+      if (!confirm('Delete this file?')) return;
+      try {
+        await api.delete(`/media/${fileId}`);
+        loadFiles();
+      } catch (e) { alert(e.response?.data?.detail || 'Error deleting file'); }
+    } else {
+      const reason = prompt('Request deletion of this file?\nProvide a reason:');
+      if (reason === null) return;
+      try {
+        const res = await api.delete(`/media/${fileId}`, { data: { reason } });
+        if (res.data.pending) {
+          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
+        } else { loadFiles(); }
+      } catch (e) { alert(e.response?.data?.detail || 'Error deleting file'); }
     }
   };
 
@@ -4604,12 +4813,14 @@ function MediaView() {
                         >
                           Download
                         </button>
-                        <button
-                          onClick={() => handleDelete(file.file_id)}
-                          className="text-red-600 hover:text-red-800 text-sm font-medium"
-                        >
-                          Delete
-                        </button>
+                        {getUserRole() !== 'creator' && (
+                          <button
+                            onClick={() => handleDelete(file.file_id)}
+                            className="text-red-600 hover:text-red-800 text-sm font-medium"
+                          >
+                            {getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -4665,11 +4876,24 @@ function MediaManager({ entityType, entityId, onUpload }) {
   };
 
   const handleDelete = async (fileId) => {
-    if (!confirm('Delete this file?')) return;
-    try {
-      await api.delete(`/media/${fileId}`);
-      loadFiles();
-    } catch (e) { alert('Error deleting file'); }
+    const role = getUserRole();
+    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'admin') {
+      if (!confirm('Delete this file?')) return;
+      try {
+        await api.delete(`/media/${fileId}`);
+        loadFiles();
+      } catch (e) { alert(e.response?.data?.detail || 'Error deleting file'); }
+    } else {
+      const reason = prompt('Request deletion of this file?\nProvide a reason:');
+      if (reason === null) return;
+      try {
+        const res = await api.delete(`/media/${fileId}`, { data: { reason } });
+        if (res.data.pending) {
+          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
+        } else { loadFiles(); }
+      } catch (e) { alert(e.response?.data?.detail || 'Error deleting file'); }
+    }
   };
 
   const handleDownload = (fileId, fileName) => {
@@ -4714,9 +4938,11 @@ function MediaManager({ entityType, entityId, onUpload }) {
                 <button onClick={() => handleDownload(f.file_id, f.file_name)} className="text-blue-600 hover:text-blue-800 text-xs">
                   Download
                 </button>
-                <button onClick={() => handleDelete(f.file_id)} className="text-red-600 hover:text-red-800 text-xs">
-                  Delete
-                </button>
+                {getUserRole() !== 'creator' && (
+                  <button onClick={() => handleDelete(f.file_id)} className="text-red-600 hover:text-red-800 text-xs">
+                    {getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}
+                  </button>
+                )}
               </div>
             </div>
           ))}

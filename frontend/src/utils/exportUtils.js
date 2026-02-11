@@ -58,11 +58,6 @@ export function exportPlotDetailsToPDF(plotsToExport, vectorState) {
       yPos += 8;
     }
     
-    // Coordinates
-    doc.setFontSize(10);
-    doc.text(`Coordinates: X: ${Math.round(p.x)}, Y: ${Math.round(p.y)}`, margin, yPos);
-    yPos += 8;
-    
     // Inventory details
     if (inv.marla || inv.totalValue || inv.owner) {
       doc.setFontSize(12);
@@ -135,13 +130,6 @@ export function exportPlotDetailsToPDF(plotsToExport, vectorState) {
         doc.text(`${anno.note} (${anno.plotIds.length} plots)`, margin + 35, yPos);
         yPos += 6;
       }
-      
-      // Coordinates
-      doc.setTextColor(50, 50, 50);
-      doc.text('Coordinates:', margin + 5, yPos);
-      doc.setTextColor(0, 0, 0);
-      doc.text(`X: ${Math.round(p.x)}, Y: ${Math.round(p.y)}`, margin + 35, yPos);
-      yPos += 6;
       
       // Area (Marla)
       if (inv.marla) {
@@ -260,12 +248,16 @@ export function buildExportCanvasEnhanced(vectorState, mode = 'full', highlightI
     });
   });
   
-  // Determine highlight annotation IDs
+  // Determine highlight annotation IDs or plot IDs
   const highlightAnnoIds = new Set();
+  const highlightPlotIds = new Set();
   if (mode === 'single' && highlightItems) {
     highlightAnnoIds.add(highlightItems.id);
   } else if (mode === 'multi' && highlightItems) {
     highlightItems.forEach(h => highlightAnnoIds.add(h.id));
+  } else if (mode === 'proposal' && highlightItems) {
+    // highlightItems = array of plot IDs to highlight
+    highlightItems.forEach(pid => highlightPlotIds.add(pid));
   }
   
   // Draw plots
@@ -283,14 +275,23 @@ export function buildExportCanvasEnhanced(vectorState, mode = 'full', highlightI
       const isHighlighted = highlightAnnoIds.has(a.id);
       if (!isHighlighted) return;
     }
-    
+    if (mode === 'proposal') {
+      if (!highlightPlotIds.has(p.id)) return;
+    }
+
     const offset = vectorState.plotOffsets[p.id] || { ox: 0, oy: 0 };
     const px = (p.x + offset.ox) * expScale;
     const py = (p.y + offset.oy) * expScale;
-    
+
     // Determine styling
     let fillColor, textColor, borderColor, opacity;
-    if ((mode === 'single' && highlightItems && a && a.id === highlightItems.id) ||
+    if (mode === 'proposal') {
+      // Proposal mode: only selected plots reach here (non-selected skipped above)
+      fillColor = '#dc2626'; // red-600
+      textColor = '#ffffff';
+      borderColor = '#991b1b'; // red-800
+      opacity = 1;
+    } else if ((mode === 'single' && highlightItems && a && a.id === highlightItems.id) ||
         (mode === 'multi' && highlightAnnoIds.has(a.id))) {
       fillColor = a.color;
       textColor = '#ffffff';
@@ -307,8 +308,8 @@ export function buildExportCanvasEnhanced(vectorState, mode = 'full', highlightI
       borderColor = '#000000';
       opacity = a ? 0.92 : 0.75;
     }
-    
-    if (a || mode === 'full') {
+
+    if (a || mode === 'full' || mode === 'proposal') {
       const fontSize = (a ? (a.fontSize || 12) : 10) * expScale;
       ctx.font = `bold ${fontSize}px Arial`;
       const displayText = p.n;
@@ -411,7 +412,7 @@ export function buildExportCanvasEnhanced(vectorState, mode = 'full', highlightI
     // Draw legend if requested
     if (includeLegend && vectorState.legend && vectorState.legend.visible) {
       try {
-        drawLegendOnCanvas(ctx, vectorState, c.width, c.height, expScale, legendPosition);
+        drawLegendOnCanvas(ctx, vectorState, c.width, c.height, expScale, legendPosition, mode === 'proposal' ? highlightPlotIds : null);
       } catch (legendError) {
         console.warn('Error drawing legend on export:', legendError);
         // Continue without legend if it fails
@@ -426,14 +427,17 @@ export function buildExportCanvasEnhanced(vectorState, mode = 'full', highlightI
 }
 
 // Draw legend on export canvas - matches live version layout
-function drawLegendOnCanvas(ctx, vectorState, canvasWidth, canvasHeight, expScale, position = 'bottom-right') {
+function drawLegendOnCanvas(ctx, vectorState, canvasWidth, canvasHeight, expScale, position = 'bottom-right', filterPlotIds = null) {
   // Calculate legend items (same logic as LegendPanel)
   const items = [];
   const seen = new Set();
-  
+
   vectorState.annos.forEach(a => {
+    // In proposal mode, skip annotations that don't contain any selected plots
+    if (filterPlotIds && !a.plotIds.some(pid => filterPlotIds.has(pid))) return;
+
     const key = a.color + '|' + (a.note || a.cat);
-    
+
     if (!seen.has(key)) {
       seen.add(key);
       
@@ -588,6 +592,322 @@ function drawLegendOnCanvas(ctx, vectorState, canvasWidth, canvasHeight, expScal
       ctx.stroke();
     }
   });
+}
+
+// Calculate annotation inventory stats
+export function calculateAnnotationInventoryStats(annotation, vectorState) {
+  let totalMarla = 0, totalValue = 0, plotsWithData = 0;
+  annotation.plotIds.forEach(pid => {
+    const plot = vectorState.plots.find(x => x.id === pid);
+    if (plot) {
+      let inv = vectorState.inventory[plot.n];
+      if (!inv) {
+        const invKey = Object.keys(vectorState.inventory).find(key =>
+          key.toUpperCase() === plot.n.toUpperCase() || key.trim().toUpperCase() === plot.n.trim().toUpperCase()
+        );
+        if (invKey) inv = vectorState.inventory[invKey];
+      }
+      if (inv) {
+        totalMarla += parseFloat(inv.marla) || 0;
+        totalValue += parseFloat(inv.totalValue) || 0;
+        if (inv.marla || inv.totalValue) plotsWithData++;
+      }
+    }
+  });
+  return { totalMarla, totalValue, plotsWithData, plotCount: annotation.plotIds.length };
+}
+
+// Build cropped export canvas centered on selected plots
+export function buildCroppedExportCanvas(vectorState, centerPlotIdOrIds, zoomLevel, expScale = 2, includeLegend = true, legendPosition = 'bottom-right') {
+  // zoomLevel: 1.0=100%, 0.75=75%, 0.50=50%, 0.25=25%
+  // centerPlotIdOrIds: single ID or array of IDs
+  const plotIds = Array.isArray(centerPlotIdOrIds) ? centerPlotIdOrIds : [centerPlotIdOrIds];
+  const fullCanvas = buildExportCanvasEnhanced(vectorState, 'proposal', plotIds, expScale, false, legendPosition);
+
+  // Compute centroid of all selected plots
+  const selectedPlots = plotIds.map(id => vectorState.plots.find(p => p.id === id)).filter(Boolean);
+  if (selectedPlots.length === 0) return fullCanvas;
+
+  let cx = 0, cy = 0;
+  selectedPlots.forEach(p => {
+    const offset = vectorState.plotOffsets[p.id] || { ox: 0, oy: 0 };
+    cx += (p.x + offset.ox) * expScale;
+    cy += (p.y + offset.oy) * expScale;
+  });
+  cx /= selectedPlots.length;
+  cy /= selectedPlots.length;
+
+  const cropW = fullCanvas.width * zoomLevel;
+  const cropH = fullCanvas.height * zoomLevel;
+
+  let cropX = cx - cropW / 2;
+  let cropY = cy - cropH / 2;
+  cropX = Math.max(0, Math.min(fullCanvas.width - cropW, cropX));
+  cropY = Math.max(0, Math.min(fullCanvas.height - cropH, cropY));
+
+  const croppedCanvas = document.createElement('canvas');
+  croppedCanvas.width = cropW;
+  croppedCanvas.height = cropH;
+  const ctx = croppedCanvas.getContext('2d');
+  ctx.drawImage(fullCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  // No extra highlight needed - proposal mode already highlights selected plots in red
+
+  if (includeLegend && vectorState.legend && vectorState.legend.visible) {
+    try {
+      const filterIds = new Set(plotIds);
+      drawLegendOnCanvas(ctx, vectorState, croppedCanvas.width, croppedCanvas.height, expScale, legendPosition, filterIds);
+    } catch (e) { console.warn('Legend error on cropped canvas:', e); }
+  }
+
+  return croppedCanvas;
+}
+
+// Build single-plot-only canvas (shows only selected plots highlighted, rest dimmed)
+export function buildSinglePlotCanvas(vectorState, plotIds, expScale = 2) {
+  const fullCanvas = buildExportCanvasEnhanced(vectorState, 'proposal', plotIds, expScale, false);
+
+  // Find bounding box of selected plots with generous padding (~5% of map)
+  const selectedPlots = vectorState.plots.filter(p => plotIds.includes(p.id));
+  if (selectedPlots.length === 0) return fullCanvas;
+
+  // Use 4% of map dimension as padding (wider context for single plot view)
+  const padX = Math.max(80 * expScale, fullCanvas.width * 0.04);
+  const padY = Math.max(80 * expScale, fullCanvas.height * 0.04);
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  selectedPlots.forEach(p => {
+    const offset = vectorState.plotOffsets[p.id] || { ox: 0, oy: 0 };
+    const px = (p.x + offset.ox) * expScale;
+    const py = (p.y + offset.oy) * expScale;
+    minX = Math.min(minX, px - padX);
+    minY = Math.min(minY, py - padY);
+    maxX = Math.max(maxX, px + padX);
+    maxY = Math.max(maxY, py + padY);
+  });
+
+  // Clamp and add padding
+  minX = Math.max(0, minX);
+  minY = Math.max(0, minY);
+  maxX = Math.min(fullCanvas.width, maxX);
+  maxY = Math.min(fullCanvas.height, maxY);
+
+  const cropW = maxX - minX;
+  const cropH = maxY - minY;
+
+  const croppedCanvas = document.createElement('canvas');
+  croppedCanvas.width = cropW;
+  croppedCanvas.height = cropH;
+  const ctx = croppedCanvas.getContext('2d');
+  ctx.drawImage(fullCanvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+
+  return croppedCanvas;
+}
+
+// Export Proposal PDF - clean summary table + map views
+export async function exportProposalPDF(plotsToExport, vectorState, fieldConfig, viewOptions) {
+  let jsPDFClass;
+  if (window.jspdf && window.jspdf.jsPDF) {
+    jsPDFClass = window.jspdf.jsPDF;
+  } else {
+    try {
+      const mod = await import('jspdf');
+      jsPDFClass = mod.jsPDF;
+    } catch (err) {
+      alert('jsPDF not loaded. Please refresh the page.');
+      return;
+    }
+  }
+
+  const quality = viewOptions.quality || 2;
+  const legendPosition = vectorState.legend?.position || 'bottom-right';
+  const plotIds = plotsToExport.map(p => p.id);
+
+  const fmtPKR = (v) => v ? 'PKR ' + parseFloat(v).toLocaleString('en-PK', { maximumFractionDigits: 0 }) : '';
+
+  const generatePDF = (zoomLevels, suffix = '') => {
+    const pdf = new jsPDFClass({ orientation: 'landscape', unit: 'mm', format: 'a3', compress: true });
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
+    const margin = 12;
+
+    // === PAGE 1: Header + Summary Table ===
+
+    // Dark header bar
+    pdf.setFillColor(30, 41, 59);
+    pdf.rect(0, 0, pw, 22, 'F');
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(14);
+    pdf.setFont(undefined, 'bold');
+    pdf.text(vectorState.projectName || 'Project Proposal', margin, 15);
+    pdf.setFontSize(8);
+    pdf.setFont(undefined, 'normal');
+    pdf.text(new Date().toLocaleDateString(), pw - margin, 15, { align: 'right' });
+
+    let y = 30;
+
+    // Compute totals
+    let totalMarla = 0, totalValue = 0;
+    plotsToExport.forEach(p => {
+      const inv = vectorState.inventory[p.n] || {};
+      totalMarla += parseFloat(inv.marla) || 0;
+      totalValue += parseFloat(inv.totalValue) || 0;
+    });
+
+    // Summary line
+    pdf.setTextColor(0, 0, 0);
+    pdf.setFontSize(10);
+    pdf.setFont(undefined, 'bold');
+    const summaryParts = [`${plotsToExport.length} Plot${plotsToExport.length > 1 ? 's' : ''}`];
+    if (totalMarla > 0) summaryParts.push(`${totalMarla.toFixed(1)} Marla`);
+    if (totalValue > 0) summaryParts.push(fmtPKR(totalValue));
+    pdf.text(summaryParts.join('  |  '), margin, y);
+    y += 8;
+
+    // Build table columns based on fieldConfig
+    const cols = [{ key: 'plot', label: 'Plot#', w: 18 }];
+    if (fieldConfig.annotationInfo) cols.push({ key: 'anno', label: 'Annotation', w: 40 });
+    if (fieldConfig.area) cols.push({ key: 'area', label: 'Area', w: 22 });
+    if (fieldConfig.value) cols.push({ key: 'value', label: 'Value', w: 38 });
+    if (fieldConfig.ratePerMarla) cols.push({ key: 'rate', label: 'Rate/M', w: 32 });
+    if (fieldConfig.dimensions) cols.push({ key: 'dims', label: 'Dims', w: 28 });
+    if (fieldConfig.owner) cols.push({ key: 'owner', label: 'Owner', w: 35 });
+    if (fieldConfig.status) cols.push({ key: 'status', label: 'Status', w: 22 });
+    if (fieldConfig.notes) cols.push({ key: 'notes', label: 'Notes', w: 0 }); // flex
+
+    // Calculate flex column width
+    const fixedW = cols.reduce((sum, c) => sum + c.w, 0);
+    const tableW = pw - margin * 2;
+    const flexCol = cols.find(c => c.w === 0);
+    if (flexCol) flexCol.w = Math.max(30, tableW - fixedW);
+
+    // Table header
+    const rowH = 7;
+    pdf.setFillColor(241, 245, 249); // slate-100
+    pdf.rect(margin, y, tableW, rowH, 'F');
+    pdf.setFontSize(7);
+    pdf.setFont(undefined, 'bold');
+    pdf.setTextColor(71, 85, 105); // slate-500
+    let xPos = margin + 2;
+    cols.forEach(col => {
+      pdf.text(col.label, xPos, y + 5);
+      xPos += col.w;
+    });
+    y += rowH;
+
+    // Table rows
+    pdf.setFont(undefined, 'normal');
+    pdf.setTextColor(0, 0, 0);
+    pdf.setFontSize(7);
+
+    plotsToExport.forEach((p, idx) => {
+      if (y > ph - 20) { pdf.addPage(); y = margin; }
+
+      const inv = vectorState.inventory[p.n] || {};
+      const anno = vectorState.annos.find(a => a.plotIds.includes(p.id));
+
+      // Alternate row shading
+      if (idx % 2 === 0) {
+        pdf.setFillColor(249, 250, 251);
+        pdf.rect(margin, y, tableW, rowH, 'F');
+      }
+
+      // Draw thin border
+      pdf.setDrawColor(229, 231, 235);
+      pdf.setLineWidth(0.2);
+      pdf.line(margin, y + rowH, margin + tableW, y + rowH);
+
+      xPos = margin + 2;
+      const rowData = {
+        plot: p.n,
+        anno: anno ? anno.note : '',
+        area: inv.marla ? `${inv.marla} M` : '',
+        value: fmtPKR(inv.totalValue),
+        rate: fmtPKR(inv.ratePerMarla),
+        dims: inv.dimensions || '',
+        owner: inv.owner || '',
+        status: inv.status || '',
+        notes: inv.notes || ''
+      };
+
+      cols.forEach(col => {
+        let text = rowData[col.key] || '';
+        // Truncate to fit column
+        const maxChars = Math.floor(col.w / 1.8);
+        if (text.length > maxChars) text = text.substring(0, maxChars - 1) + '..';
+        pdf.text(text, xPos, y + 5);
+        xPos += col.w;
+      });
+      y += rowH;
+    });
+
+    // Totals row
+    if (y > ph - 20) { pdf.addPage(); y = margin; }
+    pdf.setFillColor(30, 41, 59);
+    pdf.rect(margin, y, tableW, rowH + 1, 'F');
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(7);
+    pdf.setFont(undefined, 'bold');
+    xPos = margin + 2;
+    cols.forEach(col => {
+      let text = '';
+      if (col.key === 'plot') text = 'TOTAL';
+      else if (col.key === 'area' && totalMarla > 0) text = `${totalMarla.toFixed(1)} M`;
+      else if (col.key === 'value' && totalValue > 0) text = fmtPKR(totalValue);
+      pdf.text(text, xPos, y + 5);
+      xPos += col.w;
+    });
+
+    // === MAP PAGES at selected zoom levels ===
+    zoomLevels.forEach(zoom => {
+      pdf.addPage();
+      let canvas;
+      const zoomLabel = zoom === 0 ? 'Single Plot View' : `${Math.round(zoom * 100)}% View`;
+
+      if (zoom === 0) {
+        canvas = buildSinglePlotCanvas(vectorState, plotIds, quality);
+      } else if (zoom === 1.0) {
+        canvas = buildExportCanvasEnhanced(vectorState, 'proposal', plotIds, quality, viewOptions.includeLegend, legendPosition);
+      } else {
+        canvas = buildCroppedExportCanvas(vectorState, plotIds, zoom, quality, viewOptions.includeLegend, legendPosition);
+      }
+
+      // Slim title bar
+      pdf.setFillColor(30, 41, 59);
+      pdf.rect(0, 0, pw, 10, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(8);
+      pdf.setFont(undefined, 'normal');
+      pdf.text(`${zoomLabel}  |  ${plotsToExport.map(p => p.n).join(', ')}`, 5, 7);
+      pdf.text(vectorState.projectName || '', pw - 5, 7, { align: 'right' });
+
+      // Fit canvas to page
+      const ratio = canvas.width / canvas.height;
+      const availW = pw - 8, availH = ph - 16;
+      let w, h;
+      if (ratio > availW / availH) { w = availW; h = w / ratio; }
+      else { h = availH; w = h * ratio; }
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 4, 12, w, h);
+    });
+
+    const filename = `${vectorState.projectName || 'map'}_Proposal${suffix}_${new Date().toISOString().split('T')[0]}.pdf`;
+    pdf.save(filename);
+    return filename;
+  };
+
+  const zoomLevels = viewOptions.zoomLevels || [1.0];
+
+  if (viewOptions.separateFiles) {
+    const filenames = [];
+    zoomLevels.forEach(zoom => {
+      const label = zoom === 0 ? 'SingleView' : `${Math.round(zoom * 100)}pct`;
+      filenames.push(generatePDF([zoom], `_${label}`));
+    });
+    alert(`Saved ${filenames.length} PDF files`);
+  } else {
+    const filename = generatePDF(zoomLevels);
+    alert(`Proposal PDF saved: ${filename}`);
+  }
 }
 
 // Helper to draw star
