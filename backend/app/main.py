@@ -2,11 +2,11 @@
 Radius CRM v3 - Complete Backend
 Customers, Brokers, Projects, Inventory, Transactions
 """
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Query, Form, status
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Query, Form, status, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, text
+from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, Boolean, text, extract
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from sqlalchemy.sql import func
@@ -20,6 +20,17 @@ import os
 import uuid
 import csv
 import io
+import json as json_module
+import asyncio
+import queue
+import threading
+import hashlib
+
+# ============================================
+# FILE STORAGE SETUP - Map PDFs stored on filesystem instead of DB
+# ============================================
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', 'uploads', 'maps')
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ============================================
 # DATABASE SETUP
@@ -425,7 +436,10 @@ class VectorProject(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     map_name = Column(String(255), nullable=True)
-    map_pdf_base64 = Column(Text, nullable=True)
+    map_pdf_base64 = Column(Text, nullable=True)  # Legacy: base64 PDF data (prefer map_file_path)
+    map_file_path = Column(String(500), nullable=True)  # NEW: filesystem path for map PDF (avoids ~5MB base64 in DB)
+    # MIGRATION NOTE: Run this SQL to add the column if it doesn't exist:
+    #   ALTER TABLE vector_projects ADD COLUMN IF NOT EXISTS map_file_path VARCHAR(500);
     map_size = Column(JSONB, nullable=True)  # {width, height}
     linked_project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True)  # Optional link to Radius project
     vector_metadata = Column(JSONB, nullable=True)  # Vector-specific settings
@@ -541,6 +555,70 @@ class VectorReconciliation(Base):
     last_sync_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
+
+# ============================================
+# NOTIFICATION MODEL
+# ============================================
+class Notification(Base):
+    __tablename__ = 'notifications'
+    id = Column(Integer, primary_key=True)
+    notification_id = Column(String(20), unique=True)
+    user_rep_id = Column(String(20), nullable=False)  # Target user
+    title = Column(String(200), nullable=False)
+    message = Column(Text)
+    type = Column(String(50), default='info')  # info, warning, alert, success
+    category = Column(String(50))  # overdue, deletion_request, follow_up, system
+    entity_type = Column(String(50))  # customer, transaction, installment, etc.
+    entity_id = Column(String(50))  # Reference ID
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=func.now())
+    read_at = Column(DateTime, nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'notification_id': self.notification_id,
+            'user_rep_id': self.user_rep_id,
+            'title': self.title,
+            'message': self.message,
+            'type': self.type,
+            'category': self.category,
+            'entity_type': self.entity_type,
+            'entity_id': self.entity_id,
+            'is_read': self.is_read,
+            'created_at': str(self.created_at) if self.created_at else None,
+            'read_at': str(self.read_at) if self.read_at else None
+        }
+
+# ============================================
+# AUDIT LOG MODEL
+# ============================================
+class AuditLog(Base):
+    __tablename__ = 'audit_log'
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=func.now())
+    user_rep_id = Column(String(20))
+    user_name = Column(String(100))
+    action = Column(String(20))  # CREATE, UPDATE, DELETE
+    entity_type = Column(String(50))  # customer, transaction, etc.
+    entity_id = Column(String(50))
+    entity_name = Column(String(200))
+    changes = Column(Text)  # JSON string of before/after for UPDATEs
+    ip_address = Column(String(50))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'timestamp': str(self.timestamp) if self.timestamp else None,
+            'user_rep_id': self.user_rep_id,
+            'user_name': self.user_name,
+            'action': self.action,
+            'entity_type': self.entity_type,
+            'entity_id': self.entity_id,
+            'entity_name': self.entity_name,
+            'changes': self.changes,
+            'ip_address': self.ip_address
+        }
 
 # ============================================
 # AUTHENTICATION SETUP
@@ -813,6 +891,69 @@ def require_role(allowed_roles: List[str]):
     return role_checker
 
 # ============================================
+# NOTIFICATION HELPER
+# ============================================
+def create_notification(db, rep_id, title, message, type='info', category='system', entity_type=None, entity_id=None):
+    """Helper to create a notification"""
+    try:
+        seq = db.execute(text("SELECT nextval('notifications_id_seq')")).scalar()
+        notif = Notification(
+            id=seq,
+            notification_id=f'NTF-{seq:05d}',
+            user_rep_id=rep_id,
+            title=title,
+            message=message,
+            type=type,
+            category=category,
+            entity_type=entity_type,
+            entity_id=entity_id
+        )
+        db.add(notif)
+        return notif
+    except Exception as e:
+        print(f"Error creating notification: {e}")
+        return None
+
+# ============================================
+# AUDIT LOG HELPER
+# ============================================
+def log_audit(db, request, current_user, action, entity_type, entity_id, entity_name=None, changes=None):
+    """Log an audit entry"""
+    try:
+        entry = AuditLog(
+            user_rep_id=current_user.rep_id if hasattr(current_user, 'rep_id') else current_user.get('rep_id', 'unknown'),
+            user_name=current_user.name if hasattr(current_user, 'name') else current_user.get('name', 'unknown'),
+            action=action,
+            entity_type=entity_type,
+            entity_id=str(entity_id),
+            entity_name=entity_name,
+            changes=json_module.dumps(changes) if changes else None,
+            ip_address=request.client.host if request and request.client else None
+        )
+        db.add(entry)
+    except Exception as e:
+        print(f"Audit log error: {e}")
+
+# ============================================
+# SSE REAL-TIME UPDATES
+# ============================================
+sse_clients = []
+sse_lock = threading.Lock()
+
+def broadcast_sse(event_type, data):
+    """Broadcast an SSE event to all connected clients"""
+    message = f"event: {event_type}\ndata: {json_module.dumps(data)}\n\n"
+    with sse_lock:
+        dead_clients = []
+        for client_queue in sse_clients:
+            try:
+                client_queue.put_nowait(message)
+            except:
+                dead_clients.append(client_queue)
+        for dead in dead_clients:
+            sse_clients.remove(dead)
+
+# ============================================
 # VECTOR UTILITY FUNCTIONS
 # ============================================
 def normalize_plot_number(plot_num: str) -> str:
@@ -944,6 +1085,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
 )
 
 @app.get("/")
@@ -1092,13 +1234,15 @@ def health_check(db: Session = Depends(get_db)):
 # CUSTOMERS API
 # ============================================
 @app.get("/api/customers")
-def list_customers(db: Session = Depends(get_db)):
-    customers = db.query(Customer).order_by(Customer.created_at.desc()).all()
-    return [{
+def list_customers(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    total_count = db.query(func.count(Customer.id)).scalar()
+    customers = db.query(Customer).order_by(Customer.created_at.desc()).offset(skip).limit(limit).all()
+    data = [{
         "id": str(c.id), "customer_id": c.customer_id, "name": c.name,
         "mobile": c.mobile, "address": c.address, "cnic": c.cnic,
         "email": c.email, "created_at": str(c.created_at)
     } for c in customers]
+    return JSONResponse(content=data, headers={"X-Total-Count": str(total_count)})
 
 @app.get("/api/customers/{cid}")
 def get_customer(cid: str, db: Session = Depends(get_db)):
@@ -1117,25 +1261,32 @@ def get_customer(cid: str, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/customers")
-def create_customer(data: dict, db: Session = Depends(get_db)):
+def create_customer(data: dict, request: Request, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     if db.query(Customer).filter(Customer.mobile == data["mobile"]).first():
         raise HTTPException(400, f"Customer with mobile {data['mobile']} already exists")
     c = Customer(name=data["name"], mobile=data["mobile"], address=data.get("address"),
                  cnic=data.get("cnic"), email=data.get("email"))
     db.add(c); db.commit(); db.refresh(c)
+    log_audit(db, request, current_user, 'CREATE', 'customer', c.customer_id, c.name)
+    db.commit()
     return {"message": "Customer created", "id": str(c.id), "customer_id": c.customer_id}
 
 @app.put("/api/customers/{cid}")
-def update_customer(cid: str, data: dict, db: Session = Depends(get_db)):
+def update_customer(cid: str, data: dict, request: Request, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     c = db.query(Customer).filter((Customer.id == cid) | (Customer.customer_id == cid)).first()
     if not c: raise HTTPException(404, "Customer not found")
+    before = {"name": c.name, "mobile": c.mobile, "address": c.address, "cnic": c.cnic, "email": c.email}
     for k in ["name", "mobile", "address", "cnic", "email"]:
         if k in data and data[k] is not None: setattr(c, k, data[k])
+    after = {"name": c.name, "mobile": c.mobile, "address": c.address, "cnic": c.cnic, "email": c.email}
+    changes_dict = {k: {'before': before[k], 'after': after[k]} for k in before if before[k] != after.get(k)}
+    db.commit()
+    log_audit(db, request, current_user, 'UPDATE', 'customer', c.customer_id, c.name, changes_dict if changes_dict else None)
     db.commit()
     return {"message": "Customer updated"}
 
 @app.delete("/api/customers/{cid}")
-def delete_customer(cid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
+def delete_customer(cid: str, request: Request, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     c = find_entity(db, Customer, "customer_id", cid)
     if not c: raise HTTPException(404, "Customer not found")
 
@@ -1145,12 +1296,23 @@ def delete_customer(cid: str, db: Session = Depends(get_db), current_user: Compa
 
     # Admin can delete directly
     if current_user.role == "admin":
+        customer_id_str = c.customer_id
+        customer_name = c.name
         db.delete(c); db.commit()
+        log_audit(db, request, current_user, 'DELETE', 'customer', customer_id_str, customer_name)
+        db.commit()
         return {"message": "Customer deleted"}
 
     # Non-admin: create deletion request
     req = DeletionRequest(entity_type="customer", entity_id=c.id, entity_name=c.name, requested_by=current_user.id)
     db.add(req); db.commit(); db.refresh(req)
+    # Notify admins about deletion request
+    admins = db.query(CompanyRep).filter(CompanyRep.role == 'admin').all()
+    for admin in admins:
+        create_notification(db, admin.rep_id, f'Deletion Request: {c.name}',
+                          f'{current_user.name} requested deletion of customer {c.name}',
+                          type='warning', category='deletion_request', entity_type='customer', entity_id=c.customer_id)
+    db.commit()
     return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 @app.get("/api/customers/template/download")
@@ -1186,8 +1348,9 @@ async def bulk_import_customers(file: UploadFile = File(...), db: Session = Depe
 # BROKERS API
 # ============================================
 @app.get("/api/brokers")
-def list_brokers(db: Session = Depends(get_db)):
-    brokers = db.query(Broker).order_by(Broker.created_at.desc()).all()
+def list_brokers(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    total_count = db.query(func.count(Broker.id)).scalar()
+    brokers = db.query(Broker).order_by(Broker.created_at.desc()).offset(skip).limit(limit).all()
     result = []
     for b in brokers:
         customer = db.query(Customer).filter(Customer.mobile == b.mobile).first()
@@ -1208,7 +1371,7 @@ def list_brokers(db: Session = Depends(get_db)):
                 "commission_earned": commission_earned, "commission_paid": 0, "commission_pending": commission_earned
             }
         })
-    return result
+    return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
 
 @app.get("/api/brokers/summary")
 def get_brokers_summary(db: Session = Depends(get_db)):
@@ -1348,9 +1511,10 @@ async def bulk_import_brokers(file: UploadFile = File(...), db: Session = Depend
 # PROJECTS API
 # ============================================
 @app.get("/api/projects")
-def list_projects(db: Session = Depends(get_db)):
+def list_projects(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     try:
-        projects = db.query(Project).order_by(Project.created_at.desc()).all()
+        total_count = db.query(func.count(Project.id)).scalar()
+        projects = db.query(Project).order_by(Project.created_at.desc()).offset(skip).limit(limit).all()
         result = []
         for p in projects:
             inventory = db.query(Inventory).filter(Inventory.project_id == p.id).all()
@@ -1368,7 +1532,7 @@ def list_projects(db: Session = Depends(get_db)):
                     "sold_value": sum(float(i.area_marla) * float(i.rate_per_marla) for i in sold)
                 }
             })
-        return result
+        return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
     except Exception as e:
         error_msg = str(e)
         if "does not exist" in error_msg.lower() or "column" in error_msg.lower():
@@ -1500,25 +1664,25 @@ def delete_rep(rid: str, db: Session = Depends(get_db), current_user: CompanyRep
 # INVENTORY API
 # ============================================
 @app.get("/api/inventory")
-def list_inventory(project_id: str = None, status: str = None, db: Session = Depends(get_db)):
-    q = db.query(Inventory)
+def list_inventory(project_id: str = None, status: str = None, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    q = db.query(Inventory, Project.name.label("project_name")).outerjoin(Project, Inventory.project_id == Project.id)
     if project_id:
         p = db.query(Project).filter((Project.id == project_id) | (Project.project_id == project_id)).first()
         if p: q = q.filter(Inventory.project_id == p.id)
     if status: q = q.filter(Inventory.status == status)
-    inventory = q.order_by(Inventory.created_at.desc()).all()
+    total_count = q.count()
+    rows = q.order_by(Inventory.created_at.desc()).offset(skip).limit(limit).all()
     result = []
-    for i in inventory:
-        p = db.query(Project).filter(Project.id == i.project_id).first()
+    for i, project_name in rows:
         result.append({
             "id": str(i.id), "inventory_id": i.inventory_id, "project_id": str(i.project_id),
-            "project_name": p.name if p else None, "unit_number": i.unit_number,
+            "project_name": project_name, "unit_number": i.unit_number,
             "unit_type": i.unit_type, "block": i.block, "area_marla": float(i.area_marla),
             "rate_per_marla": float(i.rate_per_marla),
             "total_value": float(i.area_marla) * float(i.rate_per_marla),
             "status": i.status, "factor_details": i.factor_details, "notes": i.notes
         })
-    return result
+    return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
 
 @app.get("/api/inventory/available")
 def list_available_inventory(db: Session = Depends(get_db)):
@@ -1630,14 +1794,23 @@ def delete_inventory(iid: str, db: Session = Depends(get_db), current_user: Comp
     return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
 @app.post("/api/inventory/bulk-import")
-async def bulk_import_inventory(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def bulk_import_inventory(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode('utf-8-sig')))
-    results = {"success": 0, "errors": []}
+    results = {"success": 0, "skipped": 0, "errors": []}
     for i, row in enumerate(reader, 2):
         try:
             p = db.query(Project).filter(Project.project_id == row.get('project_id*')).first()
             if not p: results["errors"].append(f"Row {i}: Project not found"); continue
+            # Dedup check: skip if project_id + unit_number already exists
+            existing = db.query(Inventory).filter(
+                Inventory.project_id == p.id,
+                Inventory.unit_number == row['unit_number*']
+            ).first()
+            if existing:
+                results["skipped"] += 1
+                results["errors"].append(f"Row {i}: Duplicate - unit {row['unit_number*']} already exists in project {row.get('project_id*')}")
+                continue
             inv = Inventory(project_id=p.id, unit_number=row['unit_number*'],
                             unit_type=row.get('unit_type', 'plot'), block=row.get('block'),
                             area_marla=float(row['area_marla*']), rate_per_marla=float(row['rate_per_marla*']),
@@ -1646,33 +1819,61 @@ async def bulk_import_inventory(file: UploadFile = File(...), db: Session = Depe
             results["success"] += 1
         except Exception as e: results["errors"].append(f"Row {i}: {e}")
     db.commit()
+    if results["success"] > 0:
+        log_audit(db, request, current_user, 'CREATE', 'inventory_bulk',
+                  f'bulk-{results["success"]}',
+                  f'Bulk imported {results["success"]} inventory items')
+        db.commit()
     return results
 
 # ============================================
 # TRANSACTIONS API
 # ============================================
 @app.get("/api/transactions")
-def list_transactions(db: Session = Depends(get_db)):
+def list_transactions(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     try:
-        txns = db.query(Transaction).order_by(Transaction.created_at.desc()).all()
+        total_count = db.query(func.count(Transaction.id)).scalar()
+        # Use JOINs to fetch related names in a single query (avoids N+1)
+        txn_rows = (
+            db.query(
+                Transaction,
+                Customer.name.label("customer_name"),
+                Customer.mobile.label("customer_mobile"),
+                Broker.name.label("broker_name"),
+                Project.name.label("project_name")
+            )
+            .outerjoin(Customer, Transaction.customer_id == Customer.id)
+            .outerjoin(Broker, Transaction.broker_id == Broker.id)
+            .outerjoin(Project, Transaction.project_id == Project.id)
+            .order_by(Transaction.created_at.desc())
+            .offset(skip).limit(limit)
+            .all()
+        )
+        # Pre-fetch total_paid per transaction via SQL aggregation
+        txn_ids = [row[0].id for row in txn_rows]
+        paid_map = {}
+        if txn_ids:
+            paid_rows = (
+                db.query(Installment.transaction_id, func.sum(Installment.amount_paid))
+                .filter(Installment.transaction_id.in_(txn_ids))
+                .group_by(Installment.transaction_id)
+                .all()
+            )
+            paid_map = {str(tid): float(total or 0) for tid, total in paid_rows}
         result = []
-        for t in txns:
-            c = db.query(Customer).filter(Customer.id == t.customer_id).first()
-            b = db.query(Broker).filter(Broker.id == t.broker_id).first() if t.broker_id else None
-            p = db.query(Project).filter(Project.id == t.project_id).first()
-            installments = db.query(Installment).filter(Installment.transaction_id == t.id).all()
-            paid = sum(float(i.amount_paid or 0) for i in installments)
+        for t, customer_name, customer_mobile, broker_name, project_name in txn_rows:
+            paid = paid_map.get(str(t.id), 0)
             result.append({
                 "id": str(t.id), "transaction_id": t.transaction_id,
-                "customer_name": c.name if c else None, "customer_mobile": c.mobile if c else None,
-                "broker_name": b.name if b else None, "project_name": p.name if p else None,
+                "customer_name": customer_name, "customer_mobile": customer_mobile,
+                "broker_name": broker_name, "project_name": project_name,
                 "unit_number": t.unit_number, "block": t.block,
                 "area_marla": float(t.area_marla), "rate_per_marla": float(t.rate_per_marla),
                 "total_value": float(t.total_value), "total_paid": paid,
                 "balance": float(t.total_value) - paid, "status": t.status,
                 "booking_date": str(t.booking_date) if t.booking_date else None
             })
-        return result
+        return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
     except Exception as e:
         print(f"Error listing transactions: {e}")
         import traceback
@@ -1741,23 +1942,27 @@ def get_transaction(tid: str, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/transactions")
-def create_transaction(data: dict, db: Session = Depends(get_db)):
+def create_transaction(data: dict, request: Request, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     customer = db.query(Customer).filter((Customer.id == data["customer_id"]) | (Customer.customer_id == data["customer_id"]) | (Customer.mobile == data["customer_id"])).first()
     if not customer: raise HTTPException(404, "Customer not found")
-    
+
     inventory = db.query(Inventory).filter((Inventory.id == data["inventory_id"]) | (Inventory.inventory_id == data["inventory_id"])).first()
     if not inventory: raise HTTPException(404, "Inventory not found")
     if inventory.status != "available": raise HTTPException(400, f"Unit not available (status: {inventory.status})")
-    
+
     project = db.query(Project).filter(Project.id == inventory.project_id).first()
     broker = db.query(Broker).filter((Broker.id == data["broker_id"]) | (Broker.broker_id == data["broker_id"]) | (Broker.mobile == data["broker_id"])).first() if data.get("broker_id") else None
     rep = db.query(CompanyRep).filter((CompanyRep.id == data["company_rep_id"]) | (CompanyRep.rep_id == data["company_rep_id"])).first() if data.get("company_rep_id") else None
-    
+
+    if not data.get("first_due_date"):
+        raise HTTPException(400, "first_due_date is required")
+
+    old_inv_status = inventory.status
     area = float(data.get("area_marla") or inventory.area_marla)
     rate = float(data.get("rate_per_marla") or inventory.rate_per_marla)
     total = area * rate
     first_due = date.fromisoformat(data["first_due_date"]) if isinstance(data["first_due_date"], str) else data["first_due_date"]
-    
+
     t = Transaction(
         customer_id=customer.id, broker_id=broker.id if broker else None,
         project_id=project.id, inventory_id=inventory.id, company_rep_id=rep.id if rep else None,
@@ -1770,13 +1975,13 @@ def create_transaction(data: dict, db: Session = Depends(get_db)):
         booking_date=date.fromisoformat(data["booking_date"]) if data.get("booking_date") else date.today()
     )
     db.add(t); db.commit(); db.refresh(t)
-    
+
     cycle_months = {"monthly": 1, "quarterly": 3, "bi-annual": 6, "annual": 12}.get(t.installment_cycle, 6)
     installment_amount = total / t.num_installments
     for n in range(t.num_installments):
         due = first_due + relativedelta(months=n * cycle_months)
         db.add(Installment(transaction_id=t.id, installment_number=n + 1, due_date=due, amount=installment_amount))
-    
+
     inventory.status = "sold"
     db.commit()
 
@@ -1784,20 +1989,41 @@ def create_transaction(data: dict, db: Session = Depends(get_db)):
     sync_vector_branches_from_orbit(project.id, db)
     db.commit()
 
+    # Audit log
+    log_audit(db, request, current_user, 'CREATE', 'transaction', t.transaction_id,
+              f'{customer.name} - {inventory.unit_number}')
+    db.commit()
+
+    # SSE broadcast: inventory status changed to sold
+    broadcast_sse('inventory_update', {
+        'inventory_id': inventory.inventory_id,
+        'unit_number': inventory.unit_number,
+        'project_id': project.project_id,
+        'old_status': old_inv_status,
+        'new_status': inventory.status,
+        'updated_by': current_user.rep_id
+    })
+
     return {"message": "Transaction created", "id": str(t.id), "transaction_id": t.transaction_id}
 
 @app.put("/api/transactions/{tid}")
-def update_transaction(tid: str, data: dict, db: Session = Depends(get_db)):
+def update_transaction(tid: str, data: dict, request: Request, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     t = db.query(Transaction).filter((Transaction.id == tid) | (Transaction.transaction_id == tid)).first()
     if not t: raise HTTPException(404, "Transaction not found")
+    before = {"broker_commission_rate": str(t.broker_commission_rate), "status": t.status, "notes": t.notes}
     for k in ["broker_commission_rate", "status", "notes"]:
         if k in data and data[k] is not None: setattr(t, k, data[k])
+    after = {"broker_commission_rate": str(t.broker_commission_rate), "status": t.status, "notes": t.notes}
+    changes_dict = {k: {'before': before[k], 'after': after[k]} for k in before if before[k] != after.get(k)}
     db.commit()
 
     # Trigger Vector sync if project is linked
     if t.project_id:
         sync_vector_branches_from_orbit(t.project_id, db)
         db.commit()
+
+    log_audit(db, request, current_user, 'UPDATE', 'transaction', t.transaction_id, t.unit_number, changes_dict if changes_dict else None)
+    db.commit()
 
     return {"message": "Transaction updated"}
 
@@ -1874,8 +2100,8 @@ def update_installment(iid: str, data: dict, db: Session = Depends(get_db)):
 # INTERACTIONS API
 # ============================================
 @app.get("/api/interactions")
-def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: str = None, 
-                      limit: int = 100, db: Session = Depends(get_db)):
+def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: str = None,
+                      skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     q = db.query(Interaction)
     if rep_id:
         r = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
@@ -1886,8 +2112,9 @@ def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: st
     if broker_id:
         b = db.query(Broker).filter((Broker.id == broker_id) | (Broker.broker_id == broker_id)).first()
         if b: q = q.filter(Interaction.broker_id == b.id)
-    
-    interactions = q.order_by(Interaction.created_at.desc()).limit(limit).all()
+
+    total_count = q.count()
+    interactions = q.order_by(Interaction.created_at.desc()).offset(skip).limit(limit).all()
     result = []
     for i in interactions:
         rep = db.query(CompanyRep).filter(CompanyRep.id == i.company_rep_id).first()
@@ -1902,7 +2129,7 @@ def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: st
             "notes": i.notes, "next_follow_up": str(i.next_follow_up) if i.next_follow_up else None,
             "created_at": str(i.created_at)
         })
-    return result
+    return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
 
 @app.get("/api/interactions/summary")
 def get_interactions_summary(db: Session = Depends(get_db)):
@@ -1994,9 +2221,10 @@ def delete_interaction(iid: str, db: Session = Depends(get_db), current_user: Co
 # CAMPAIGNS API
 # ============================================
 @app.get("/api/campaigns")
-def list_campaigns(db: Session = Depends(get_db)):
+def list_campaigns(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     try:
-        campaigns = db.query(Campaign).order_by(Campaign.created_at.desc()).all()
+        total_count = db.query(func.count(Campaign.id)).scalar()
+        campaigns = db.query(Campaign).order_by(Campaign.created_at.desc()).offset(skip).limit(limit).all()
         result = []
         for c in campaigns:
             leads = db.query(Lead).filter(Lead.campaign_id == c.id).all()
@@ -2010,7 +2238,7 @@ def list_campaigns(db: Session = Depends(get_db)):
                 "budget": float(c.budget) if c.budget else None, "status": c.status,
                 "notes": c.notes, "lead_stats": lead_stats
             })
-        return result
+        return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
     except Exception as e:
         print(f"Error listing campaigns: {e}")
         return []
@@ -2086,8 +2314,8 @@ def delete_campaign(cid: str, db: Session = Depends(get_db), current_user: Compa
 # LEADS API
 # ============================================
 @app.get("/api/leads")
-def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None, 
-               limit: int = 100, db: Session = Depends(get_db)):
+def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None,
+               skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     try:
         q = db.query(Lead)
         if campaign_id and campaign_id.strip():
@@ -2097,8 +2325,9 @@ def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None,
             r = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
             if r: q = q.filter(Lead.assigned_rep_id == r.id)
         if status and status.strip(): q = q.filter(Lead.status == status)
-        
-        leads = q.order_by(Lead.created_at.desc()).limit(limit).all()
+
+        total_count = q.count()
+        leads = q.order_by(Lead.created_at.desc()).offset(skip).limit(limit).all()
         result = []
         for l in leads:
             campaign = db.query(Campaign).filter(Campaign.id == l.campaign_id).first() if l.campaign_id else None
@@ -2112,7 +2341,7 @@ def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None,
             "status": l.status, "lead_type": l.lead_type or "prospect", "notes": l.notes,
             "created_at": str(l.created_at)
         })
-        return result
+        return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
     except Exception as e:
         print(f"Error listing leads: {e}")
         return []
@@ -2262,7 +2491,7 @@ def delete_lead(lid: str, db: Session = Depends(get_db), current_user: CompanyRe
 # RECEIPTS API
 # ============================================
 @app.get("/api/receipts")
-def list_receipts(customer_id: str = None, transaction_id: str = None, limit: int = 100, db: Session = Depends(get_db)):
+def list_receipts(customer_id: str = None, transaction_id: str = None, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     try:
         q = db.query(Receipt)
         if customer_id and customer_id.strip():
@@ -2271,15 +2500,16 @@ def list_receipts(customer_id: str = None, transaction_id: str = None, limit: in
         if transaction_id and transaction_id.strip():
             t = db.query(Transaction).filter((Transaction.id == transaction_id) | (Transaction.transaction_id == transaction_id)).first()
             if t: q = q.filter(Receipt.transaction_id == t.id)
-        
-        receipts = q.order_by(Receipt.created_at.desc()).limit(limit).all()
+
+        total_count = q.count()
+        receipts = q.order_by(Receipt.created_at.desc()).offset(skip).limit(limit).all()
         result = []
         for r in receipts:
             cust = db.query(Customer).filter(Customer.id == r.customer_id).first()
             txn = db.query(Transaction).filter(Transaction.id == r.transaction_id).first() if r.transaction_id else None
             proj = db.query(Project).filter(Project.id == txn.project_id).first() if txn else None
             rep = db.query(CompanyRep).filter(CompanyRep.id == r.created_by_rep_id).first() if r.created_by_rep_id else None
-            
+
             # Get allocations
             allocations = db.query(ReceiptAllocation).filter(ReceiptAllocation.receipt_id == r.id).all()
             alloc_details = []
@@ -2289,7 +2519,7 @@ def list_receipts(customer_id: str = None, transaction_id: str = None, limit: in
                     "id": str(a.id), "installment_number": inst.installment_number if inst else None,
                     "amount": float(a.amount)
                 })
-            
+
             result.append({
                 "id": str(r.id), "receipt_id": r.receipt_id,
                 "customer_name": cust.name if cust else None, "customer_id": cust.customer_id if cust else None,
@@ -2301,7 +2531,7 @@ def list_receipts(customer_id: str = None, transaction_id: str = None, limit: in
                 "notes": r.notes, "created_by": rep.name if rep else None,
                 "created_at": str(r.created_at), "allocations": alloc_details
             })
-        return result
+        return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
     except Exception as e:
         print(f"Error listing receipts: {e}")
         return []
@@ -2369,12 +2599,12 @@ def get_customer_transactions_for_receipt(cid: str, db: Session = Depends(get_db
     return result
 
 @app.post("/api/receipts")
-def create_receipt(data: dict, db: Session = Depends(get_db)):
+def create_receipt(data: dict, request: Request, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     customer = db.query(Customer).filter(
         (Customer.id == data["customer_id"]) | (Customer.customer_id == data["customer_id"]) | (Customer.mobile == data["customer_id"])
     ).first()
     if not customer: raise HTTPException(404, "Customer not found")
-    
+
     transaction = None
     if data.get("transaction_id"):
         transaction = db.query(Transaction).filter(
@@ -2433,6 +2663,9 @@ def create_receipt(data: dict, db: Session = Depends(get_db)):
             remaining -= alloc_amount
     
     db.commit(); db.refresh(r)
+    log_audit(db, request, current_user, 'CREATE', 'receipt', r.receipt_id,
+              f'PKR {float(data["amount"]):,.0f} from {customer.name}')
+    db.commit()
     return {"message": "Receipt created", "id": str(r.id), "receipt_id": r.receipt_id}
 
 @app.delete("/api/receipts/{rid}")
@@ -2537,7 +2770,7 @@ def delete_creditor(cid: str, db: Session = Depends(get_db), current_user: Compa
 def list_payments(
     broker_id: str = None, rep_id: str = None, creditor_id: str = None,
     payment_type: str = None, status: str = None, start_date: str = None,
-    end_date: str = None, limit: int = 100, db: Session = Depends(get_db)
+    end_date: str = None, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)
 ):
     q = db.query(Payment)
     if broker_id:
@@ -2553,8 +2786,9 @@ def list_payments(
     if status: q = q.filter(Payment.status == status)
     if start_date: q = q.filter(Payment.payment_date >= date.fromisoformat(start_date))
     if end_date: q = q.filter(Payment.payment_date <= date.fromisoformat(end_date))
-    
-    payments = q.order_by(Payment.created_at.desc()).limit(limit).all()
+
+    total_count = q.count()
+    payments = q.order_by(Payment.created_at.desc()).offset(skip).limit(limit).all()
     result = []
     for p in payments:
         broker = db.query(Broker).filter(Broker.id == p.broker_id).first() if p.broker_id else None
@@ -2562,7 +2796,7 @@ def list_payments(
         creditor = db.query(Creditor).filter(Creditor.id == p.creditor_id).first() if p.creditor_id else None
         txn = db.query(Transaction).filter(Transaction.id == p.transaction_id).first() if p.transaction_id else None
         approver = db.query(CompanyRep).filter(CompanyRep.id == p.approved_by_rep_id).first() if p.approved_by_rep_id else None
-        
+
         result.append({
             "id": str(p.id), "payment_id": p.payment_id, "payment_type": p.payment_type,
             "payee_type": p.payee_type, "broker_name": broker.name if broker else None,
@@ -2577,7 +2811,7 @@ def list_payments(
             "notes": p.notes, "approved_by": approver.name if approver else None,
             "status": p.status, "created_at": str(p.created_at)
         })
-    return result
+    return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
 
 @app.get("/api/payments/summary")
 def get_payments_summary(db: Session = Depends(get_db)):
@@ -2853,7 +3087,7 @@ def generate_ledger_id(db: Session):
 @app.get("/api/buybacks")
 def list_buybacks(
     status: str = None, project_id: str = None, customer_id: str = None,
-    start_date: str = None, end_date: str = None, limit: int = 100,
+    start_date: str = None, end_date: str = None, skip: int = 0, limit: int = 50,
     db: Session = Depends(get_db)
 ):
     """List all buybacks with filters"""
@@ -2876,7 +3110,8 @@ def list_buybacks(
     if end_date:
         q = q.filter(Buyback.buyback_date <= date.fromisoformat(end_date))
 
-    buybacks = q.order_by(Buyback.created_at.desc()).limit(limit).all()
+    total_count = q.count()
+    buybacks = q.order_by(Buyback.created_at.desc()).offset(skip).limit(limit).all()
     result = []
 
     for b in buybacks:
@@ -2916,7 +3151,7 @@ def list_buybacks(
             "created_at": str(b.created_at)
         })
 
-    return result
+    return JSONResponse(content=result, headers={"X-Total-Count": str(total_count)})
 
 @app.get("/api/buybacks/summary")
 def get_buybacks_summary(project_id: str = None, db: Session = Depends(get_db)):
@@ -3072,7 +3307,7 @@ def get_buyback(bid: str, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/buybacks")
-def create_buyback(data: dict, db: Session = Depends(get_db)):
+def create_buyback(data: dict, request: Request, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     """Initiate a buyback for a sold transaction"""
     # Find original transaction
     txn = db.query(Transaction).filter(
@@ -3174,6 +3409,30 @@ def create_buyback(data: dict, db: Session = Depends(get_db)):
     # Sync Vector branches to reflect buyback_pending status
     sync_vector_branches_from_orbit(inv.project_id, db)
 
+    # Audit log
+    customer = db.query(Customer).filter(Customer.id == txn.customer_id).first()
+    log_audit(db, request, current_user, 'CREATE', 'buyback', buyback.buyback_id,
+              f'{customer.name if customer else "Unknown"} - {inv.unit_number}')
+
+    # Notify admins/managers about buyback initiation
+    reps = db.query(CompanyRep).filter(CompanyRep.role.in_(['admin', 'manager'])).all()
+    for rep in reps:
+        create_notification(db, rep.rep_id,
+                          f'Buyback Initiated: {inv.unit_number}',
+                          f'Buyback {buyback.buyback_id} initiated for {customer.name if customer else "Unknown"} - PKR {float(buyback.buyback_price):,.0f}',
+                          type='warning', category='system', entity_type='buyback', entity_id=buyback.buyback_id)
+    db.commit()
+
+    # SSE broadcast: inventory status changed to buyback_pending
+    broadcast_sse('inventory_update', {
+        'inventory_id': inv.inventory_id,
+        'unit_number': inv.unit_number,
+        'project_id': str(inv.project_id),
+        'old_status': 'sold',
+        'new_status': 'buyback_pending',
+        'updated_by': current_user.rep_id
+    })
+
     return {
         "message": "Buyback initiated",
         "id": str(buyback.id),
@@ -3268,7 +3527,7 @@ def cancel_buyback(bid: str, db: Session = Depends(get_db)):
     return {"message": "Buyback cancelled", "buyback_id": b.buyback_id}
 
 @app.post("/api/buybacks/{bid}/approve")
-def approve_buyback(bid: str, data: dict, db: Session = Depends(get_db)):
+def approve_buyback(bid: str, data: dict, request: Request, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     """Approve a pending buyback"""
     b = db.query(Buyback).filter((Buyback.id == bid) | (Buyback.buyback_id == bid)).first()
     if not b:
@@ -3287,6 +3546,10 @@ def approve_buyback(bid: str, data: dict, db: Session = Depends(get_db)):
     b.approved_by_rep_id = approver.id if approver else None
     b.approved_at = datetime.utcnow()
 
+    db.commit()
+    log_audit(db, request, current_user, 'UPDATE', 'buyback', b.buyback_id,
+              f'Approved buyback {b.buyback_id}',
+              {'status': {'before': 'pending', 'after': 'approved'}})
     db.commit()
     return {
         "message": "Buyback approved",
@@ -3361,6 +3624,16 @@ def complete_buyback(bid: str, data: dict, db: Session = Depends(get_db)):
     # Sync Vector branches to reflect plot is now available (and mark as resold if applicable)
     if inv:
         sync_vector_branches_from_orbit(inv.project_id, db)
+
+        # SSE broadcast: inventory status changed back to available
+        broadcast_sse('inventory_update', {
+            'inventory_id': inv.inventory_id,
+            'unit_number': inv.unit_number,
+            'project_id': str(inv.project_id),
+            'old_status': 'buyback_pending',
+            'new_status': 'available',
+            'updated_by': 'system'
+        })
 
     return {
         "message": "Buyback completed",
@@ -3685,21 +3958,23 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         total_paid = db.query(func.sum(Payment.amount)).filter(Payment.status == "completed").scalar() or 0
         month_paid = db.query(func.sum(Payment.amount)).filter(Payment.payment_date >= month_start, Payment.status == "completed").scalar() or 0
         
-        # Outstanding breakdown: Overdue vs Future Receivable
+        # Outstanding breakdown: Overdue vs Future Receivable (single SQL query, no N+1)
         today = date.today()
-        total_overdue = 0
-        total_future_receivable = 0
-        
-        all_transactions = db.query(Transaction).all()
-        for txn in all_transactions:
-            installments = db.query(Installment).filter(Installment.transaction_id == txn.id).all()
-            for inst in installments:
-                balance = float(inst.amount) - float(inst.amount_paid or 0)
-                if balance > 0:
-                    if inst.due_date <= today:
-                        total_overdue += balance
-                    else:
-                        total_future_receivable += balance
+        overdue_result = db.query(
+            func.coalesce(func.sum(Installment.amount - func.coalesce(Installment.amount_paid, 0)), 0)
+        ).filter(
+            (Installment.amount - func.coalesce(Installment.amount_paid, 0)) > 0,
+            Installment.due_date <= today
+        ).scalar()
+        total_overdue = float(overdue_result or 0)
+
+        future_result = db.query(
+            func.coalesce(func.sum(Installment.amount - func.coalesce(Installment.amount_paid, 0)), 0)
+        ).filter(
+            (Installment.amount - func.coalesce(Installment.amount_paid, 0)) > 0,
+            Installment.due_date > today
+        ).scalar()
+        total_future_receivable = float(future_result or 0)
         
         total_outstanding = float(total_sale_value) - float(total_received)
         
@@ -4105,12 +4380,166 @@ def get_project_inventory(db: Session = Depends(get_db)):
             )
         raise HTTPException(status_code=500, detail=f"Error loading project inventory: {error_msg[:200]}")
 
+
+# ============================================
+# DASHBOARD - OVERDUE AGING BUCKETS
+# ============================================
+@app.get("/api/dashboard/overdue-aging")
+def dashboard_overdue_aging(db: Session = Depends(get_db)):
+    """Get overdue installments grouped by aging buckets: 0-30, 31-60, 61-90, 90+ days"""
+    try:
+        today = date.today()
+
+        overdue = db.query(Installment).join(
+            Transaction, Transaction.id == Installment.transaction_id
+        ).filter(
+            Installment.due_date < today,
+            Installment.status.in_(['pending', 'partial']),
+            Transaction.status == 'active'
+        ).all()
+
+        buckets = {'0_30': [], '31_60': [], '61_90': [], '90_plus': []}
+        totals = {'0_30': 0, '31_60': 0, '61_90': 0, '90_plus': 0}
+
+        for inst in overdue:
+            days_overdue = (today - inst.due_date).days
+            balance = float(inst.amount or 0) - float(inst.amount_paid or 0)
+            if balance <= 0:
+                continue
+
+            entry = {
+                'installment_id': str(inst.id),
+                'transaction_id': str(inst.transaction_id),
+                'due_date': str(inst.due_date),
+                'amount': float(inst.amount or 0),
+                'amount_paid': float(inst.amount_paid or 0),
+                'balance': balance,
+                'days_overdue': days_overdue
+            }
+
+            txn = db.query(Transaction).filter(Transaction.id == inst.transaction_id).first()
+            if txn:
+                customer = db.query(Customer).filter(Customer.id == txn.customer_id).first()
+                entry['customer_name'] = customer.name if customer else 'Unknown'
+                entry['transaction_id_display'] = txn.transaction_id
+            else:
+                entry['customer_name'] = 'Unknown'
+                entry['transaction_id_display'] = 'N/A'
+
+            if days_overdue <= 30:
+                buckets['0_30'].append(entry)
+                totals['0_30'] += balance
+            elif days_overdue <= 60:
+                buckets['31_60'].append(entry)
+                totals['31_60'] += balance
+            elif days_overdue <= 90:
+                buckets['61_90'].append(entry)
+                totals['61_90'] += balance
+            else:
+                buckets['90_plus'].append(entry)
+                totals['90_plus'] += balance
+
+        return {
+            'buckets': buckets,
+            'totals': totals,
+            'total_overdue': sum(totals.values()),
+            'total_count': sum(len(b) for b in buckets.values())
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading overdue aging: {str(e)[:200]}")
+
+
+# ============================================
+# DASHBOARD - REVENUE COLLECTION TREND
+# ============================================
+@app.get("/api/dashboard/revenue-collection-trend")
+def dashboard_revenue_collection_trend(months: int = 12, db: Session = Depends(get_db)):
+    """Monthly receipts collected vs installments due for the last N months"""
+    try:
+        today = date.today()
+        start_date = today.replace(day=1) - timedelta(days=months * 30)
+
+        due_by_month = db.query(
+            extract('year', Installment.due_date).label('year'),
+            extract('month', Installment.due_date).label('month'),
+            func.sum(Installment.amount).label('total_due')
+        ).filter(
+            Installment.due_date >= start_date
+        ).group_by('year', 'month').all()
+
+        collected_by_month = db.query(
+            extract('year', Receipt.payment_date).label('year'),
+            extract('month', Receipt.payment_date).label('month'),
+            func.sum(Receipt.amount).label('total_collected')
+        ).filter(
+            Receipt.payment_date >= start_date
+        ).group_by('year', 'month').all()
+
+        months_data = []
+        for i in range(months):
+            d = today.replace(day=1) - timedelta(days=i * 30)
+            y, m = d.year, d.month
+            due = next((float(r.total_due or 0) for r in due_by_month if int(r.year) == y and int(r.month) == m), 0)
+            collected = next((float(r.total_collected or 0) for r in collected_by_month if int(r.year) == y and int(r.month) == m), 0)
+            month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            months_data.append({
+                'month': f"{month_names[m - 1]} {y}",
+                'due': due,
+                'collected': collected,
+                'collection_rate': round((collected / due * 100) if due > 0 else 0, 1)
+            })
+
+        months_data.reverse()
+        return months_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading revenue collection trend: {str(e)[:200]}")
+
+
+# ============================================
+# DASHBOARD - COMMISSION TRACKING
+# ============================================
+@app.get("/api/dashboard/commission-tracking")
+def dashboard_commission_tracking(db: Session = Depends(get_db)):
+    """Commission earned vs paid vs pending per broker"""
+    try:
+        brokers = db.query(Broker).all()
+        result = []
+        for broker in brokers:
+            txns = db.query(Transaction).filter(
+                Transaction.broker_id == broker.id,
+                Transaction.status == 'active'
+            ).all()
+            total_earned = sum(
+                float(t.total_value or 0) * float(t.broker_commission_rate or 0) / 100
+                for t in txns
+            )
+            total_paid = float(db.query(func.sum(Payment.amount)).filter(
+                Payment.broker_id == broker.id,
+                Payment.payment_type == "broker_commission",
+                Payment.status == "completed"
+            ).scalar() or 0)
+            pending = total_earned - total_paid
+            if total_earned > 0:
+                result.append({
+                    'broker_id': broker.broker_id,
+                    'broker_name': broker.name,
+                    'total_earned': round(total_earned, 2),
+                    'total_paid': round(total_paid, 2),
+                    'pending': round(pending, 2),
+                    'transactions': len(txns)
+                })
+        result.sort(key=lambda x: x['pending'], reverse=True)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading commission tracking: {str(e)[:200]}")
+
+
 @app.get("/api/customers/{customer_id}/details")
 def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
     """Comprehensive customer details for modal popup"""
-    # Find customer by ID or mobile
+    # Find customer by customer_id or mobile
     customer = db.query(Customer).filter(
-        (Customer.customer_id == customer_id) | (Customer.mobile == customer_id) | (Customer.id == customer_id)
+        (Customer.customer_id == customer_id) | (Customer.mobile == customer_id)
     ).first()
     
     if not customer:
@@ -4175,7 +4604,7 @@ def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
             "email": customer.email,
             "address": customer.address,
             "cnic": customer.cnic,
-            "notes": customer.notes,
+            "notes": getattr(customer, 'notes', None),
             "created_at": str(customer.created_at) if customer.created_at else None
         },
         "financials": {
@@ -4215,9 +4644,9 @@ def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
 @app.get("/api/brokers/{broker_id}/details")
 def get_broker_details(broker_id: str, db: Session = Depends(get_db)):
     """Comprehensive broker details for modal popup"""
-    # Find broker by ID or mobile
+    # Find broker by broker_id or mobile
     broker = db.query(Broker).filter(
-        (Broker.broker_id == broker_id) | (Broker.mobile == broker_id) | (Broker.id == broker_id)
+        (Broker.broker_id == broker_id) | (Broker.mobile == broker_id)
     ).first()
     
     if not broker:
@@ -5134,7 +5563,8 @@ def get_vector_projects(
             "linked_project_name": linked_project.name if linked_project else None,
             "vector_metadata": p.vector_metadata,
             "system_branches": p.system_branches,
-            "has_map": bool(p.map_pdf_base64),
+            "has_map": bool(p.map_pdf_base64) or bool(p.map_file_path),
+            "map_file_url": f"/api/vector/maps/{p.map_file_path}" if p.map_file_path else None,
             "created_at": str(p.created_at),
             "updated_at": str(p.updated_at)
         })
@@ -5143,10 +5573,14 @@ def get_vector_projects(
 @app.get("/api/vector/projects/{project_id}")
 def get_vector_project(
     project_id: str,
+    include_pdf: bool = Query(False, description="Include base64 PDF data in response (large payload). Default: False - returns file URL instead."),
     db: Session = Depends(get_db),
     current_user: CompanyRep = Depends(get_current_user)
 ):
-    """Get Vector project details - returns full project data in JSON format for frontend"""
+    """Get Vector project details - returns full project data in JSON format for frontend.
+    By default, base64 PDF data is NOT included to reduce payload size (~5MB).
+    If map_file_path exists, a URL reference is returned instead.
+    Set include_pdf=true to force include base64 data (backward compatibility)."""
     try:
         try:
             project_uuid = uuid.UUID(project_id)
@@ -5388,11 +5822,35 @@ def get_vector_project(
             if linked_project:
                 linked_project_name = linked_project.name
 
+        # Determine PDF data to return:
+        # - If map_file_path exists, return URL reference (lightweight) instead of base64
+        # - If include_pdf=true is requested, always include base64 (backward compatibility)
+        # - If no file path but base64 exists, return base64 (legacy data)
+        pdf_base64_value = None
+        map_file_url = None
+
+        if project.map_file_path:
+            map_file_url = f"/api/vector/maps/{project.map_file_path}"
+            if include_pdf:
+                # Caller explicitly requested base64 data - serve it from file if possible
+                file_path = os.path.join(UPLOAD_DIR, project.map_file_path)
+                if os.path.exists(file_path):
+                    import base64
+                    with open(file_path, 'rb') as f:
+                        pdf_base64_value = base64.b64encode(f.read()).decode('utf-8')
+                else:
+                    # Fallback to DB base64 if file is missing
+                    pdf_base64_value = project.map_pdf_base64
+        else:
+            # No file path yet - use legacy base64 from DB (backward compatibility)
+            pdf_base64_value = project.map_pdf_base64
+
         # Return full project data in frontend JSON format
         return {
             "projectName": project.name,
             "mapName": project.map_name or "Map",
-            "pdfBase64": project.map_pdf_base64,
+            "pdfBase64": pdf_base64_value,
+            "mapFileUrl": map_file_url,
             "plots": plots,
             "annos": annos,  # Preserve order from database
             "inventory": inventory,
@@ -5547,9 +6005,118 @@ def delete_vector_project(
         db.add(req); db.commit(); db.refresh(req)
         return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
 
+    # Clean up map file from filesystem if it exists
+    if project.map_file_path:
+        map_path = os.path.join(UPLOAD_DIR, project.map_file_path)
+        if os.path.exists(map_path):
+            try:
+                os.remove(map_path)
+                print(f"Deleted map file: {map_path}")
+            except OSError as e:
+                print(f"Warning: Could not delete map file {map_path}: {e}")
+
     db.delete(project)
     db.commit()
     return {"message": "Vector project deleted"}
+
+# ============================================
+# VECTOR MAP FILE UPLOAD/SERVE ENDPOINTS
+# ============================================
+@app.post("/api/vector/projects/{project_id}/upload-map")
+async def upload_vector_map(
+    project_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Upload a map PDF file for a vector project.
+    Stores the PDF on the filesystem instead of as base64 in the database,
+    reducing DB load by ~5MB per vector project fetch."""
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Vector project not found")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    content_hash = hashlib.md5(content).hexdigest()[:8]
+    filename = f"map_{project_id}_{content_hash}.pdf"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+
+    if project.map_file_path and project.map_file_path != filename:
+        old_path = os.path.join(UPLOAD_DIR, project.map_file_path)
+        if os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+            except OSError:
+                pass
+
+    with open(filepath, 'wb') as f:
+        f.write(content)
+
+    project.map_file_path = filename
+    project.updated_at = func.now()
+    db.commit()
+
+    print(f"Uploaded map PDF for project {project_id}: {filename} ({len(content)} bytes)")
+    return {'filename': filename, 'size': len(content), 'url': f'/api/vector/maps/{filename}'}
+
+@app.get("/api/vector/maps/{filename}")
+async def serve_vector_map(filename: str):
+    """Serve a map PDF file from the filesystem."""
+    safe_filename = os.path.basename(filename)
+    filepath = os.path.join(UPLOAD_DIR, safe_filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Map file not found")
+    return FileResponse(filepath, media_type='application/pdf',
+        headers={'Cache-Control': 'public, max-age=86400', 'Content-Disposition': f'inline; filename="{safe_filename}"'})
+
+@app.post("/api/vector/projects/{project_id}/migrate-pdf")
+async def migrate_vector_pdf_to_file(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Migrate a vector project's base64 PDF from DB to filesystem."""
+    if current_user.role not in ["admin", "manager"]:
+        raise HTTPException(403, "Only admin/manager can run migrations")
+    try:
+        project_uuid = uuid.UUID(project_id)
+        project = db.query(VectorProject).filter(VectorProject.id == project_uuid).first()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid project ID")
+    if not project:
+        raise HTTPException(404, "Vector project not found")
+    if project.map_file_path:
+        filepath = os.path.join(UPLOAD_DIR, project.map_file_path)
+        if os.path.exists(filepath):
+            return {"message": "Already migrated", "filename": project.map_file_path}
+    if not project.map_pdf_base64:
+        return {"message": "No base64 PDF to migrate", "skipped": True}
+    import base64
+    try:
+        content = base64.b64decode(project.map_pdf_base64)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid base64 data: {str(e)}")
+    content_hash = hashlib.md5(content).hexdigest()[:8]
+    filename = f"map_{project_id}_{content_hash}.pdf"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    with open(filepath, 'wb') as f:
+        f.write(content)
+    project.map_file_path = filename
+    project.updated_at = func.now()
+    # Note: We keep map_pdf_base64 for now to allow rollback.
+    # To clear it and save ~5MB per project, run:
+    #   UPDATE vector_projects SET map_pdf_base64 = NULL WHERE map_file_path IS NOT NULL;
+    db.commit()
+    print(f"Migrated PDF for project {project_id}: {filename} ({len(content)} bytes)")
+    return {"message": "PDF migrated to filesystem", "filename": filename, "size": len(content), "url": f"/api/vector/maps/{filename}"}
 
 @app.post("/api/vector/projects/{project_id}/link")
 def link_vector_project(
@@ -5829,19 +6396,20 @@ def get_sync_status(
     
     recon = db.query(VectorReconciliation).filter(VectorReconciliation.project_id == project_uuid).first()
     
-    # Check if incomplete (no source map)
-    is_incomplete = not bool(project.map_pdf_base64)
-    
+    # Check if incomplete (no source map) - consider both base64 and file path
+    is_incomplete = not (bool(project.map_pdf_base64) or bool(project.map_file_path))
+
     status = "standalone"
     if project.linked_project_id:
         status = recon.sync_status if recon else "linked"
-    
+
     return {
         "status": status,
         "is_incomplete": is_incomplete,
         "linked_project_id": str(project.linked_project_id) if project.linked_project_id else None,
         "last_sync_at": str(recon.last_sync_at) if recon and recon.last_sync_at else None,
-        "has_map": bool(project.map_pdf_base64)
+        "has_map": bool(project.map_pdf_base64) or bool(project.map_file_path),
+        "map_file_url": f"/api/vector/maps/{project.map_file_path}" if project.map_file_path else None
     }
 
 # Vector Annotations Endpoints
@@ -6847,6 +7415,7 @@ def sync_branches(
             name=f"{master_project.name} - Status [Auto]",
             map_name=master_project.map_name,
             map_pdf_base64=master_project.map_pdf_base64,
+            map_file_path=master_project.map_file_path,  # Share filesystem PDF reference
             map_size=master_project.map_size,
             linked_project_id=master_project.linked_project_id,
             vector_metadata=status_metadata
@@ -6941,6 +7510,7 @@ def sync_branches(
             name=f"{master_project.name} - Customers [Auto]",
             map_name=master_project.map_name,
             map_pdf_base64=master_project.map_pdf_base64,
+            map_file_path=master_project.map_file_path,  # Share filesystem PDF reference
             map_size=master_project.map_size,
             linked_project_id=master_project.linked_project_id,
             vector_metadata=customer_metadata
@@ -7018,6 +7588,7 @@ def sync_branches(
             name=f"{master_project.name} - Master [Auto]",
             map_name=master_project.map_name,
             map_pdf_base64=master_project.map_pdf_base64,
+            map_file_path=master_project.map_file_path,  # Share filesystem PDF reference
             map_size=master_project.map_size,
             linked_project_id=master_project.linked_project_id,
             vector_metadata=auto_master_metadata
@@ -7643,12 +8214,13 @@ def check_incomplete_project(
     if not project:
         raise HTTPException(404, "Vector project not found")
     
-    is_incomplete = not bool(project.map_pdf_base64)
-    
+    is_incomplete = not (bool(project.map_pdf_base64) or bool(project.map_file_path))
+
     return {
         "is_incomplete": is_incomplete,
-        "has_map": bool(project.map_pdf_base64),
+        "has_map": bool(project.map_pdf_base64) or bool(project.map_file_path),
         "map_name": project.map_name,
+        "map_file_url": f"/api/vector/maps/{project.map_file_path}" if project.map_file_path else None,
         "message": "Vector project without source map needs attention" if is_incomplete else "Vector project has source map"
     }
 
@@ -7836,7 +8408,7 @@ def get_orphan_tracking(
             "name": vp.name,
             "map_name": vp.map_name,
             "created_at": str(vp.created_at),
-            "has_map": bool(vp.map_pdf_base64),
+            "has_map": bool(vp.map_pdf_base64) or bool(vp.map_file_path),
             "type": "vector"
         }
         if not vp.linked_project_id:
@@ -7924,3 +8496,172 @@ def get_link_suggestions(
         "suggestions": suggestions,
         "total": len(suggestions)
     }
+
+# ============================================
+# NOTIFICATION ENDPOINTS
+# ============================================
+
+@app.get("/api/notifications")
+async def get_notifications(
+    skip: int = 0, limit: int = 20, unread_only: bool = False,
+    db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)
+):
+    """Get notifications for current user"""
+    query = db.query(Notification).filter(Notification.user_rep_id == current_user.rep_id)
+    if unread_only:
+        query = query.filter(Notification.is_read == False)
+    total = query.count()
+    items = query.order_by(Notification.created_at.desc()).offset(skip).limit(limit).all()
+    unread_count = db.query(Notification).filter(
+        Notification.user_rep_id == current_user.rep_id,
+        Notification.is_read == False
+    ).count()
+    return {'items': [n.to_dict() for n in items], 'total': total, 'unread_count': unread_count}
+
+@app.put("/api/notifications/read-all")
+async def mark_all_notifications_read(
+    db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)
+):
+    """Mark all notifications as read for current user"""
+    db.query(Notification).filter(
+        Notification.user_rep_id == current_user.rep_id,
+        Notification.is_read == False
+    ).update({'is_read': True, 'read_at': func.now()})
+    db.commit()
+    return {'status': 'ok'}
+
+@app.put("/api/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: int, db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Mark a single notification as read"""
+    notif = db.query(Notification).filter(Notification.id == notification_id).first()
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    if notif.user_rep_id != current_user.rep_id:
+        raise HTTPException(status_code=403, detail="Not your notification")
+    notif.is_read = True
+    notif.read_at = func.now()
+    db.commit()
+    return {'status': 'ok'}
+
+@app.post("/api/notifications/generate-overdue")
+async def generate_overdue_notifications(
+    db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)
+):
+    """Generate notifications for overdue installments"""
+    today = datetime.now().date()
+
+    overdue = db.query(Installment).join(
+        Transaction, Installment.transaction_id == Transaction.id
+    ).filter(
+        Installment.due_date < today,
+        Installment.status.in_(['pending', 'partial']),
+        Transaction.status == 'active'
+    ).all()
+
+    created = 0
+    for inst in overdue:
+        # Check if we already notified about this installment today
+        existing = db.query(Notification).filter(
+            Notification.entity_type == 'installment',
+            Notification.entity_id == str(inst.id),
+            Notification.category == 'overdue',
+            func.date(Notification.created_at) == today
+        ).first()
+
+        if not existing:
+            txn = db.query(Transaction).filter(Transaction.id == inst.transaction_id).first()
+            customer = db.query(Customer).filter(Customer.id == txn.customer_id).first() if txn else None
+
+            balance = float(inst.amount or 0) - float(inst.amount_paid or 0)
+            days_overdue = (today - inst.due_date).days
+
+            # Notify all admin/manager users
+            reps = db.query(CompanyRep).filter(CompanyRep.role.in_(['admin', 'manager'])).all()
+            for rep in reps:
+                seq = db.execute(text("SELECT nextval('notifications_id_seq')")).scalar()
+                notif = Notification(
+                    id=seq,
+                    notification_id=f'NTF-{seq:05d}',
+                    user_rep_id=rep.rep_id,
+                    title=f'Overdue: {customer.name if customer else "Unknown"} - {days_overdue} days',
+                    message=f'Installment #{inst.installment_number} for {txn.transaction_id if txn else "?"} is {days_overdue} days overdue. Balance: PKR {balance:,.0f}',
+                    type='warning' if days_overdue <= 30 else 'alert',
+                    category='overdue',
+                    entity_type='installment',
+                    entity_id=str(inst.id)
+                )
+                db.add(notif)
+                created += 1
+
+    db.commit()
+    return {'created': created}
+
+# ============================================
+# AUDIT LOG ENDPOINTS
+# ============================================
+
+@app.get("/api/audit-log")
+async def get_audit_log(
+    skip: int = 0, limit: int = 50,
+    entity_type: str = None, action: str = None, user_rep_id: str = None,
+    db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)
+):
+    """Get audit log entries (admin/manager only)"""
+    if current_user.role not in ['admin', 'manager']:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    query = db.query(AuditLog)
+    if entity_type:
+        query = query.filter(AuditLog.entity_type == entity_type)
+    if action:
+        query = query.filter(AuditLog.action == action)
+    if user_rep_id:
+        query = query.filter(AuditLog.user_rep_id == user_rep_id)
+
+    total = query.count()
+    items = query.order_by(AuditLog.timestamp.desc()).offset(skip).limit(limit).all()
+    return {'items': [a.to_dict() for a in items], 'total': total}
+
+# ============================================
+# SSE REAL-TIME UPDATES ENDPOINT
+# ============================================
+
+@app.get("/api/events/stream")
+async def sse_stream(current_user: CompanyRep = Depends(get_current_user)):
+    """Server-Sent Events stream for real-time updates"""
+    client_queue = queue.Queue(maxsize=100)
+
+    with sse_lock:
+        sse_clients.append(client_queue)
+
+    async def event_generator():
+        try:
+            # Send initial connection message
+            yield f"event: connected\ndata: {json_module.dumps({'user': current_user.rep_id})}\n\n"
+
+            while True:
+                try:
+                    message = client_queue.get(timeout=30)
+                    yield message
+                except queue.Empty:
+                    # Send keepalive
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            with sse_lock:
+                if client_queue in sse_clients:
+                    sse_clients.remove(client_queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )

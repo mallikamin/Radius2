@@ -49,6 +49,7 @@ services:
         condition: service_healthy
     volumes:
       - ./media:/app/media
+      - ./backend/uploads:/app/uploads
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
@@ -72,6 +73,10 @@ services:
 
 volumes:
   sitara_postgres_data:
+    # CRITICAL: This volume name contains ALL production data.
+    # NEVER rename it — changing this name creates a new empty volume
+    # and orphans all existing data. If data appears lost, check
+    # `docker volume ls` for the old volume name.
 
 networks:
   default:

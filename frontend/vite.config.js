@@ -12,5 +12,17 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Split heavy PDF libraries into their own chunk (~2MB)
+          'vendor-pdf': ['jspdf', 'pdfjs-dist'],
+          // Split Excel library into its own chunk (~1MB)
+          'vendor-excel': ['xlsx'],
+        }
+      }
+    }
   }
 })

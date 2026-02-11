@@ -17,6 +17,7 @@ import BranchesPanel from './BranchesPanel';
 
 export default function Sidebar({ vectorState }) {
   const [activeTab, setActiveTab] = useState('selection');
+  const [showMoreTools, setShowMoreTools] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportMode, setExportMode] = useState('full');
   const [selectedAnnoIds, setSelectedAnnoIds] = useState(new Set());
@@ -105,14 +106,14 @@ export default function Sidebar({ vectorState }) {
     setShowExportModal(false);
   };
 
-  // Export Excel
-  const handleExportExcel = () => {
-    exportInventoryToExcel(vectorState.inventory, vectorState.plots, vectorState.projectName || 'inventory');
+  // Export Excel (async - XLSX loaded on demand)
+  const handleExportExcel = async () => {
+    await exportInventoryToExcel(vectorState.inventory, vectorState.plots, vectorState.projectName || 'inventory');
   };
 
-  // Export Manual Plots Excel
-  const handleExportManualPlotsExcel = () => {
-    exportManualPlotsToExcel(vectorState.plots, vectorState.inventory, vectorState.projectName || 'manual_plots');
+  // Export Manual Plots Excel (async - XLSX loaded on demand)
+  const handleExportManualPlotsExcel = async () => {
+    await exportManualPlotsToExcel(vectorState.plots, vectorState.inventory, vectorState.projectName || 'manual_plots');
   };
 
   return (
@@ -126,23 +127,13 @@ export default function Sidebar({ vectorState }) {
         height: 'calc(100vh - 40px)'
       }}
     >
-      {/* Tabs */}
+      {/* Primary Tabs */}
       <div className="grid grid-cols-5 border-b border-gray-300">
         {[
           { id: 'selection',   icon: '👆', label: 'Select' },
           { id: 'annotations', icon: '📝', label: 'Annotate' },
-          { id: 'plots',       icon: '📍', label: 'Plots' },
-          { id: 'inventory',   icon: '📊', label: 'Inventory' },
-          { id: 'brush',       icon: '🖌️', label: 'Brush' },
-          { id: 'eraser',      icon: '🧹', label: 'Eraser' },
-          { id: 'massrename',  icon: '🔄', label: 'Rename' },
-          { id: 'search',      icon: '🔍', label: 'Search' },
-          { id: 'labels',      icon: '🏷️', label: 'Labels' },
-          { id: 'shapes',      icon: '⬜', label: 'Shapes' },
-          { id: 'notes',       icon: '📝', label: 'Notes' },
-          { id: 'changelog',   icon: '📋', label: 'Log' },
-          { id: 'branches',    icon: '🔀', label: 'Branches' },
           { id: 'pan',         icon: '✋', label: 'Pan' },
+          { id: 'search',      icon: '🔍', label: 'Search' },
           { id: 'settings',    icon: '⚙️', label: 'Settings' },
         ].map(tab => (
           <button
@@ -158,6 +149,46 @@ export default function Sidebar({ vectorState }) {
             <span className="text-[9px] leading-tight mt-0.5 text-gray-600 font-medium">{tab.label}</span>
           </button>
         ))}
+      </div>
+
+      {/* More Tools Toggle */}
+      <div className="border-b border-gray-300">
+        <button
+          onClick={() => setShowMoreTools(prev => !prev)}
+          className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50 font-medium"
+        >
+          <span>More tools</span>
+          <span className="text-[10px]">{showMoreTools ? '\u25B2' : '\u25BC'}</span>
+        </button>
+        {showMoreTools && (
+          <div className="grid grid-cols-5 pb-1">
+            {[
+              { id: 'brush',       icon: '🖌️', label: 'Brush' },
+              { id: 'eraser',      icon: '🧹', label: 'Eraser' },
+              { id: 'plots',       icon: '📍', label: 'Plots' },
+              { id: 'inventory',   icon: '📊', label: 'Inventory' },
+              { id: 'massrename',  icon: '🔄', label: 'Rename' },
+              { id: 'labels',      icon: '🏷️', label: 'Labels' },
+              { id: 'shapes',      icon: '⬜', label: 'Shapes' },
+              { id: 'notes',       icon: '📝', label: 'Notes' },
+              { id: 'changelog',   icon: '📋', label: 'Log' },
+              { id: 'branches',    icon: '🔀', label: 'Branches' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex flex-col items-center py-1.5 text-center ${
+                  activeTab === tab.id
+                    ? 'bg-gray-100 border-b-2 border-gray-900'
+                    : 'hover:bg-gray-50'
+                }`}
+              >
+                <span className="text-sm leading-none">{tab.icon}</span>
+                <span className="text-[9px] leading-tight mt-0.5 text-gray-600 font-medium">{tab.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Content */}

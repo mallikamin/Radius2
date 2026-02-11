@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useVectorState } from '../../hooks/useVectorState';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
-import { loadPDFFromBase64, loadPDFFromFile, extractPlots, arrayBufferToBase64 } from '../../utils/pdfLoader';
+import { loadPDFFromBase64, loadPDFFromUrl, loadPDFFromFile, extractPlots, arrayBufferToBase64 } from '../../utils/pdfLoader';
 import { loadProjectFile } from '../../utils/projectLoader';
 import axios from 'axios';
 import MapCanvas from './MapCanvas';
@@ -10,6 +10,7 @@ import HoverPlotDetails from './HoverPlotDetails';
 import LegendPanel from './LegendPanel';
 import Toolbar from './Toolbar';
 import Sidebar from './Sidebar';
+import KeyboardShortcutsOverlay from './KeyboardShortcutsOverlay';
 
 export default function VectorMap() {
   const vectorState = useVectorState();
@@ -520,17 +521,29 @@ export default function VectorMap() {
       vectorState.setCurrentProjectId(projectId);
       currentProjectIdRef.current = projectId; // Immediate sync for save operations
       
-      // If PDF base64 exists, load it FIRST
-      if (data.pdfBase64) {
-        console.log('handleLoadProjectFromDB: Loading PDF...');
+      // Load PDF: prefer file URL (lightweight) over base64 (legacy ~5MB inline)
+      const hasPdfBase64 = !!data.pdfBase64;
+      const hasMapFileUrl = !!data.mapFileUrl;
+
+      if (hasPdfBase64 || hasMapFileUrl) {
+        console.log('handleLoadProjectFromDB: Loading PDF...', { fromUrl: hasMapFileUrl, fromBase64: hasPdfBase64 });
         try {
-          const result = await loadPDFFromBase64(data.pdfBase64, (progress) => {
+          let result;
+          const onPdfProgress = (progress) => {
             vectorState.setMapW(progress.mapW);
             vectorState.setMapH(progress.mapH);
             vectorState.setPdfScale(progress.pdfScale);
             vectorState.setPdfImg(progress.pdfImg);
-          });
-          
+          };
+
+          if (hasMapFileUrl && !hasPdfBase64) {
+            // Load from filesystem URL (no base64 in response - much lighter network payload)
+            result = await loadPDFFromUrl(data.mapFileUrl, onPdfProgress);
+          } else {
+            // Load from base64 (legacy path or include_pdf=true was requested)
+            result = await loadPDFFromBase64(data.pdfBase64, onPdfProgress);
+          }
+
           if ((!data.plots || data.plots.length === 0) && result.page) {
             console.warn('handleLoadProjectFromDB: ⚠ NO SAVED PLOTS - extracting from PDF (this will create NEW IDs!)');
             try {
@@ -1074,64 +1087,6 @@ export default function VectorMap() {
           height: 'calc(100vh - 40px)'
         }}
       >
-        {/* Top Left: Tool Icons with Names */}
-        {vectorState.pdfImg && (
-          <div className="absolute top-4 left-4 z-10 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg p-2 border border-gray-200">
-            <div className="flex flex-col gap-1">
-              <div 
-                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${
-                  tool === 'select' ? 'bg-blue-100' : 'hover:bg-gray-100'
-                }`}
-                onClick={() => setTool('select')}
-                title="Select Tool"
-              >
-                <span className="text-base">👆</span>
-                <span className="text-xs font-medium text-gray-700">Select</span>
-              </div>
-              <div 
-                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${
-                  tool === 'pan' ? 'bg-blue-100' : 'hover:bg-gray-100'
-                }`}
-                onClick={() => setTool('pan')}
-                title="Pan Tool"
-              >
-                <span className="text-base">✋</span>
-                <span className="text-xs font-medium text-gray-700">Pan</span>
-              </div>
-              <div 
-                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${
-                  tool === 'add' ? 'bg-blue-100' : 'hover:bg-gray-100'
-                }`}
-                onClick={() => setTool('add')}
-                title="Add Plot"
-              >
-                <span className="text-base">➕</span>
-                <span className="text-xs font-medium text-gray-700">Add Plot</span>
-              </div>
-              <div 
-                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${
-                  tool === 'brush' ? 'bg-blue-100' : 'hover:bg-gray-100'
-                }`}
-                onClick={() => setTool('brush')}
-                title="Brush Tool"
-              >
-                <span className="text-base">🖌️</span>
-                <span className="text-xs font-medium text-gray-700">Brush</span>
-              </div>
-              <div 
-                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${
-                  tool === 'eraser' ? 'bg-blue-100' : 'hover:bg-gray-100'
-                }`}
-                onClick={() => setTool('eraser')}
-                title="Eraser Tool"
-              >
-                <span className="text-base">🧹</span>
-                <span className="text-xs font-medium text-gray-700">Eraser</span>
-              </div>
-            </div>
-          </div>
-        )}
-
         {vectorState.pdfImg ? (
           <MapCanvas 
             vectorState={vectorState} 
@@ -1187,6 +1142,9 @@ export default function VectorMap() {
       {vectorState.legend.visible && (
         <LegendPanel vectorState={vectorState} />
       )}
+
+      {/* Keyboard Shortcuts Overlay */}
+      <KeyboardShortcutsOverlay />
 
       {/* Loading overlay */}
       {loading && (

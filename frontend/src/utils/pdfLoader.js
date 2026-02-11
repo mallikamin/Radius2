@@ -86,6 +86,62 @@ export async function loadPDFFromBase64(base64, onProgress) {
   }
 }
 
+// Load PDF from URL (filesystem-served PDF, avoids base64 overhead)
+export async function loadPDFFromUrl(url, onProgress) {
+  try {
+    console.log('loadPDFFromUrl: Fetching PDF from', url);
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    console.log('loadPDFFromUrl: Received', arrayBuffer.byteLength, 'bytes');
+
+    const pdf = await pdfjsLib.getDocument({
+      data: arrayBuffer,
+      cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/'
+    }).promise;
+
+    const page = await pdf.getPage(1);
+    const origVp = page.getViewport({ scale: 1 });
+    const maxDim = 8000;
+    const pdfScale = Math.min(maxDim / origVp.width, maxDim / origVp.height, 3);
+
+    console.log('PDF render scale:', pdfScale, 'Original:', origVp.width, 'x', origVp.height);
+
+    const vp = page.getViewport({ scale: pdfScale });
+    const mapW = vp.width;
+    const mapH = vp.height;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = mapW;
+    canvas.height = mapH;
+    const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false });
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, mapW, mapH);
+    ctx.imageSmoothingEnabled = false;
+
+    await page.render({
+      canvasContext: ctx,
+      viewport: vp,
+      background: 'white',
+      intent: 'print'
+    }).promise;
+
+    if (onProgress) {
+      onProgress({ mapW, mapH, pdfScale, pdfImg: canvas });
+    }
+
+    return { mapW, mapH, pdfScale, pdfImg: canvas, page };
+  } catch (error) {
+    console.error('Error loading PDF from URL:', error);
+    throw error;
+  }
+}
+
 // Load PDF from file input (high resolution)
 export async function loadPDFFromFile(file, onProgress) {
   try {

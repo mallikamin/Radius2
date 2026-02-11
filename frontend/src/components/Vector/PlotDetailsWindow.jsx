@@ -216,15 +216,6 @@ export default function PlotDetailsWindow({ vectorState }) {
           <div className="px-3 py-2 border-t border-gray-200 bg-gray-50 flex gap-2 flex-wrap">
             <button
               onClick={() => {
-                // Edit functionality - to be implemented
-                alert('Edit functionality coming soon');
-              }}
-              className="flex-1 px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-            >
-              ✏️ Edit
-            </button>
-            <button
-              onClick={() => {
                 // Zoom functionality - to be implemented
                 if (window.zoomToPlot) {
                   window.zoomToPlot(plot.id);

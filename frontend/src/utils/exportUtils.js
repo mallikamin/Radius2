@@ -1,4 +1,12 @@
-import { jsPDF } from 'jspdf';
+// jsPDF is loaded dynamically to enable code-splitting (vendor-pdf chunk)
+// Helper to get jsPDF class - checks global first, then dynamic import
+async function getJsPDF() {
+  if (window.jspdf && window.jspdf.jsPDF) {
+    return window.jspdf.jsPDF;
+  }
+  const mod = await import('jspdf');
+  return mod.jsPDF;
+}
 
 // Format currency helper
 export function formatCurrency(amount) {
@@ -7,8 +15,9 @@ export function formatCurrency(amount) {
 }
 
 // Export plot details to PDF
-export function exportPlotDetailsToPDF(plotsToExport, vectorState) {
-  const doc = new jsPDF();
+export async function exportPlotDetailsToPDF(plotsToExport, vectorState) {
+  const jsPDFClass = await getJsPDF();
+  const doc = new jsPDFClass();
   
   if (plotsToExport.length === 0) {
     alert('No plots to export');
@@ -706,18 +715,7 @@ export function buildSinglePlotCanvas(vectorState, plotIds, expScale = 2) {
 
 // Export Proposal PDF - clean summary table + map views
 export async function exportProposalPDF(plotsToExport, vectorState, fieldConfig, viewOptions) {
-  let jsPDFClass;
-  if (window.jspdf && window.jspdf.jsPDF) {
-    jsPDFClass = window.jspdf.jsPDF;
-  } else {
-    try {
-      const mod = await import('jspdf');
-      jsPDFClass = mod.jsPDF;
-    } catch (err) {
-      alert('jsPDF not loaded. Please refresh the page.');
-      return;
-    }
-  }
+  const jsPDFClass = await getJsPDF();
 
   const quality = viewOptions.quality || 2;
   const legendPosition = vectorState.legend?.position || 'bottom-right';

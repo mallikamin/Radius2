@@ -1,4 +1,12 @@
-import * as XLSX from 'xlsx';
+// XLSX is loaded dynamically to enable code-splitting (vendor-excel chunk)
+// It will be loaded on-demand when Excel import/export functions are called
+let _XLSX = null;
+async function getXLSX() {
+  if (!_XLSX) {
+    _XLSX = await import('xlsx');
+  }
+  return _XLSX;
+}
 
 /**
  * Auto-detect column mapping from Excel row
@@ -27,7 +35,8 @@ export function detectColumnMapping(firstRow) {
 /**
  * Import inventory from Excel file
  */
-export function importInventoryFromExcel(file, onProgress) {
+export async function importInventoryFromExcel(file, onProgress) {
+  const XLSX = await getXLSX();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -95,12 +104,13 @@ export function importInventoryFromExcel(file, onProgress) {
 /**
  * Export inventory to Excel
  */
-export function exportInventoryToExcel(inventory, plots, filename = 'inventory') {
+export async function exportInventoryToExcel(inventory, plots, filename = 'inventory') {
+  const XLSX = await getXLSX();
   const data = [];
-  
+
   // Header
   data.push(['Plot#', 'Marla', 'Total Value', 'Rate per Marla', 'Dimensions', 'Owner', 'Status', 'Factor Notes', 'Notes']);
-  
+
   // Data rows
   Object.keys(inventory).forEach(plotNum => {
     const inv = inventory[plotNum];
@@ -116,7 +126,7 @@ export function exportInventoryToExcel(inventory, plots, filename = 'inventory')
       inv.notes || ''
     ]);
   });
-  
+
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(data);
   XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
@@ -126,13 +136,14 @@ export function exportInventoryToExcel(inventory, plots, filename = 'inventory')
 /**
  * Export manual plots to Excel separately
  */
-export function exportManualPlotsToExcel(plots, inventory, filename = 'manual_plots') {
+export async function exportManualPlotsToExcel(plots, inventory, filename = 'manual_plots') {
+  const XLSX = await getXLSX();
   const manualPlots = plots.filter(p => p.manual);
   const data = [];
-  
+
   // Header
   data.push(['Plot#', 'X', 'Y', 'Width', 'Height', 'Marla', 'Total Value', 'Rate per Marla', 'Dimensions', 'Owner', 'Status', 'Notes']);
-  
+
   // Data rows
   manualPlots.forEach(plot => {
     const inv = inventory[plot.n] || {};
@@ -151,7 +162,7 @@ export function exportManualPlotsToExcel(plots, inventory, filename = 'manual_pl
       inv.notes || ''
     ]);
   });
-  
+
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(data);
   XLSX.utils.book_append_sheet(wb, ws, 'Manual Plots');

@@ -12,7 +12,11 @@ export function useKeyboardShortcuts(vectorState) {
       // Save (Ctrl+S)
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        downloadProjectJSON(vectorState);
+        if (vectorState.databaseMode && vectorState.saveToDatabase) {
+          vectorState.saveToDatabase();
+        } else {
+          downloadProjectJSON(vectorState);
+        }
         if (vectorState.addChangeLog) {
           vectorState.addChangeLog('Project saved', `Saved project: ${vectorState.projectName || 'Untitled'}`);
         }
@@ -103,12 +107,10 @@ export function useKeyboardShortcuts(vectorState) {
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 'z' && !e.shiftKey) {
           e.preventDefault();
-          // Undo functionality - to be implemented with undo stack
-          console.log('Undo');
+          if (vectorState.undo) vectorState.undo();
         } else if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) {
           e.preventDefault();
-          // Redo functionality - to be implemented
-          console.log('Redo');
+          if (vectorState.redo) vectorState.redo();
         }
       }
 

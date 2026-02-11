@@ -1,5 +1,9 @@
 -- Radius CRM v3 - Clean Start
 -- Customers & Brokers Tables
+--
+-- SAFETY: This file only runs on FIRST db creation (empty volume).
+-- All statements use IF NOT EXISTS / ON CONFLICT to be idempotent.
+-- WARNING: Never change the Docker volume name — it orphans all data.
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -7,7 +11,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- =============================================
 -- CUSTOMERS TABLE
 -- =============================================
-CREATE TABLE customers (
+CREATE TABLE IF NOT EXISTS customers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     customer_id VARCHAR(20) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -20,10 +24,10 @@ CREATE TABLE customers (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_customers_mobile ON customers(mobile);
+CREATE INDEX IF NOT EXISTS idx_customers_mobile ON customers(mobile);
 
 -- Sequence for customer_id generation
-CREATE SEQUENCE customer_id_seq START 1;
+CREATE SEQUENCE IF NOT EXISTS customer_id_seq START 1;
 
 -- Function to generate customer_id
 CREATE OR REPLACE FUNCTION generate_customer_id()
@@ -47,7 +51,7 @@ CREATE TRIGGER trg_customer_id
 -- Broker can have same mobile as a customer (same person, different role)
 -- Broker mobile must be unique within brokers table only
 -- =============================================
-CREATE TABLE brokers (
+CREATE TABLE IF NOT EXISTS brokers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     broker_id VARCHAR(20) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -68,11 +72,11 @@ CREATE TABLE brokers (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_brokers_mobile ON brokers(mobile);
-CREATE INDEX idx_brokers_status ON brokers(status);
+CREATE INDEX IF NOT EXISTS idx_brokers_mobile ON brokers(mobile);
+CREATE INDEX IF NOT EXISTS idx_brokers_status ON brokers(status);
 
 -- Sequence for broker_id generation
-CREATE SEQUENCE broker_id_seq START 1;
+CREATE SEQUENCE IF NOT EXISTS broker_id_seq START 1;
 
 -- Function to generate broker_id
 CREATE OR REPLACE FUNCTION generate_broker_id()
@@ -112,21 +116,24 @@ CREATE TRIGGER trg_brokers_updated
     EXECUTE FUNCTION update_timestamp();
 
 -- =============================================
--- TEST DATA
+-- SEED DATA (only on fresh db, idempotent)
 -- =============================================
 INSERT INTO customers (name, mobile, address, cnic, email) VALUES
 ('Ahmed Khan', '0300-1234567', 'House 1, DHA Phase 5, Lahore', '35201-1234567-1', 'ahmed@email.com'),
 ('Sara Ali', '0321-9876543', 'Flat 5, Gulberg III, Lahore', '35202-9876543-2', 'sara@email.com'),
-('Muhammad Hassan', '0333-5555555', NULL, NULL, NULL);
+('Muhammad Hassan', '0333-5555555', NULL, NULL, NULL)
+ON CONFLICT (mobile) DO NOTHING;
 
 INSERT INTO brokers (name, mobile, company, commission_rate) VALUES
 ('Rizwan Properties', '0300-1111111', 'Rizwan Real Estate', 2.5),
-('Ali Realtors', '0321-2222222', 'Ali & Sons', 2.0);
+('Ali Realtors', '0321-2222222', 'Ali & Sons', 2.0)
+ON CONFLICT (mobile) DO NOTHING;
 
 -- Ahmed Khan is also a broker (same person, different role)
 INSERT INTO brokers (name, mobile, company, commission_rate, linked_customer_id)
-SELECT 'Ahmed Khan', '0300-1234567', 'Khan Associates', 1.5, id 
-FROM customers WHERE mobile = '0300-1234567';
+SELECT 'Ahmed Khan', '0300-1234567', 'Khan Associates', 1.5, id
+FROM customers WHERE mobile = '0300-1234567'
+ON CONFLICT (mobile) DO NOTHING;
 
 -- Verify
 SELECT 'Customers:' as table_name, customer_id, name, mobile FROM customers

@@ -5,6 +5,7 @@ export default function LegendPanel({ vectorState }) {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -173,7 +174,7 @@ export default function LegendPanel({ vectorState }) {
     });
 
     return { items, globalMarlaTotal, globalValueTotal };
-  }, [vectorState.annos, vectorState.plots, vectorState.inventory, vectorState.legend.manualEntries]);
+  }, [vectorState.annos, vectorState.plots, vectorState.inventory, vectorState.legend.manualEntries, refreshKey]);
 
   // Position legend based on position setting (only if not manually positioned)
   useEffect(() => {
@@ -291,10 +292,7 @@ export default function LegendPanel({ vectorState }) {
         </span>
         <div className="flex gap-1">
           <button
-            onClick={() => {
-              // Refresh legend
-              window.location.reload();
-            }}
+            onClick={() => setRefreshKey(k => k + 1)}
             className="text-white hover:opacity-100 opacity-70 text-xs"
             title="Refresh"
           >

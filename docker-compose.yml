@@ -16,7 +16,7 @@ services:
     ports:
       - "5440:5432"
     volumes:
-      - orbit_dev_postgres:/var/lib/postgresql/data
+      - radius2_sitara_v3_postgres:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sitara -d sitara_crm"]
@@ -41,6 +41,7 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./media:/app/media
+      - ./backend/uploads:/app/uploads
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
@@ -63,7 +64,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  orbit_dev_postgres:
+  radius2_sitara_v3_postgres:
+    external: true  # NEVER change this name — it contains real dev data
 
 networks:
   default:

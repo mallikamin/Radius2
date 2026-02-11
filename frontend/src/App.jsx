@@ -1,11 +1,31 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense, lazy } from 'react';
 import axios from 'axios';
-import VectorMap from './components/Vector/VectorMap';
 import OrphanTrackingPanel from './components/OrphanTrackingPanel';
 import InventoryMapViewer from './components/InventoryMapViewer';
 
+// Lazy-loaded heavy components (code-split into separate chunks)
+const VectorMap = lazy(() => import('./components/Vector/VectorMap'));
+
+// Chart.js integration
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, ArcElement } from 'chart.js';
+import { Bar, Line, Doughnut } from 'react-chartjs-2';
+ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, ArcElement);
+const chartsAvailable = true;
+
 const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
+
+// ============================================
+// DEBOUNCE HOOK - for search input performance
+// ============================================
+function useDebounce(value, delay = 150) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debouncedValue;
+}
 
 // ============================================
 // AUTHENTICATION - LOGIN VIEW
@@ -104,11 +124,15 @@ export default function App() {
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
   
-  // Expose setActiveTab for Vector navigation
+  const [customer360Id, setCustomer360Id] = useState(null);
+
+  // Expose setActiveTab and showCustomer360 for global navigation
   useEffect(() => {
     window.setActiveTab = setActiveTab;
+    window.showCustomer360 = (id) => setCustomer360Id(id);
     return () => {
       window.setActiveTab = null;
+      window.showCustomer360 = null;
     };
   }, []);
   
@@ -146,28 +170,6 @@ export default function App() {
     setUser(null);
   };
   
-  // Check for existing login on mount
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    const savedUser = localStorage.getItem('user');
-    if (token && savedUser) {
-      try {
-        const userData = JSON.parse(savedUser);
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        // Verify token is still valid
-        api.get('/auth/me').then(res => {
-          setUser(res.data);
-        }).catch(() => {
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-        });
-      } catch (e) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-      }
-    }
-  }, []);
-
   // Close dropdown when clicking outside - MUST be before conditional returns
   useEffect(() => {
     if (!showMoreMenu) return;
@@ -336,9 +338,14 @@ export default function App() {
         {activeTab === 'brokers' && <BrokersView />}
         {activeTab === 'campaigns' && <CampaignsView />}
         {activeTab === 'media' && <MediaView />}
-        {activeTab === 'vector' && <VectorView />}
+        {activeTab === 'vector' && (
+          <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="text-gray-400">Loading Vector Map...</div></div>}>
+            <VectorView />
+          </Suspense>
+        )}
         {activeTab === 'settings' && <SettingsView />}
       </main>
+      {customer360Id && <Customer360Drawer customerId={customer360Id} onClose={() => setCustomer360Id(null)} />}
     </div>
   );
 }
@@ -354,13 +361,16 @@ function ProjectsView() {
   const [selectedProject, setSelectedProject] = useState(null);
   const [form, setForm] = useState({ name: '', location: '', description: '' });
   const [searchTerm, setSearchTerm] = useState('');
+  const [toast, setToast] = useState(null);
+  const [formErrors, setFormErrors] = useState({});
+  const debouncedSearch = useDebounce(searchTerm, 150);
 
-  // Filter projects by search term
-  const filteredProjects = projects.filter(p =>
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.project_id?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Filter projects by search term (debounced + memoized)
+  const filteredProjects = useMemo(() => projects.filter(p =>
+    p.name.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+    p.location?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+    p.project_id?.toLowerCase().includes(debouncedSearch.toLowerCase())
+  ), [projects, debouncedSearch]);
 
   useEffect(() => { loadProjects(); }, []);
   const loadProjects = async () => {
@@ -369,10 +379,18 @@ function ProjectsView() {
     finally { setLoading(false); }
   };
 
+  const validateProjectForm = () => {
+    const errors = {};
+    if (!form.name?.trim()) errors.name = 'Project name is required';
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    try { await api.post('/projects', form); setShowModal(false); setForm({ name: '', location: '', description: '' }); loadProjects(); }
-    catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    if (!validateProjectForm()) return;
+    try { await api.post('/projects', form); setShowModal(false); setForm({ name: '', location: '', description: '' }); setFormErrors({}); loadProjects(); }
+    catch (e) { setToast({ message: e.response?.data?.detail || 'Error creating project', type: 'error' }); }
   };
 
   const handleProjectClick = async (projectId) => {
@@ -382,7 +400,7 @@ function ProjectsView() {
       setShowDetailModal(true);
     } catch (e) {
       console.error('Error loading project details:', e);
-      alert('Error loading project details');
+      setToast({ message: 'Error loading project details', type: 'error' });
     }
   };
 
@@ -456,14 +474,16 @@ function ProjectsView() {
         </div>
       )}
 
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
       {showModal && (
-        <Modal title="Add Project" onClose={() => setShowModal(false)}>
+        <Modal title="Add Project" onClose={() => { setShowModal(false); setFormErrors({}); }}>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+            <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} error={formErrors.name} />
             <Input label="Location" value={form.location} onChange={e => setForm({...form, location: e.target.value})} />
             <Input label="Description" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
             <div className="flex justify-end gap-3 pt-4">
-              <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="button" onClick={() => { setShowModal(false); setFormErrors({}); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
               <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Create</button>
             </div>
           </form>
@@ -527,6 +547,8 @@ function InventoryView() {
   const [form, setForm] = useState({ project_id: '', unit_number: '', unit_type: 'plot', block: '', area_marla: '', rate_per_marla: '', factor_details: '', notes: '' });
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [invToast, setInvToast] = useState(null);
+  const [invFormErrors, setInvFormErrors] = useState({});
 
   // Search filters - exact match fields
   const [unitNumber, setUnitNumber] = useState('');
@@ -535,6 +557,11 @@ function InventoryView() {
   const [areaMax, setAreaMax] = useState('');
   const [rateMin, setRateMin] = useState('');
   const [rateMax, setRateMax] = useState('');
+  const debouncedUnitNumber = useDebounce(unitNumber, 150);
+  const debouncedAreaMin = useDebounce(areaMin, 150);
+  const debouncedAreaMax = useDebounce(areaMax, 150);
+  const debouncedRateMin = useDebounce(rateMin, 150);
+  const debouncedRateMax = useDebounce(rateMax, 150);
 
   // Map view state
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('inventoryViewMode') || 'table'); // table, split-h, split-v, map
@@ -606,20 +633,20 @@ function InventoryView() {
   // Get unique blocks from inventory for dropdown
   const uniqueBlocks = [...new Set(inventory.map(i => i.block).filter(Boolean))].sort();
 
-  // Filter inventory - exact match for unit number
-  const filteredInventory = inventory.filter(item => {
+  // Filter inventory - exact match for unit number (debounced + memoized)
+  const filteredInventory = useMemo(() => inventory.filter(item => {
     // Unit number - EXACT match (case-insensitive)
-    if (unitNumber && item.unit_number?.toLowerCase() !== unitNumber.toLowerCase()) return false;
+    if (debouncedUnitNumber && item.unit_number?.toLowerCase() !== debouncedUnitNumber.toLowerCase()) return false;
     // Block filter - exact match
     if (searchBlock && item.block !== searchBlock) return false;
     // Area range filter
-    if (areaMin && parseFloat(item.area_marla) < parseFloat(areaMin)) return false;
-    if (areaMax && parseFloat(item.area_marla) > parseFloat(areaMax)) return false;
+    if (debouncedAreaMin && parseFloat(item.area_marla) < parseFloat(debouncedAreaMin)) return false;
+    if (debouncedAreaMax && parseFloat(item.area_marla) > parseFloat(debouncedAreaMax)) return false;
     // Rate range filter
-    if (rateMin && parseFloat(item.rate_per_marla) < parseFloat(rateMin)) return false;
-    if (rateMax && parseFloat(item.rate_per_marla) > parseFloat(rateMax)) return false;
+    if (debouncedRateMin && parseFloat(item.rate_per_marla) < parseFloat(debouncedRateMin)) return false;
+    if (debouncedRateMax && parseFloat(item.rate_per_marla) > parseFloat(debouncedRateMax)) return false;
     return true;
-  });
+  }), [inventory, debouncedUnitNumber, searchBlock, debouncedAreaMin, debouncedAreaMax, debouncedRateMin, debouncedRateMax]);
 
   const clearAllFilters = () => {
     setUnitNumber('');
@@ -648,10 +675,21 @@ function InventoryView() {
     finally { setLoading(false); }
   };
 
+  const validateInventoryForm = () => {
+    const errors = {};
+    if (!form.project_id) errors.project_id = 'Project is required';
+    if (!form.unit_number?.trim()) errors.unit_number = 'Unit number is required';
+    if (!form.area_marla || parseFloat(form.area_marla) <= 0) errors.area_marla = 'Area must be greater than 0';
+    if (!form.rate_per_marla || parseFloat(form.rate_per_marla) <= 0) errors.rate_per_marla = 'Rate must be greater than 0';
+    setInvFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    try { await api.post('/inventory', form); setShowModal(false); setForm({ project_id: '', unit_number: '', unit_type: 'plot', block: '', area_marla: '', rate_per_marla: '', factor_details: '', notes: '' }); loadData(); }
-    catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    if (!validateInventoryForm()) return;
+    try { await api.post('/inventory', form); setShowModal(false); setForm({ project_id: '', unit_number: '', unit_type: 'plot', block: '', area_marla: '', rate_per_marla: '', factor_details: '', notes: '' }); setInvFormErrors({}); loadData(); }
+    catch (e) { setInvToast({ message: e.response?.data?.detail || 'Error adding unit', type: 'error' }); }
   };
 
   const handleImport = async () => {
@@ -885,17 +923,20 @@ function InventoryView() {
 
       <BulkImport entity="inventory" onImport={handleImport} importFile={importFile} setImportFile={setImportFile} importResult={importResult} />
 
+      {invToast && <Toast message={invToast.message} type={invToast.type} onClose={() => setInvToast(null)} />}
+
       {showModal && (
-        <Modal title="Add Unit" onClose={() => setShowModal(false)}>
+        <Modal title="Add Unit" onClose={() => { setShowModal(false); setInvFormErrors({}); }}>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div><label className="block text-xs font-medium text-gray-500 mb-1">Project *</label>
-              <select required value={form.project_id} onChange={e => setForm({...form, project_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <select required value={form.project_id} onChange={e => setForm({...form, project_id: e.target.value})} className={`w-full border rounded-lg px-3 py-2 text-sm ${invFormErrors.project_id ? 'border-red-400' : ''}`}>
                 <option value="">Select Project</option>
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
+              {invFormErrors.project_id && <p className="text-xs text-red-500 mt-1">{invFormErrors.project_id}</p>}
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Unit Number" required value={form.unit_number} onChange={e => setForm({...form, unit_number: e.target.value})} />
+              <Input label="Unit Number" required value={form.unit_number} onChange={e => setForm({...form, unit_number: e.target.value})} error={invFormErrors.unit_number} />
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
                 <select value={form.unit_type} onChange={e => setForm({...form, unit_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
                   <option value="plot">Plot</option><option value="shop">Shop</option><option value="house">House</option><option value="flat">Flat</option>
@@ -904,13 +945,13 @@ function InventoryView() {
             </div>
             <Input label="Block" value={form.block} onChange={e => setForm({...form, block: e.target.value})} />
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Area (Marla)" type="number" step="0.01" required value={form.area_marla} onChange={e => setForm({...form, area_marla: e.target.value})} />
-              <Input label="Rate/Marla" type="number" required value={form.rate_per_marla} onChange={e => setForm({...form, rate_per_marla: e.target.value})} />
+              <Input label="Area (Marla)" type="number" step="0.01" required value={form.area_marla} onChange={e => setForm({...form, area_marla: e.target.value})} error={invFormErrors.area_marla} />
+              <Input label="Rate/Marla" type="number" required value={form.rate_per_marla} onChange={e => setForm({...form, rate_per_marla: e.target.value})} error={invFormErrors.rate_per_marla} />
             </div>
             <Input label="Factor Details" value={form.factor_details} onChange={e => setForm({...form, factor_details: e.target.value})} />
             <Input label="Notes" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} />
             <div className="flex justify-end gap-3 pt-4">
-              <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="button" onClick={() => { setShowModal(false); setInvFormErrors({}); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
               <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Create</button>
             </div>
           </form>
@@ -1135,17 +1176,19 @@ function SellModal({ item, onClose, onSuccess }) {
 
   const totalValue = (parseFloat(form.area_marla) || 0) * (parseFloat(form.rate_per_marla) || 0);
   const commission = totalValue * (parseFloat(form.broker_commission_rate) || 0) / 100;
+  const [sellToast, setSellToast] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       await api.post('/transactions', { ...form, inventory_id: item.id });
       onSuccess();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) { setSellToast({ message: e.response?.data?.detail || 'Error creating transaction', type: 'error' }); }
   };
 
   return (
     <Modal title={`Sell ${item.unit_number}`} onClose={onClose} wide>
+      {sellToast && <Toast message={sellToast.message} type={sellToast.type} onClose={() => setSellToast(null)} />}
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="bg-gray-50 rounded-lg p-4 mb-4">
           <div className="grid grid-cols-3 gap-4 text-sm">
@@ -1234,25 +1277,29 @@ function TransactionsView() {
   const [brokerDetails, setBrokerDetails] = useState(null);
   const [showBuybackModal, setShowBuybackModal] = useState(false);
   const [buybackTransaction, setBuybackTransaction] = useState(null);
+  const [txnToast, setTxnToast] = useState(null);
 
   // Search filters - separate fields for precision
   const [customerName, setCustomerName] = useState('');
   const [unitNumber, setUnitNumber] = useState('');
   const [txnId, setTxnId] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const debouncedCustomerName = useDebounce(customerName, 150);
+  const debouncedTxnUnitNumber = useDebounce(unitNumber, 150);
+  const debouncedTxnId = useDebounce(txnId, 150);
 
-  // Filter transactions - exact match for unit# and txn ID, partial for customer
-  const filteredTransactions = transactions.filter(t => {
+  // Filter transactions - exact match for unit# and txn ID, partial for customer (debounced + memoized)
+  const filteredTransactions = useMemo(() => transactions.filter(t => {
     // Customer name - partial match (for discovery)
-    if (customerName && !t.customer_name?.toLowerCase().includes(customerName.toLowerCase())) return false;
+    if (debouncedCustomerName && !t.customer_name?.toLowerCase().includes(debouncedCustomerName.toLowerCase())) return false;
     // Unit number - EXACT match
-    if (unitNumber && t.unit_number?.toLowerCase() !== unitNumber.toLowerCase()) return false;
+    if (debouncedTxnUnitNumber && t.unit_number?.toLowerCase() !== debouncedTxnUnitNumber.toLowerCase()) return false;
     // Transaction ID - EXACT match (or starts with for partial ID entry)
-    if (txnId && !t.transaction_id?.toLowerCase().startsWith(txnId.toLowerCase())) return false;
+    if (debouncedTxnId && !t.transaction_id?.toLowerCase().startsWith(debouncedTxnId.toLowerCase())) return false;
     // Status filter
     if (statusFilter && t.status !== statusFilter) return false;
     return true;
-  });
+  }), [transactions, debouncedCustomerName, debouncedTxnUnitNumber, debouncedTxnId, statusFilter]);
 
   const clearFilters = () => {
     setCustomerName('');
@@ -1269,7 +1316,7 @@ function TransactionsView() {
       const res = await api.get(`/customers/${customerId}/details`);
       setCustomerDetails(res.data);
       setSelectedCustomer(customerId);
-    } catch (e) { alert('Error loading customer details'); }
+    } catch (e) { setTxnToast({ message: 'Error loading customer details', type: 'error' }); }
   };
 
   const loadBrokerDetails = async (brokerId) => {
@@ -1277,7 +1324,7 @@ function TransactionsView() {
       const res = await api.get(`/brokers/${brokerId}/details`);
       setBrokerDetails(res.data);
       setSelectedBroker(brokerId);
-    } catch (e) { alert('Error loading broker details'); }
+    } catch (e) { setTxnToast({ message: 'Error loading broker details', type: 'error' }); }
   };
 
   useEffect(() => { loadData(); }, [filter]);
@@ -1313,7 +1360,7 @@ function TransactionsView() {
 
   const viewDetails = async (t) => {
     try { const res = await api.get(`/transactions/${t.id}`); setSelectedTxn(res.data); }
-    catch (e) { alert('Error loading details'); }
+    catch (e) { setTxnToast({ message: 'Error loading transaction details', type: 'error' }); }
   };
 
   return (
@@ -1429,7 +1476,7 @@ function TransactionsView() {
                   <td className="px-6 py-4">
                     <div className="text-sm font-medium">
                       {t.customer_id ? (
-                        <button onClick={(e) => { e.stopPropagation(); loadCustomerDetails(t.customer_id); }} className="text-blue-600 hover:text-blue-800 hover:underline">
+                        <button onClick={(e) => { e.stopPropagation(); window.showCustomer360 && window.showCustomer360(t.customer_id); }} className="text-blue-600 hover:text-blue-800 hover:underline">
                           {t.customer_name}
                         </button>
                       ) : (
@@ -1466,6 +1513,8 @@ function TransactionsView() {
       )}
 
       <BulkImport entity="transactions" onImport={handleImport} importFile={importFile} setImportFile={setImportFile} importResult={importResult} />
+
+      {txnToast && <Toast message={txnToast.message} type={txnToast.type} onClose={() => setTxnToast(null)} />}
 
       {showModal && <NewTransactionModal onClose={() => setShowModal(false)} onSuccess={() => { setShowModal(false); loadData(); }} />}
       {selectedTxn && <TransactionDetailModal txn={selectedTxn} onClose={() => setSelectedTxn(null)} onUpdate={loadData} />}
@@ -1553,19 +1602,36 @@ function NewTransactionModal({ onClose, onSuccess }) {
   };
 
   const totalValue = (parseFloat(form.area_marla) || 0) * (parseFloat(form.rate_per_marla) || 0);
+  const [txnFormErrors, setTxnFormErrors] = useState({});
+  const [txnFormToast, setTxnFormToast] = useState(null);
+
+  const validateTransactionForm = () => {
+    const errors = {};
+    if (!selectedInv) errors.unit = 'Select a unit';
+    if (!form.customer_id) errors.customer = 'Select a customer';
+    if (!form.first_due_date) errors.first_due = 'First due date is required';
+    if (totalValue <= 0) errors.amount = 'Transaction value must be greater than 0';
+    setTxnFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedInv) { alert('Select a unit'); return; }
-    if (!form.customer_id) { alert('Select a customer'); return; }
+    if (!validateTransactionForm()) return;
     try {
       await api.post('/transactions', { ...form, inventory_id: selectedInv.id });
       onSuccess();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) { setTxnFormToast({ message: e.response?.data?.detail || 'Error creating transaction', type: 'error' }); }
   };
 
   return (
     <Modal title="New Transaction" onClose={onClose} wide>
+      {txnFormToast && <Toast message={txnFormToast.message} type={txnFormToast.type} onClose={() => setTxnFormToast(null)} />}
+      {Object.keys(txnFormErrors).length > 0 && (
+        <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">
+          {Object.values(txnFormErrors).map((err, i) => <div key={i}>{err}</div>)}
+        </div>
+      )}
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           {/* Project Selection */}
@@ -1673,8 +1739,74 @@ function NewTransactionModal({ onClose, onSuccess }) {
 // ============================================
 // TRANSACTION DETAIL MODAL
 // ============================================
+function QuickPayModal({ installment, transaction, onClose, onSuccess }) {
+  const [amount, setAmount] = useState((parseFloat(installment.amount) - parseFloat(installment.amount_paid || 0)).toFixed(0));
+  const [method, setMethod] = useState('cash');
+  const [loading, setLoading] = useState(false);
+
+  const handlePay = async () => {
+    setLoading(true);
+    try {
+      await api.post('/receipts', {
+        transaction_id: transaction.id,
+        customer_id: transaction.customer_id,
+        amount: parseFloat(amount),
+        receipt_date: new Date().toISOString().split('T')[0],
+        payment_method: method,
+        notes: `Quick pay for installment #${installment.number || installment.installment_number}`
+      });
+      const newPaid = parseFloat(installment.amount_paid || 0) + parseFloat(amount);
+      await api.put(`/installments/${installment.id}`, {
+        amount_paid: newPaid,
+        status: newPaid >= parseFloat(installment.amount) ? 'paid' : 'partial'
+      });
+      onSuccess();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Payment failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const balance = parseFloat(installment.amount) - parseFloat(installment.amount_paid || 0);
+
+  return (
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-[60]">
+      <div className="bg-white rounded-2xl shadow-xl mx-4 w-full max-w-md p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-1">Quick Pay</h3>
+        <p className="text-sm text-gray-500 mb-4">Installment #{installment.number || installment.installment_number} -- Balance: {formatCurrency(balance)}</p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} max={balance}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+            <select value={method} onChange={e => setMethod(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900">
+              <option value="cash">Cash</option>
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="cheque">Cheque</option>
+              <option value="online">Online</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 mt-6">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+          <button onClick={handlePay} disabled={loading || parseFloat(amount) <= 0}
+            className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50">
+            {loading ? 'Processing...' : `Pay ${formatCurrency(parseFloat(amount || 0))}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TransactionDetailModal({ txn, onClose, onUpdate }) {
   const [installments, setInstallments] = useState(txn.installments || []);
+  const [quickPayInstallment, setQuickPayInstallment] = useState(null);
 
   const updateInstallment = async (inst, field, value) => {
     try {
@@ -1689,7 +1821,7 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
     <Modal title={`Transaction ${txn.transaction_id}`} onClose={onClose} wide>
       <div className="space-y-6">
         <div className="grid grid-cols-2 gap-6">
-          <div><div className="text-xs text-gray-400">Customer</div><div className="font-medium">{txn.customer_name}</div></div>
+          <div><div className="text-xs text-gray-400">Customer</div><div className="font-medium">{txn.customer_id ? <button onClick={() => window.showCustomer360 && window.showCustomer360(txn.customer_id)} className="text-blue-600 hover:text-blue-800 hover:underline">{txn.customer_name}</button> : txn.customer_name}</div></div>
           <div><div className="text-xs text-gray-400">Broker</div><div className="font-medium">{txn.broker_name || '—'}</div></div>
           <div><div className="text-xs text-gray-400">Project / Unit</div><div className="font-medium">{txn.project_name} - {txn.unit_number}</div></div>
           <div><div className="text-xs text-gray-400">Total Value</div><div className="font-semibold text-lg">{formatCurrency(txn.total_value)}</div></div>
@@ -1705,6 +1837,7 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
               <th className="text-right py-2">Paid</th>
               <th className="text-right py-2">Balance</th>
               <th className="text-center py-2">Status</th>
+              <th className="text-right py-2">Action</th>
             </tr></thead>
             <tbody>
               {installments.map(i => (
@@ -1715,6 +1848,11 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
                   <td className="py-2 text-right"><input type="number" value={i.amount_paid} onChange={e => updateInstallment(i, 'amount_paid', e.target.value)} className="border rounded px-2 py-1 text-sm w-28 text-right" /></td>
                   <td className="py-2 text-right font-medium">{formatCurrency(i.balance)}</td>
                   <td className="py-2 text-center"><span className={`px-2 py-1 rounded-full text-xs ${i.status === 'paid' ? 'bg-green-100 text-green-700' : i.status === 'partial' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100'}`}>{i.status}</span></td>
+                  <td className="py-2 text-right">
+                    {(i.status === 'pending' || i.status === 'partial' || i.status === 'overdue') && parseFloat(i.balance || (parseFloat(i.amount) - parseFloat(i.amount_paid || 0))) > 0 && (
+                      <button onClick={() => setQuickPayInstallment(i)} className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded hover:bg-green-100 font-medium">Quick Pay</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1730,6 +1868,21 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
           />
         </div>
       </div>
+      {quickPayInstallment && (
+        <QuickPayModal
+          installment={quickPayInstallment}
+          transaction={txn}
+          onClose={() => setQuickPayInstallment(null)}
+          onSuccess={async () => {
+            setQuickPayInstallment(null);
+            try {
+              const res = await api.get(`/transactions/${txn.id}`);
+              setInstallments(res.data.installments);
+              onUpdate();
+            } catch (e) { console.error(e); }
+          }}
+        />
+      )}
     </Modal>
   );
 }
@@ -1745,6 +1898,10 @@ function CustomersView() {
   const [form, setForm] = useState({ name: '', mobile: '', address: '', cnic: '', email: '' });
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [promptAction, setPromptAction] = useState(null);
+  const [custToast, setCustToast] = useState(null);
+  const [custFormErrors, setCustFormErrors] = useState({});
 
   useEffect(() => { loadCustomers(); }, []);
   const loadCustomers = async () => {
@@ -1753,35 +1910,60 @@ function CustomersView() {
     finally { setLoading(false); }
   };
 
+  const validateCustomerForm = () => {
+    const errors = {};
+    if (!form.name?.trim()) errors.name = 'Name is required';
+    if (!form.mobile?.trim()) errors.mobile = 'Mobile number is required';
+    else if (!/^0\d{3}-?\d{7}$/.test(form.mobile.replace(/\s/g, ''))) errors.mobile = 'Enter a valid mobile (e.g., 0300-1234567)';
+    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errors.email = 'Enter a valid email address';
+    setCustFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!validateCustomerForm()) return;
     try {
       if (editing) { await api.put(`/customers/${editing.id}`, form); }
       else { await api.post('/customers', form); }
-      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); loadCustomers();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); setCustFormErrors({}); loadCustomers();
+    } catch (e) { setCustToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
   };
 
   const handleDelete = async (c) => {
     const role = getUserRole();
-    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'creator') { setCustToast({ message: 'Creator role cannot delete records.', type: 'warning' }); return; }
     if (role === 'admin') {
-      if (!confirm(`Delete "${c.name}"?`)) return;
-      try { await api.delete(`/customers/${c.id}`); loadCustomers(); }
-      catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      setConfirmAction({
+        title: 'Delete Customer',
+        message: `Are you sure you want to delete "${c.name}"? This action cannot be undone.`,
+        confirmText: 'Delete',
+        confirmColor: 'red',
+        onConfirm: async () => {
+          try { await api.delete(`/customers/${c.id}`); setConfirmAction(null); loadCustomers(); }
+          catch (e) { setConfirmAction(null); setCustToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
+        }
+      });
     } else {
-      const reason = prompt(`Request deletion of "${c.name}"?\nProvide a reason:`);
-      if (reason === null) return;
-      try {
-        const res = await api.delete(`/customers/${c.id}`, { data: { reason } });
-        if (res.data.pending) {
-          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
-        } else { loadCustomers(); }
-      } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      setPromptAction({
+        title: 'Request Deletion',
+        message: `Request deletion of "${c.name}"? Provide a reason:`,
+        placeholder: 'Reason for deletion...',
+        onSubmit: async (reason) => {
+          if (!reason) return;
+          try {
+            const res = await api.delete(`/customers/${c.id}`, { data: { reason } });
+            setPromptAction(null);
+            if (res.data.pending) {
+              setCustToast({ message: `Deletion request submitted (${res.data.request_id}). An admin will review it.`, type: 'info' });
+            } else { loadCustomers(); }
+          } catch (e) { setPromptAction(null); setCustToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
+        }
+      });
     }
   };
 
-  const openEdit = (c) => { setEditing(c); setForm({ name: c.name, mobile: c.mobile, address: c.address || '', cnic: c.cnic || '', email: c.email || '' }); setShowModal(true); };
+  const openEdit = (c) => { setEditing(c); setForm({ name: c.name, mobile: c.mobile, address: c.address || '', cnic: c.cnic || '', email: c.email || '' }); setCustFormErrors({}); setShowModal(true); };
 
   const handleImport = async () => {
     if (!importFile) return;
@@ -1794,7 +1976,7 @@ function CustomersView() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div><h2 className="text-2xl font-semibold text-gray-900">Customers</h2><p className="text-sm text-gray-500 mt-1">{customers.length} total</p></div>
-        <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); setShowModal(true); }} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Customer</button>
+        <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); setCustFormErrors({}); setShowModal(true); }} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Customer</button>
       </div>
 
       {loading ? <Loader /> : customers.length === 0 ? <Empty msg="No customers" /> : (
@@ -1811,7 +1993,7 @@ function CustomersView() {
               {customers.map(c => (
                 <tr key={c.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{c.customer_id}</td>
-                  <td className="px-6 py-4"><div className="text-sm font-medium">{c.name}</div>{c.email && <div className="text-xs text-gray-400">{c.email}</div>}</td>
+                  <td className="px-6 py-4"><div className="text-sm font-medium"><button onClick={() => window.showCustomer360 && window.showCustomer360(c.id)} className="text-blue-600 hover:text-blue-800 hover:underline">{c.name}</button></div>{c.email && <div className="text-xs text-gray-400">{c.email}</div>}</td>
                   <td className="px-6 py-4 text-sm">{c.mobile}</td>
                   <td className="px-6 py-4 text-sm text-gray-500">{c.cnic || '—'}</td>
                   <td className="px-6 py-4 text-right">
@@ -1829,16 +2011,20 @@ function CustomersView() {
 
       <BulkImport entity="customers" onImport={handleImport} importFile={importFile} setImportFile={setImportFile} importResult={importResult} />
 
+      {custToast && <Toast message={custToast.message} type={custToast.type} onClose={() => setCustToast(null)} />}
+      {confirmAction && <ConfirmModal title={confirmAction.title} message={confirmAction.message} confirmText={confirmAction.confirmText} confirmColor={confirmAction.confirmColor} onConfirm={confirmAction.onConfirm} onCancel={() => setConfirmAction(null)} />}
+      {promptAction && <PromptModal title={promptAction.title} message={promptAction.message} placeholder={promptAction.placeholder} onSubmit={promptAction.onSubmit} onCancel={() => setPromptAction(null)} />}
+
       {showModal && (
-        <Modal title={editing ? 'Edit Customer' : 'Add Customer'} onClose={() => setShowModal(false)}>
+        <Modal title={editing ? 'Edit Customer' : 'Add Customer'} onClose={() => { setShowModal(false); setCustFormErrors({}); }}>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
-            <Input label="Mobile" required value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} placeholder="0300-1234567" />
+            <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} error={custFormErrors.name} />
+            <Input label="Mobile" required value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} placeholder="0300-1234567" error={custFormErrors.mobile} />
             <Input label="CNIC" value={form.cnic} onChange={e => setForm({...form, cnic: e.target.value})} />
-            <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+            <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} error={custFormErrors.email} />
             <Input label="Address" value={form.address} onChange={e => setForm({...form, address: e.target.value})} />
             <div className="flex justify-end gap-3 pt-4">
-              <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="button" onClick={() => { setShowModal(false); setCustFormErrors({}); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
               <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">{editing ? 'Update' : 'Create'}</button>
             </div>
           </form>
@@ -1860,6 +2046,9 @@ function BrokersView() {
   const [form, setForm] = useState({ name: '', mobile: '', company: '', commission_rate: 2 });
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [promptAction, setPromptAction] = useState(null);
+  const [brkToast, setBrkToast] = useState(null);
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
@@ -1876,25 +2065,39 @@ function BrokersView() {
       if (editing) { await api.put(`/brokers/${editing.id}`, form); }
       else { await api.post('/brokers', form); }
       setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', company: '', commission_rate: 2 }); loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) { setBrkToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
   };
 
   const handleDelete = async (b) => {
     const role = getUserRole();
-    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'creator') { setBrkToast({ message: 'Creator role cannot delete records.', type: 'warning' }); return; }
     if (role === 'admin') {
-      if (!confirm(`Delete "${b.name}"?`)) return;
-      try { await api.delete(`/brokers/${b.id}`); loadData(); }
-      catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      setConfirmAction({
+        title: 'Delete Broker',
+        message: `Are you sure you want to delete "${b.name}"? This action cannot be undone.`,
+        confirmText: 'Delete',
+        confirmColor: 'red',
+        onConfirm: async () => {
+          try { await api.delete(`/brokers/${b.id}`); setConfirmAction(null); loadData(); }
+          catch (e) { setConfirmAction(null); setBrkToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
+        }
+      });
     } else {
-      const reason = prompt(`Request deletion of "${b.name}"?\nProvide a reason:`);
-      if (reason === null) return;
-      try {
-        const res = await api.delete(`/brokers/${b.id}`, { data: { reason } });
-        if (res.data.pending) {
-          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
-        } else { loadData(); }
-      } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      setPromptAction({
+        title: 'Request Deletion',
+        message: `Request deletion of "${b.name}"? Provide a reason:`,
+        placeholder: 'Reason for deletion...',
+        onSubmit: async (reason) => {
+          if (!reason) return;
+          try {
+            const res = await api.delete(`/brokers/${b.id}`, { data: { reason } });
+            setPromptAction(null);
+            if (res.data.pending) {
+              setBrkToast({ message: `Deletion request submitted (${res.data.request_id}). An admin will review it.`, type: 'info' });
+            } else { loadData(); }
+          } catch (e) { setPromptAction(null); setBrkToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
+        }
+      });
     }
   };
 
@@ -1995,6 +2198,10 @@ function BrokersView() {
 
       <BulkImport entity="brokers" onImport={handleImport} importFile={importFile} setImportFile={setImportFile} importResult={importResult} />
 
+      {brkToast && <Toast message={brkToast.message} type={brkToast.type} onClose={() => setBrkToast(null)} />}
+      {confirmAction && <ConfirmModal title={confirmAction.title} message={confirmAction.message} confirmText={confirmAction.confirmText} confirmColor={confirmAction.confirmColor} onConfirm={confirmAction.onConfirm} onCancel={() => setConfirmAction(null)} />}
+      {promptAction && <PromptModal title={promptAction.title} message={promptAction.message} placeholder={promptAction.placeholder} onSubmit={promptAction.onSubmit} onCancel={() => setPromptAction(null)} />}
+
       {showModal && (
         <Modal title={editing ? 'Edit Broker' : 'Add Broker'} onClose={() => setShowModal(false)}>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -2041,22 +2248,25 @@ function ReceiptsView() {
   const [methodFilter, setMethodFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const debouncedRcpCustomer = useDebounce(customerFilter, 150);
+  const debouncedRcpUnit = useDebounce(unitFilter, 150);
+  const debouncedRcpId = useDebounce(receiptIdFilter, 150);
 
-  // Filter receipts - exact match for unit#, partial for customer
-  const filteredReceipts = receipts.filter(r => {
+  // Filter receipts - exact match for unit#, partial for customer (debounced + memoized)
+  const filteredReceipts = useMemo(() => receipts.filter(r => {
     // Customer name - partial match
-    if (customerFilter && !r.customer_name?.toLowerCase().includes(customerFilter.toLowerCase())) return false;
+    if (debouncedRcpCustomer && !r.customer_name?.toLowerCase().includes(debouncedRcpCustomer.toLowerCase())) return false;
     // Unit number - EXACT match
-    if (unitFilter && r.unit_number?.toLowerCase() !== unitFilter.toLowerCase()) return false;
+    if (debouncedRcpUnit && r.unit_number?.toLowerCase() !== debouncedRcpUnit.toLowerCase()) return false;
     // Receipt ID - prefix match
-    if (receiptIdFilter && !r.receipt_id?.toLowerCase().startsWith(receiptIdFilter.toLowerCase())) return false;
+    if (debouncedRcpId && !r.receipt_id?.toLowerCase().startsWith(debouncedRcpId.toLowerCase())) return false;
     // Payment method filter
     if (methodFilter && r.payment_method !== methodFilter) return false;
     // Date range filter
     if (dateFrom && r.payment_date < dateFrom) return false;
     if (dateTo && r.payment_date > dateTo) return false;
     return true;
-  });
+  }), [receipts, debouncedRcpCustomer, debouncedRcpUnit, debouncedRcpId, methodFilter, dateFrom, dateTo]);
 
   const clearFilters = () => {
     setCustomerFilter('');
@@ -2068,6 +2278,7 @@ function ReceiptsView() {
   };
 
   const hasActiveFilters = customerFilter || unitFilter || receiptIdFilter || methodFilter || dateFrom || dateTo;
+  const [rcpToast, setRcpToast] = useState(null);
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
@@ -2102,10 +2313,19 @@ function ReceiptsView() {
     setForm({...form, transaction_id: txn.id, allocations: []});
   };
 
+  const [rcpFormErrors, setRcpFormErrors] = useState({});
+
+  const validateReceiptForm = () => {
+    const errors = {};
+    if (!form.customer_id) errors.customer = 'Select a customer';
+    if (!form.amount || parseFloat(form.amount) <= 0) errors.amount = 'Enter a valid amount greater than 0';
+    setRcpFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.customer_id) { alert('Select a customer'); return; }
-    if (!form.amount || parseFloat(form.amount) <= 0) { alert('Enter valid amount'); return; }
+    if (!validateReceiptForm()) return;
     try {
       await api.post('/receipts', form);
       setShowModal(false);
@@ -2113,15 +2333,17 @@ function ReceiptsView() {
       setSelectedCustomer(null);
       setCustomerTransactions([]);
       setCustomerSearch('');
+      setRcpFormErrors({});
       loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) { setRcpToast({ message: e.response?.data?.detail || 'Error recording receipt', type: 'error' }); }
   };
 
-  const filteredCustomers = customers.filter(c =>
-    c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
-    c.mobile.includes(customerSearch) ||
-    c.customer_id.toLowerCase().includes(customerSearch.toLowerCase())
-  );
+  const debouncedCustomerSearch = useDebounce(customerSearch, 150);
+  const filteredCustomers = useMemo(() => customers.filter(c =>
+    c.name.toLowerCase().includes(debouncedCustomerSearch.toLowerCase()) ||
+    c.mobile.includes(debouncedCustomerSearch) ||
+    c.customer_id.toLowerCase().includes(debouncedCustomerSearch.toLowerCase())
+  ), [customers, debouncedCustomerSearch]);
 
   const selectedTxn = customerTransactions.find(t => t.id === form.transaction_id);
 
@@ -2288,8 +2510,15 @@ function ReceiptsView() {
         </div>
       )}
 
+      {rcpToast && <Toast message={rcpToast.message} type={rcpToast.type} onClose={() => setRcpToast(null)} />}
+
       {showModal && (
-        <Modal title="Record Receipt" onClose={() => { setShowModal(false); setSelectedCustomer(null); setCustomerTransactions([]); setCustomerSearch(''); }} wide>
+        <Modal title="Record Receipt" onClose={() => { setShowModal(false); setSelectedCustomer(null); setCustomerTransactions([]); setCustomerSearch(''); setRcpFormErrors({}); }} wide>
+          {Object.keys(rcpFormErrors).length > 0 && (
+            <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">
+              {Object.values(rcpFormErrors).map((err, i) => <div key={i}>{err}</div>)}
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Customer Selection */}
             <div>
@@ -2645,10 +2874,13 @@ function CampaignsView() {
   const [showCampaignModal, setShowCampaignModal] = useState(false);
   const [showLeadModal, setShowLeadModal] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
+  const [campToast, setCampToast] = useState(null);
+  const [campConfirm, setCampConfirm] = useState(null);
   const [campaignForm, setCampaignForm] = useState({ name: '', source: 'facebook', start_date: '', budget: '', notes: '' });
   const [leadForm, setLeadForm] = useState({ name: '', mobile: '', email: '', assigned_rep_id: '', lead_type: 'prospect', notes: '' });
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [viewMode, setViewMode] = useState('table');
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
@@ -2680,7 +2912,7 @@ function CampaignsView() {
       setShowCampaignModal(false);
       setCampaignForm({ name: '', source: 'facebook', start_date: '', budget: '', notes: '' });
       loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) { setCampToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
   };
 
   const handleLeadSubmit = async (e) => {
@@ -2691,7 +2923,7 @@ function CampaignsView() {
       setLeadForm({ name: '', mobile: '', email: '', assigned_rep_id: '', notes: '' });
       if (selectedCampaign) loadLeads(selectedCampaign);
       loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) { setCampToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
   };
 
   const handleImport = async () => {
@@ -2710,24 +2942,32 @@ function CampaignsView() {
     try {
       await api.put(`/leads/${lead.id}`, { status });
       if (selectedCampaign) loadLeads(selectedCampaign);
-    } catch (e) { alert('Error updating lead'); }
+    } catch (e) { setCampToast({ message: 'Error updating lead', type: 'error' }); }
   };
 
   const assignRep = async (lead, repId) => {
     try {
       await api.put(`/leads/${lead.id}`, { assigned_rep_id: repId || null });
       if (selectedCampaign) loadLeads(selectedCampaign);
-    } catch (e) { alert('Error assigning rep'); }
+    } catch (e) { setCampToast({ message: 'Error assigning rep', type: 'error' }); }
   };
 
-  const convertLead = async (lead, convertTo) => {
-    if (!confirm(`Convert "${lead.name}" to ${convertTo}? This will create a new ${convertTo} record.`)) return;
-    try {
-      await api.post(`/leads/${lead.id}/convert`, { convert_to: convertTo });
-      if (selectedCampaign) loadLeads(selectedCampaign);
-      loadData();
-      alert(`Lead converted to ${convertTo} successfully!`);
-    } catch (e) { alert(e.response?.data?.detail || 'Error converting lead'); }
+  const convertLead = (lead, convertTo) => {
+    setCampConfirm({
+      title: 'Convert Lead',
+      message: `Convert "${lead.name}" to ${convertTo}? This will create a new ${convertTo} record.`,
+      confirmText: 'Convert',
+      confirmColor: 'green',
+      onConfirm: async () => {
+        try {
+          await api.post(`/leads/${lead.id}/convert`, { convert_to: convertTo });
+          setCampConfirm(null);
+          if (selectedCampaign) loadLeads(selectedCampaign);
+          loadData();
+          setCampToast({ message: `Lead converted to ${convertTo} successfully!`, type: 'success' });
+        } catch (e) { setCampConfirm(null); setCampToast({ message: e.response?.data?.detail || 'Error converting lead', type: 'error' }); }
+      }
+    });
   };
 
   return (
@@ -2784,9 +3024,23 @@ function CampaignsView() {
               <h3 className="text-sm font-semibold text-gray-900">
                 {selectedCampaign ? `Leads - ${selectedCampaign.name}` : 'Select a campaign'}
               </h3>
-              {selectedCampaign && (
-                <button onClick={() => setShowLeadModal(true)} className="text-sm text-blue-600 hover:text-blue-800">+ Add Lead</button>
-              )}
+              <div className="flex items-center gap-3">
+                {selectedCampaign && leads.length > 0 && (
+                  <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
+                    <button onClick={() => setViewMode('table')}
+                      className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${viewMode === 'table' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                      Table
+                    </button>
+                    <button onClick={() => setViewMode('kanban')}
+                      className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${viewMode === 'kanban' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                      Kanban
+                    </button>
+                  </div>
+                )}
+                {selectedCampaign && (
+                  <button onClick={() => setShowLeadModal(true)} className="text-sm text-blue-600 hover:text-blue-800">+ Add Lead</button>
+                )}
+              </div>
             </div>
             
             {selectedCampaign && (
@@ -2804,9 +3058,72 @@ function CampaignsView() {
             )}
 
             {!selectedCampaign ? (
-              <div className="text-center py-12 text-gray-400 text-sm">← Select a campaign to view leads</div>
+              <div className="text-center py-12 text-gray-400 text-sm">-- Select a campaign to view leads</div>
             ) : leads.length === 0 ? (
               <div className="text-center py-12 text-gray-400 text-sm">No leads in this campaign</div>
+            ) : viewMode === 'kanban' ? (
+              <div className="flex gap-4 overflow-x-auto pb-4">
+                {['new', 'contacted', 'qualified', 'converted', 'lost'].map(status => {
+                  const statusLeads = leads.filter(l => l.status === status);
+                  const colors = {
+                    new: 'bg-blue-50 border-blue-200',
+                    contacted: 'bg-yellow-50 border-yellow-200',
+                    qualified: 'bg-purple-50 border-purple-200',
+                    converted: 'bg-green-50 border-green-200',
+                    lost: 'bg-red-50 border-red-200'
+                  };
+                  const headerColors = {
+                    new: 'bg-blue-600',
+                    contacted: 'bg-yellow-600',
+                    qualified: 'bg-purple-600',
+                    converted: 'bg-green-600',
+                    lost: 'bg-red-600'
+                  };
+                  return (
+                    <div key={status} className={`flex-shrink-0 w-64 ${colors[status]} border rounded-xl overflow-hidden`}>
+                      <div className={`${headerColors[status]} text-white px-3 py-2 text-sm font-semibold flex justify-between items-center`}>
+                        <span className="capitalize">{status}</span>
+                        <span className="bg-white/20 px-2 py-0.5 rounded-full text-xs">{statusLeads.length}</span>
+                      </div>
+                      <div className="p-2 space-y-2 max-h-[60vh] overflow-y-auto">
+                        {statusLeads.map(lead => (
+                          <div key={lead.id} className="bg-white rounded-lg p-3 shadow-sm border border-gray-100 cursor-pointer hover:shadow-md transition-shadow">
+                            <div className="font-medium text-sm text-gray-900">{lead.name}</div>
+                            <div className="text-xs text-gray-500 mt-1">{lead.mobile || lead.email || 'No contact'}</div>
+                            {lead.source_details && <div className="text-xs text-gray-400 mt-1">{lead.source_details}</div>}
+                            <div className="flex gap-1 mt-2">
+                              {status !== 'converted' && status !== 'lost' && (
+                                <select
+                                  value={lead.status}
+                                  onChange={async (e) => {
+                                    try {
+                                      await api.put(`/leads/${lead.id}`, { status: e.target.value });
+                                      if (selectedCampaign) loadLeads(selectedCampaign);
+                                    } catch (err) {
+                                      console.error(err);
+                                    }
+                                  }}
+                                  className="text-xs border rounded px-1 py-0.5 bg-gray-50"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <option value="new">New</option>
+                                  <option value="contacted">Contacted</option>
+                                  <option value="qualified">Qualified</option>
+                                  <option value="converted">Converted</option>
+                                  <option value="lost">Lost</option>
+                                </select>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {statusLeads.length === 0 && (
+                          <div className="text-xs text-gray-400 text-center py-8">No leads</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -2945,6 +3262,8 @@ function PaymentsView() {
   const [showModal, setShowModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState(null);
+  const [payToast, setPayToast] = useState(null);
+  const [payFormErrors, setPayFormErrors] = useState({});
   const [filter, setFilter] = useState({ payment_type: '', status: '', broker_id: '', rep_id: '', creditor_id: '' });
   const [form, setForm] = useState({
     payment_type: 'broker_commission', payee_type: 'broker',
@@ -2960,18 +3279,20 @@ function PaymentsView() {
   const [referenceFilter, setReferenceFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const debouncedPaymentId = useDebounce(paymentIdFilter, 150);
+  const debouncedReference = useDebounce(referenceFilter, 150);
 
-  // Filter payments - prefix match for IDs
-  const filteredPayments = payments.filter(p => {
+  // Filter payments - prefix match for IDs (debounced + memoized)
+  const filteredPayments = useMemo(() => payments.filter(p => {
     // Payment ID - prefix match
-    if (paymentIdFilter && !p.payment_id?.toLowerCase().startsWith(paymentIdFilter.toLowerCase())) return false;
+    if (debouncedPaymentId && !p.payment_id?.toLowerCase().startsWith(debouncedPaymentId.toLowerCase())) return false;
     // Reference number - prefix match
-    if (referenceFilter && !p.reference_number?.toLowerCase().startsWith(referenceFilter.toLowerCase())) return false;
+    if (debouncedReference && !p.reference_number?.toLowerCase().startsWith(debouncedReference.toLowerCase())) return false;
     // Date range filter
     if (dateFrom && p.payment_date < dateFrom) return false;
     if (dateTo && p.payment_date > dateTo) return false;
     return true;
-  });
+  }), [payments, debouncedPaymentId, debouncedReference, dateFrom, dateTo]);
 
   const clearAllFilters = () => {
     setPaymentIdFilter('');
@@ -3025,13 +3346,20 @@ function PaymentsView() {
     } catch (e) { setTransactions([]); }
   };
 
+  const validatePaymentForm = () => {
+    const errors = {};
+    if (!form.amount || parseFloat(form.amount) <= 0) errors.amount = 'Enter a valid amount greater than 0';
+    if (form.payment_type === 'broker_commission' && !form.broker_id) errors.payee = 'Select a broker';
+    if (form.payment_type === 'rep_incentive' && !form.company_rep_id) errors.payee = 'Select a company rep';
+    if (form.payment_type === 'creditor' && !form.creditor_id) errors.payee = 'Select a creditor';
+    setPayFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.amount || parseFloat(form.amount) <= 0) { alert('Enter valid amount'); return; }
-    if (form.payment_type === 'broker_commission' && !form.broker_id) { alert('Select broker'); return; }
-    if (form.payment_type === 'rep_incentive' && !form.company_rep_id) { alert('Select company rep'); return; }
-    if (form.payment_type === 'creditor' && !form.creditor_id) { alert('Select creditor'); return; }
-    
+    if (!validatePaymentForm()) return;
+
     try {
       await api.post('/payments', form);
       setShowModal(false);
@@ -3043,8 +3371,9 @@ function PaymentsView() {
         approved_by_rep_id: '', status: 'completed', allocations: []
       });
       setTransactions([]);
+      setPayFormErrors({});
       loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) { setPayToast({ message: e.response?.data?.detail || 'Error recording payment', type: 'error' }); }
   };
 
   const updatePaymentType = (type) => {
@@ -3433,6 +3762,10 @@ function BuybacksView() {
   const [selectedBuyback, setSelectedBuyback] = useState(null);
   const [searchId, setSearchId] = useState('');
   const [searchUnit, setSearchUnit] = useState('');
+  const debouncedBbId = useDebounce(searchId, 150);
+  const debouncedBbUnit = useDebounce(searchUnit, 150);
+  const [bbConfirmAction, setBbConfirmAction] = useState(null);
+  const [bbToast, setBbToast] = useState(null);
 
   useEffect(() => { loadData(); }, [filter]);
 
@@ -3455,11 +3788,11 @@ function BuybacksView() {
     finally { setLoading(false); }
   };
 
-  const filteredBuybacks = buybacks.filter(b => {
-    if (searchId && !b.buyback_id?.toLowerCase().includes(searchId.toLowerCase())) return false;
-    if (searchUnit && !b.unit_number?.toLowerCase().includes(searchUnit.toLowerCase())) return false;
+  const filteredBuybacks = useMemo(() => buybacks.filter(b => {
+    if (debouncedBbId && !b.buyback_id?.toLowerCase().includes(debouncedBbId.toLowerCase())) return false;
+    if (debouncedBbUnit && !b.unit_number?.toLowerCase().includes(debouncedBbUnit.toLowerCase())) return false;
     return true;
-  });
+  }), [buybacks, debouncedBbId, debouncedBbUnit]);
 
   const formatCurrency = (val) => val ? `Rs ${Number(val).toLocaleString()}` : '-';
 
@@ -3474,28 +3807,52 @@ function BuybacksView() {
     return <span className={`px-2 py-1 rounded-full text-xs font-medium ${colors[status] || 'bg-gray-100 text-gray-600'}`}>{status}</span>;
   };
 
-  const handleApproveBuyback = async (buyback) => {
-    if (!confirm(`Approve buyback ${buyback.buyback_id}?`)) return;
-    try {
-      await api.post(`/buybacks/${buyback.id}/approve`, {});
-      loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error approving'); }
+  const handleApproveBuyback = (buyback) => {
+    setBbConfirmAction({
+      title: 'Approve Buyback',
+      message: `Approve buyback ${buyback.buyback_id}?`,
+      confirmText: 'Approve',
+      confirmColor: 'blue',
+      onConfirm: async () => {
+        try {
+          await api.post(`/buybacks/${buyback.id}/approve`, {});
+          setBbConfirmAction(null);
+          loadData();
+        } catch (e) { setBbConfirmAction(null); setBbToast({ message: e.response?.data?.detail || 'Error approving', type: 'error' }); }
+      }
+    });
   };
 
-  const handleCompleteBuyback = async (buyback) => {
-    if (!confirm(`Complete buyback ${buyback.buyback_id}? This will return the plot to inventory.`)) return;
-    try {
-      await api.post(`/buybacks/${buyback.id}/complete`, {});
-      loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error completing'); }
+  const handleCompleteBuyback = (buyback) => {
+    setBbConfirmAction({
+      title: 'Complete Buyback',
+      message: `Complete buyback ${buyback.buyback_id}? This will return the plot to inventory.`,
+      confirmText: 'Complete',
+      confirmColor: 'green',
+      onConfirm: async () => {
+        try {
+          await api.post(`/buybacks/${buyback.id}/complete`, {});
+          setBbConfirmAction(null);
+          loadData();
+        } catch (e) { setBbConfirmAction(null); setBbToast({ message: e.response?.data?.detail || 'Error completing', type: 'error' }); }
+      }
+    });
   };
 
-  const handleCancelBuyback = async (buyback) => {
-    if (!confirm(`Cancel buyback ${buyback.buyback_id}?`)) return;
-    try {
-      await api.delete(`/buybacks/${buyback.id}`);
-      loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error cancelling'); }
+  const handleCancelBuyback = (buyback) => {
+    setBbConfirmAction({
+      title: 'Cancel Buyback',
+      message: `Cancel buyback ${buyback.buyback_id}?`,
+      confirmText: 'Cancel Buyback',
+      confirmColor: 'red',
+      onConfirm: async () => {
+        try {
+          await api.delete(`/buybacks/${buyback.id}`);
+          setBbConfirmAction(null);
+          loadData();
+        } catch (e) { setBbConfirmAction(null); setBbToast({ message: e.response?.data?.detail || 'Error cancelling', type: 'error' }); }
+      }
+    });
   };
 
   if (loading) return <div className="p-6 text-center text-gray-500">Loading buybacks...</div>;
@@ -3649,6 +4006,9 @@ function BuybacksView() {
           onSuccess={() => { setShowInitiateModal(false); loadData(); }}
         />
       )}
+
+      {bbToast && <Toast message={bbToast.message} type={bbToast.type} onClose={() => setBbToast(null)} />}
+      {bbConfirmAction && <ConfirmModal title={bbConfirmAction.title} message={bbConfirmAction.message} confirmText={bbConfirmAction.confirmText} confirmColor={bbConfirmAction.confirmColor} onConfirm={bbConfirmAction.onConfirm} onCancel={() => setBbConfirmAction(null)} />}
     </div>
   );
 }
@@ -3794,6 +4154,8 @@ function BuybackDetailModal({ buybackId, onClose, onUpdate }) {
   const [loading, setLoading] = useState(true);
   const [showLedgerForm, setShowLedgerForm] = useState(false);
   const [ledgerForm, setLedgerForm] = useState({ amount: '', payment_method: 'bank_transfer', reference_number: '', notes: '' });
+  const [bbdToast, setBbdToast] = useState(null);
+  const [bbdConfirm, setBbdConfirm] = useState(null);
 
   useEffect(() => { loadBuyback(); }, [buybackId]);
 
@@ -3809,7 +4171,7 @@ function BuybackDetailModal({ buybackId, onClose, onUpdate }) {
 
   const handleAddLedgerEntry = async (e) => {
     e.preventDefault();
-    if (!ledgerForm.amount || parseFloat(ledgerForm.amount) <= 0) { alert('Enter valid amount'); return; }
+    if (!ledgerForm.amount || parseFloat(ledgerForm.amount) <= 0) { setBbdToast({ message: 'Enter a valid amount greater than 0', type: 'error' }); return; }
     try {
       await api.post(`/buybacks/${buybackId}/ledger`, {
         entry_type: 'payment_to_customer',
@@ -3822,16 +4184,24 @@ function BuybackDetailModal({ buybackId, onClose, onUpdate }) {
       setLedgerForm({ amount: '', payment_method: 'bank_transfer', reference_number: '', notes: '' });
       loadBuyback();
       onUpdate();
-    } catch (e) { alert(e.response?.data?.detail || 'Error adding entry'); }
+    } catch (e) { setBbdToast({ message: e.response?.data?.detail || 'Error adding entry', type: 'error' }); }
   };
 
-  const handleDeleteLedgerEntry = async (entryId) => {
-    if (!confirm('Delete this ledger entry?')) return;
-    try {
-      await api.delete(`/buybacks/${buybackId}/ledger/${entryId}`);
-      loadBuyback();
-      onUpdate();
-    } catch (e) { alert(e.response?.data?.detail || 'Error deleting entry'); }
+  const handleDeleteLedgerEntry = (entryId) => {
+    setBbdConfirm({
+      title: 'Delete Ledger Entry',
+      message: 'Delete this ledger entry? This cannot be undone.',
+      confirmText: 'Delete',
+      confirmColor: 'red',
+      onConfirm: async () => {
+        try {
+          await api.delete(`/buybacks/${buybackId}/ledger/${entryId}`);
+          setBbdConfirm(null);
+          loadBuyback();
+          onUpdate();
+        } catch (e) { setBbdConfirm(null); setBbdToast({ message: e.response?.data?.detail || 'Error deleting entry', type: 'error' }); }
+      }
+    });
   };
 
   if (loading) return <Modal title="Buyback Details" onClose={onClose} wide><div className="p-6 text-center text-gray-500">Loading...</div></Modal>;
@@ -4306,17 +4676,23 @@ function DashboardView() {
   const [customerDetails, setCustomerDetails] = useState(null);
   const [brokerDetails, setBrokerDetails] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [overdueAging, setOverdueAging] = useState(null);
+  const [revenueTrend, setRevenueTrend] = useState([]);
+  const [commissionData, setCommissionData] = useState([]);
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
     try {
-      const [sumRes, custRes, projRes, brkRes, recRes, invRes] = await Promise.all([
+      const [sumRes, custRes, projRes, brkRes, recRes, invRes, overdueRes, revenueRes, commRes] = await Promise.all([
         api.get('/dashboard/summary').catch(() => ({ data: null })),
         api.get('/dashboard/customer-stats').catch(() => ({ data: [] })),
         api.get('/dashboard/project-stats').catch(() => ({ data: [] })),
         api.get('/dashboard/broker-stats').catch(() => ({ data: [] })),
         api.get('/dashboard/top-receivables?limit=10').catch(() => ({ data: [] })),
-        api.get('/dashboard/project-inventory').catch(() => ({ data: [] }))
+        api.get('/dashboard/project-inventory').catch(() => ({ data: [] })),
+        api.get('/dashboard/overdue-aging').catch(() => ({ data: null })),
+        api.get('/dashboard/revenue-collection-trend?months=12').catch(() => ({ data: [] })),
+        api.get('/dashboard/commission-tracking').catch(() => ({ data: [] }))
       ]);
       setSummary(sumRes.data);
       setCustomerStats(custRes.data || []);
@@ -4324,6 +4700,9 @@ function DashboardView() {
       setBrokerStats(brkRes.data || []);
       setTopReceivables(recRes.data || []);
       setProjectInventory(invRes.data || []);
+      setOverdueAging(overdueRes.data);
+      setRevenueTrend(revenueRes.data || []);
+      setCommissionData(commRes.data || []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -4567,6 +4946,318 @@ function DashboardView() {
               </div>
             </div>
           )}
+
+          {/* ============================================ */}
+          {/* FEATURE #6: Overdue Installments Aging */}
+          {/* ============================================ */}
+          {overdueAging && (
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Overdue Installments - Aging Analysis</h3>
+                <div className="text-sm text-gray-500">
+                  {overdueAging.total_count} overdue | {formatCurrency(overdueAging.total_overdue)} total
+                </div>
+              </div>
+
+              {/* Aging Bucket Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
+                  <div className="text-xs font-medium text-green-700 uppercase mb-1">0 - 30 Days</div>
+                  <div className="text-xl font-bold text-green-800">{formatCurrency(overdueAging.totals['0_30'])}</div>
+                  <div className="text-xs text-green-600 mt-1">{overdueAging.buckets['0_30'].length} installments</div>
+                </div>
+                <div className="p-4 bg-yellow-50 rounded-lg border-l-4 border-yellow-500">
+                  <div className="text-xs font-medium text-yellow-700 uppercase mb-1">31 - 60 Days</div>
+                  <div className="text-xl font-bold text-yellow-800">{formatCurrency(overdueAging.totals['31_60'])}</div>
+                  <div className="text-xs text-yellow-600 mt-1">{overdueAging.buckets['31_60'].length} installments</div>
+                </div>
+                <div className="p-4 bg-orange-50 rounded-lg border-l-4 border-orange-500">
+                  <div className="text-xs font-medium text-orange-700 uppercase mb-1">61 - 90 Days</div>
+                  <div className="text-xl font-bold text-orange-800">{formatCurrency(overdueAging.totals['61_90'])}</div>
+                  <div className="text-xs text-orange-600 mt-1">{overdueAging.buckets['61_90'].length} installments</div>
+                </div>
+                <div className="p-4 bg-red-50 rounded-lg border-l-4 border-red-500">
+                  <div className="text-xs font-medium text-red-700 uppercase mb-1">90+ Days</div>
+                  <div className="text-xl font-bold text-red-800">{formatCurrency(overdueAging.totals['90_plus'])}</div>
+                  <div className="text-xs text-red-600 mt-1">{overdueAging.buckets['90_plus'].length} installments</div>
+                </div>
+              </div>
+
+              {/* Worst Offenders Table - 90+ days first */}
+              {(() => {
+                const allOverdue = [
+                  ...overdueAging.buckets['90_plus'],
+                  ...overdueAging.buckets['61_90'],
+                  ...overdueAging.buckets['31_60'],
+                  ...overdueAging.buckets['0_30']
+                ].slice(0, 15);
+                if (allOverdue.length === 0) return null;
+                return (
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-700 mb-3">Top Overdue Installments (worst first)</h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left p-2 font-semibold text-gray-600">Customer</th>
+                            <th className="text-left p-2 font-semibold text-gray-600">Transaction</th>
+                            <th className="text-right p-2 font-semibold text-gray-600">Due Date</th>
+                            <th className="text-right p-2 font-semibold text-gray-600">Days Overdue</th>
+                            <th className="text-right p-2 font-semibold text-gray-600">Amount</th>
+                            <th className="text-right p-2 font-semibold text-gray-600">Paid</th>
+                            <th className="text-right p-2 font-semibold text-gray-600">Balance</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allOverdue.map((item, idx) => (
+                            <tr key={idx} className="border-b hover:bg-gray-50">
+                              <td className="p-2">{item.customer_name}</td>
+                              <td className="p-2 text-xs text-gray-500">{item.transaction_id_display}</td>
+                              <td className="p-2 text-right text-xs">{item.due_date}</td>
+                              <td className="p-2 text-right">
+                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                  item.days_overdue > 90 ? 'bg-red-100 text-red-800' :
+                                  item.days_overdue > 60 ? 'bg-orange-100 text-orange-800' :
+                                  item.days_overdue > 30 ? 'bg-yellow-100 text-yellow-800' :
+                                  'bg-green-100 text-green-800'
+                                }`}>
+                                  {item.days_overdue}d
+                                </span>
+                              </td>
+                              <td className="p-2 text-right">{formatCurrency(item.amount)}</td>
+                              <td className="p-2 text-right text-green-600">{formatCurrency(item.amount_paid)}</td>
+                              <td className="p-2 text-right font-semibold text-red-600">{formatCurrency(item.balance)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ============================================ */}
+          {/* FEATURE #7: Revenue Collection Trend Chart */}
+          {/* ============================================ */}
+          {revenueTrend.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Revenue Collection Trend (12 Months)</h3>
+              {chartsAvailable && Bar ? (
+                <div style={{ height: '400px' }}>
+                  <Bar
+                    data={{
+                      labels: revenueTrend.map(d => d.month),
+                      datasets: [
+                        {
+                          label: 'Due',
+                          data: revenueTrend.map(d => d.due),
+                          backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                          borderColor: 'rgb(59, 130, 246)',
+                          borderWidth: 1,
+                          borderRadius: 4,
+                          order: 2
+                        },
+                        {
+                          label: 'Collected',
+                          data: revenueTrend.map(d => d.collected),
+                          backgroundColor: 'rgba(34, 197, 94, 0.7)',
+                          borderColor: 'rgb(34, 197, 94)',
+                          borderWidth: 1,
+                          borderRadius: 4,
+                          order: 2
+                        },
+                        {
+                          label: 'Collection Rate %',
+                          data: revenueTrend.map(d => d.collection_rate),
+                          type: 'line',
+                          borderColor: 'rgb(245, 158, 11)',
+                          backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                          borderWidth: 2,
+                          pointRadius: 3,
+                          pointBackgroundColor: 'rgb(245, 158, 11)',
+                          yAxisID: 'y1',
+                          order: 1
+                        }
+                      ]
+                    }}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      interaction: { mode: 'index', intersect: false },
+                      plugins: {
+                        legend: { position: 'top' },
+                        tooltip: {
+                          callbacks: {
+                            label: function(context) {
+                              if (context.dataset.yAxisID === 'y1') return context.dataset.label + ': ' + context.parsed.y + '%';
+                              return context.dataset.label + ': PKR ' + Number(context.parsed.y).toLocaleString();
+                            }
+                          }
+                        }
+                      },
+                      scales: {
+                        y: {
+                          type: 'linear',
+                          position: 'left',
+                          title: { display: true, text: 'Amount (PKR)' },
+                          ticks: { callback: (v) => 'PKR ' + (v / 1000000).toFixed(1) + 'M' }
+                        },
+                        y1: {
+                          type: 'linear',
+                          position: 'right',
+                          min: 0,
+                          max: 150,
+                          title: { display: true, text: 'Collection Rate (%)' },
+                          grid: { drawOnChartArea: false },
+                          ticks: { callback: (v) => v + '%' }
+                        }
+                      }
+                    }}
+                  />
+                </div>
+              ) : (
+                /* Fallback table when Chart.js is not installed */
+                <div className="overflow-x-auto">
+                  <p className="text-xs text-gray-400 mb-3">Install chart.js and react-chartjs-2 for a graphical chart view.</p>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left p-2 font-semibold text-gray-600">Month</th>
+                        <th className="text-right p-2 font-semibold text-gray-600">Due</th>
+                        <th className="text-right p-2 font-semibold text-gray-600">Collected</th>
+                        <th className="text-right p-2 font-semibold text-gray-600">Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {revenueTrend.map((d, i) => (
+                        <tr key={i} className="border-b hover:bg-gray-50">
+                          <td className="p-2">{d.month}</td>
+                          <td className="p-2 text-right text-blue-600">{formatCurrency(d.due)}</td>
+                          <td className="p-2 text-right text-green-600">{formatCurrency(d.collected)}</td>
+                          <td className="p-2 text-right">
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              d.collection_rate >= 80 ? 'bg-green-100 text-green-800' :
+                              d.collection_rate >= 50 ? 'bg-yellow-100 text-yellow-800' :
+                              'bg-red-100 text-red-800'
+                            }`}>{d.collection_rate}%</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ============================================ */}
+          {/* FEATURE #20: Commission Tracking Dashboard */}
+          {/* ============================================ */}
+          {commissionData.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Broker Commission Tracking</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Doughnut Chart or Summary Cards */}
+                <div>
+                  {chartsAvailable && Doughnut ? (
+                    <div className="flex justify-center" style={{ maxHeight: '300px' }}>
+                      <Doughnut
+                        data={{
+                          labels: ['Paid', 'Pending'],
+                          datasets: [{
+                            data: [
+                              commissionData.reduce((s, b) => s + b.total_paid, 0),
+                              commissionData.reduce((s, b) => s + b.pending, 0)
+                            ],
+                            backgroundColor: ['rgba(34, 197, 94, 0.8)', 'rgba(239, 68, 68, 0.8)'],
+                            borderColor: ['rgb(34, 197, 94)', 'rgb(239, 68, 68)'],
+                            borderWidth: 2
+                          }]
+                        }}
+                        options={{
+                          responsive: true,
+                          maintainAspectRatio: true,
+                          plugins: {
+                            legend: { position: 'bottom' },
+                            tooltip: {
+                              callbacks: {
+                                label: function(context) {
+                                  return context.label + ': PKR ' + Number(context.parsed).toLocaleString();
+                                }
+                              }
+                            }
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    /* Fallback summary when Chart.js is not installed */
+                    <div className="space-y-3">
+                      <div className="p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
+                        <div className="text-xs font-medium text-blue-700 uppercase mb-1">Total Earned</div>
+                        <div className="text-xl font-bold text-blue-800">
+                          {formatCurrency(commissionData.reduce((s, b) => s + b.total_earned, 0))}
+                        </div>
+                      </div>
+                      <div className="p-4 bg-green-50 rounded-lg border-l-4 border-green-500">
+                        <div className="text-xs font-medium text-green-700 uppercase mb-1">Total Paid</div>
+                        <div className="text-xl font-bold text-green-800">
+                          {formatCurrency(commissionData.reduce((s, b) => s + b.total_paid, 0))}
+                        </div>
+                      </div>
+                      <div className="p-4 bg-red-50 rounded-lg border-l-4 border-red-500">
+                        <div className="text-xs font-medium text-red-700 uppercase mb-1">Total Pending</div>
+                        <div className="text-xl font-bold text-red-800">
+                          {formatCurrency(commissionData.reduce((s, b) => s + b.pending, 0))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Broker Commission Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left p-2 font-semibold text-gray-600">Broker</th>
+                        <th className="text-right p-2 font-semibold text-gray-600">Deals</th>
+                        <th className="text-right p-2 font-semibold text-gray-600">Earned</th>
+                        <th className="text-right p-2 font-semibold text-gray-600">Paid</th>
+                        <th className="text-right p-2 font-semibold text-gray-600">Pending</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {commissionData.map((b, idx) => (
+                        <tr key={idx} className="border-b hover:bg-gray-50">
+                          <td className="p-2">
+                            <div className="font-medium">{b.broker_name}</div>
+                            <div className="text-xs text-gray-400">{b.broker_id}</div>
+                          </td>
+                          <td className="p-2 text-right">{b.transactions}</td>
+                          <td className="p-2 text-right text-blue-600">{formatCurrency(b.total_earned)}</td>
+                          <td className="p-2 text-right text-green-600">{formatCurrency(b.total_paid)}</td>
+                          <td className="p-2 text-right font-semibold text-red-600">{formatCurrency(b.pending)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 font-semibold">
+                        <td className="p-2">Total</td>
+                        <td className="p-2 text-right">{commissionData.reduce((s, b) => s + b.transactions, 0)}</td>
+                        <td className="p-2 text-right text-blue-600">{formatCurrency(commissionData.reduce((s, b) => s + b.total_earned, 0))}</td>
+                        <td className="p-2 text-right text-green-600">{formatCurrency(commissionData.reduce((s, b) => s + b.total_paid, 0))}</td>
+                        <td className="p-2 text-right text-red-600">{formatCurrency(commissionData.reduce((s, b) => s + b.pending, 0))}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
         </>
       )}
 
@@ -5585,6 +6276,9 @@ function SettingsView() {
   const [deletionRequests, setDeletionRequests] = useState([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [delReqFilter, setDelReqFilter] = useState('pending');
+  const [settingsConfirm, setSettingsConfirm] = useState(null);
+  const [settingsPrompt, setSettingsPrompt] = useState(null);
+  const [settingsToast, setSettingsToast] = useState(null);
 
   useEffect(() => { loadReps(); loadPendingCount(); }, []);
   useEffect(() => { if (settingsTab === 'deletion-requests') loadDeletionRequests(); }, [settingsTab, delReqFilter]);
@@ -5610,23 +6304,38 @@ function SettingsView() {
     } catch (e) { console.error(e); }
   };
 
-  const handleApproveDeletion = async (reqId) => {
-    if (!confirm('Approve this deletion request? The record will be permanently deleted.')) return;
-    try {
-      await api.post(`/deletion-requests/${reqId}/approve`);
-      loadDeletionRequests();
-      loadPendingCount();
-    } catch (e) { alert(e.response?.data?.detail || 'Error approving request'); }
+  const handleApproveDeletion = (reqId) => {
+    setSettingsConfirm({
+      title: 'Approve Deletion',
+      message: 'Approve this deletion request? The record will be permanently deleted.',
+      confirmText: 'Approve',
+      confirmColor: 'red',
+      onConfirm: async () => {
+        try {
+          await api.post(`/deletion-requests/${reqId}/approve`);
+          setSettingsConfirm(null);
+          loadDeletionRequests();
+          loadPendingCount();
+        } catch (e) { setSettingsConfirm(null); setSettingsToast({ message: e.response?.data?.detail || 'Error approving request', type: 'error' }); }
+      }
+    });
   };
 
-  const handleRejectDeletion = async (reqId) => {
-    const reason = prompt('Reason for rejection:');
-    if (reason === null) return;
-    try {
-      await api.post(`/deletion-requests/${reqId}/reject`, { reason });
-      loadDeletionRequests();
-      loadPendingCount();
-    } catch (e) { alert(e.response?.data?.detail || 'Error rejecting request'); }
+  const handleRejectDeletion = (reqId) => {
+    setSettingsPrompt({
+      title: 'Reject Deletion',
+      message: 'Reason for rejection:',
+      placeholder: 'Enter reason...',
+      onSubmit: async (reason) => {
+        if (!reason) return;
+        try {
+          await api.post(`/deletion-requests/${reqId}/reject`, { reason });
+          setSettingsPrompt(null);
+          loadDeletionRequests();
+          loadPendingCount();
+        } catch (e) { setSettingsPrompt(null); setSettingsToast({ message: e.response?.data?.detail || 'Error rejecting request', type: 'error' }); }
+      }
+    });
   };
 
   const handleSubmit = async (e) => {
@@ -5635,25 +6344,39 @@ function SettingsView() {
       if (editing) { await api.put(`/company-reps/${editing.id}`, form); }
       else { await api.post('/company-reps', form); }
       setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', password: '' }); loadReps();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) { setSettingsToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
   };
 
   const handleDelete = async (r) => {
     const role = getUserRole();
-    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'creator') { setSettingsToast({ message: 'Creator role cannot delete records.', type: 'warning' }); return; }
     if (role === 'admin') {
-      if (!confirm(`Delete "${r.name}"?`)) return;
-      try { await api.delete(`/company-reps/${r.id}`); loadReps(); }
-      catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      setSettingsConfirm({
+        title: 'Delete Rep',
+        message: `Are you sure you want to delete "${r.name}"?`,
+        confirmText: 'Delete',
+        confirmColor: 'red',
+        onConfirm: async () => {
+          try { await api.delete(`/company-reps/${r.id}`); setSettingsConfirm(null); loadReps(); }
+          catch (e) { setSettingsConfirm(null); setSettingsToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
+        }
+      });
     } else {
-      const reason = prompt(`Request deletion of "${r.name}"?\nProvide a reason:`);
-      if (reason === null) return;
-      try {
-        const res = await api.delete(`/company-reps/${r.id}`, { data: { reason } });
-        if (res.data.pending) {
-          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
-        } else { loadReps(); }
-      } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      setSettingsPrompt({
+        title: 'Request Deletion',
+        message: `Request deletion of "${r.name}"? Provide a reason:`,
+        placeholder: 'Reason for deletion...',
+        onSubmit: async (reason) => {
+          if (!reason) return;
+          try {
+            const res = await api.delete(`/company-reps/${r.id}`, { data: { reason } });
+            setSettingsPrompt(null);
+            if (res.data.pending) {
+              setSettingsToast({ message: `Deletion request submitted (${res.data.request_id}). An admin will review it.`, type: 'info' });
+            } else { loadReps(); }
+          } catch (e) { setSettingsPrompt(null); setSettingsToast({ message: e.response?.data?.detail || 'Error', type: 'error' }); }
+        }
+      });
     }
   };
 
@@ -5843,6 +6566,10 @@ function SettingsView() {
         )}
       </div>
       )}
+
+      {settingsToast && <Toast message={settingsToast.message} type={settingsToast.type} onClose={() => setSettingsToast(null)} />}
+      {settingsConfirm && <ConfirmModal title={settingsConfirm.title} message={settingsConfirm.message} confirmText={settingsConfirm.confirmText} confirmColor={settingsConfirm.confirmColor} onConfirm={settingsConfirm.onConfirm} onCancel={() => setSettingsConfirm(null)} />}
+      {settingsPrompt && <PromptModal title={settingsPrompt.title} message={settingsPrompt.message} placeholder={settingsPrompt.placeholder} onSubmit={settingsPrompt.onSubmit} onCancel={() => setSettingsPrompt(null)} />}
     </div>
   );
 }
@@ -6526,6 +7253,182 @@ function BrokerDetailModal({ broker, onClose }) {
 }
 
 // ============================================
+// CUSTOMER 360 DRAWER
+// ============================================
+function Customer360Drawer({ customerId, onClose }) {
+  const [customer, setCustomer] = useState(null);
+  const [transactions, setTransactions] = useState([]);
+  const [receipts, setReceipts] = useState([]);
+  const [interactions, setInteractions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeSection, setActiveSection] = useState('overview');
+
+  useEffect(() => {
+    if (!customerId) return;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const [custRes, txnRes, rcpRes, intRes] = await Promise.all([
+          api.get(`/customers/${customerId}`),
+          api.get(`/transactions?customer_id=${customerId}`).catch(() => ({ data: [] })),
+          api.get(`/receipts?customer_id=${customerId}`).catch(() => ({ data: [] })),
+          api.get(`/interactions?entity_type=customer&entity_id=${customerId}`).catch(() => ({ data: [] }))
+        ]);
+        setCustomer(custRes.data);
+        setTransactions(Array.isArray(txnRes.data) ? txnRes.data : txnRes.data.items || []);
+        setReceipts(Array.isArray(rcpRes.data) ? rcpRes.data : rcpRes.data.items || []);
+        setInteractions(Array.isArray(intRes.data) ? intRes.data : intRes.data.items || []);
+      } catch (e) {
+        console.error('Error loading customer 360:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [customerId]);
+
+  if (!customerId) return null;
+
+  const totalSale = transactions.reduce((s, t) => s + parseFloat(t.total_amount || t.total_value || 0), 0);
+  const totalReceived = receipts.reduce((s, r) => s + parseFloat(r.amount || 0), 0);
+  const outstanding = totalSale - totalReceived;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/20" />
+      <div className="relative w-full max-w-lg bg-white shadow-2xl h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-gray-900 text-white px-6 py-4 flex justify-between items-center z-10">
+          <div>
+            <h2 className="text-lg font-semibold">{customer?.name || 'Loading...'}</h2>
+            <p className="text-sm text-gray-300">{customer?.customer_id}</p>
+          </div>
+          <button onClick={onClose} className="text-white hover:text-gray-300 text-2xl">&times;</button>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center h-64"><div className="text-gray-400">Loading...</div></div>
+        ) : (
+          <div className="p-6 space-y-6">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-blue-50 rounded-xl p-3 text-center">
+                <div className="text-xs text-blue-600 font-medium">Total Sale</div>
+                <div className="text-lg font-bold text-blue-900">{formatCurrency(totalSale)}</div>
+              </div>
+              <div className="bg-green-50 rounded-xl p-3 text-center">
+                <div className="text-xs text-green-600 font-medium">Received</div>
+                <div className="text-lg font-bold text-green-900">{formatCurrency(totalReceived)}</div>
+              </div>
+              <div className="bg-red-50 rounded-xl p-3 text-center">
+                <div className="text-xs text-red-600 font-medium">Outstanding</div>
+                <div className="text-lg font-bold text-red-900">{formatCurrency(outstanding)}</div>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Contact</h3>
+              <div className="space-y-1 text-sm">
+                {customer?.mobile && <div><span className="text-gray-500">Mobile:</span> <span className="font-medium">{customer.mobile}</span></div>}
+                {customer?.email && <div><span className="text-gray-500">Email:</span> <span className="font-medium">{customer.email}</span></div>}
+                {customer?.address && <div><span className="text-gray-500">Address:</span> <span className="font-medium">{customer.address}</span></div>}
+                {customer?.cnic && <div><span className="text-gray-500">CNIC:</span> <span className="font-medium">{customer.cnic}</span></div>}
+              </div>
+            </div>
+
+            <div className="flex gap-2 border-b">
+              {['overview', 'transactions', 'receipts', 'interactions'].map(s => (
+                <button key={s} onClick={() => setActiveSection(s)}
+                  className={`px-3 py-2 text-sm font-medium capitalize border-b-2 transition-colors ${
+                    activeSection === s ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}>{s}</button>
+              ))}
+            </div>
+
+            {activeSection === 'transactions' && (
+              <div className="space-y-2">
+                {transactions.length === 0 ? <p className="text-sm text-gray-400">No transactions</p> :
+                  transactions.map(t => (
+                    <div key={t.id} className="bg-white border rounded-lg p-3">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="text-sm font-medium">{t.transaction_id}</div>
+                          <div className="text-xs text-gray-500">{t.inventory_unit || t.unit_number || 'N/A'}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-bold">{formatCurrency(t.total_amount || t.total_value)}</div>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${t.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{t.status}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+
+            {activeSection === 'receipts' && (
+              <div className="space-y-2">
+                {receipts.length === 0 ? <p className="text-sm text-gray-400">No receipts</p> :
+                  receipts.map(r => (
+                    <div key={r.id} className="bg-white border rounded-lg p-3 flex justify-between">
+                      <div>
+                        <div className="text-sm font-medium">{r.receipt_id || `#${r.id}`}</div>
+                        <div className="text-xs text-gray-500">{r.receipt_date} - {r.payment_method}</div>
+                      </div>
+                      <div className="text-sm font-bold text-green-600">{formatCurrency(r.amount)}</div>
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+
+            {activeSection === 'interactions' && (
+              <div className="space-y-2">
+                {interactions.length === 0 ? <p className="text-sm text-gray-400">No interactions</p> :
+                  interactions.map(i => (
+                    <div key={i.id} className="bg-white border rounded-lg p-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100">{i.interaction_type}</span>
+                        <span className="text-xs text-gray-400">{i.interaction_date}</span>
+                      </div>
+                      <div className="text-sm text-gray-700">{i.notes}</div>
+                      {i.next_follow_up && <div className="text-xs text-orange-600 mt-1">Follow-up: {i.next_follow_up}</div>}
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+
+            {activeSection === 'overview' && (
+              <div className="space-y-3">
+                <div className="text-sm">
+                  <span className="text-gray-500">Transactions:</span> <span className="font-medium">{transactions.length}</span>
+                </div>
+                <div className="text-sm">
+                  <span className="text-gray-500">Receipts:</span> <span className="font-medium">{receipts.length}</span>
+                </div>
+                <div className="text-sm">
+                  <span className="text-gray-500">Interactions:</span> <span className="font-medium">{interactions.length}</span>
+                </div>
+                {transactions.length > 0 && (
+                  <div className="mt-3">
+                    <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">Recent Transactions</h4>
+                    {transactions.slice(0, 3).map(t => (
+                      <div key={t.id} className="text-sm py-1 border-b border-gray-100 flex justify-between">
+                        <span>{t.transaction_id}</span>
+                        <span className="font-medium">{formatCurrency(t.total_amount || t.total_value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // SHARED COMPONENTS
 // ============================================
 function SummaryCard({ label, value, sub }) {
@@ -6552,17 +7455,111 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 
-function Input({ label, required, ...props }) {
+function Input({ label, required, error, ...props }) {
   return (
     <div>
       <label className="block text-xs font-medium text-gray-500 mb-1">{label} {required && <span className="text-red-400">*</span>}</label>
-      <input {...props} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10" />
+      <input {...props} className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 ${error ? 'border-red-400 focus:ring-red-500/20' : 'border-gray-200 focus:ring-gray-900/10'}`} />
+      {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
     </div>
   );
 }
 
 function Loader() { return <div className="p-12 text-center text-gray-400">Loading...</div>; }
 function Empty({ msg }) { return <div className="bg-white rounded-2xl shadow-sm border p-12 text-center text-gray-400">{msg}</div>; }
+
+// ============================================
+// CONFIRM MODAL - replaces window.confirm()
+// ============================================
+function ConfirmModal({ title, message, onConfirm, onCancel, confirmText = 'Confirm', confirmColor = 'red' }) {
+  const colorClasses = {
+    red: 'bg-red-600 hover:bg-red-700',
+    blue: 'bg-blue-600 hover:bg-blue-700',
+    green: 'bg-green-600 hover:bg-green-700',
+    orange: 'bg-orange-600 hover:bg-orange-700',
+    gray: 'bg-gray-900 hover:bg-gray-800'
+  };
+  return (
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-[60]">
+      <div className="bg-white rounded-2xl shadow-xl mx-4 w-full max-w-md p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">{title}</h3>
+        <p className="text-sm text-gray-600 mb-6">{message}</p>
+        <div className="flex justify-end gap-3">
+          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+          <button onClick={onConfirm} className={`px-4 py-2 text-sm text-white rounded-lg ${colorClasses[confirmColor] || colorClasses.red}`}>{confirmText}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// ALERT MODAL - replaces window.alert()
+// ============================================
+function AlertModal({ title, message, onClose }) {
+  return (
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-[60]">
+      <div className="bg-white rounded-2xl shadow-xl mx-4 w-full max-w-md p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">{title || 'Notice'}</h3>
+        <p className="text-sm text-gray-600 mb-6">{message}</p>
+        <div className="flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800">OK</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// PROMPT MODAL - replaces window.prompt()
+// ============================================
+function PromptModal({ title, message, defaultValue, onSubmit, onCancel, placeholder }) {
+  const [value, setValue] = useState(defaultValue || '');
+  return (
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-[60]">
+      <div className="bg-white rounded-2xl shadow-xl mx-4 w-full max-w-md p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">{title}</h3>
+        {message && <p className="text-sm text-gray-600 mb-4">{message}</p>}
+        <input
+          type="text"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          placeholder={placeholder}
+          className="w-full border border-gray-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 mb-6"
+          autoFocus
+          onKeyDown={e => e.key === 'Enter' && onSubmit(value)}
+        />
+        <div className="flex justify-end gap-3">
+          <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+          <button onClick={() => onSubmit(value)} className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">OK</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// TOAST NOTIFICATION
+// ============================================
+function Toast({ message, type = 'success', onClose }) {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const colors = {
+    success: 'bg-green-600',
+    error: 'bg-red-600',
+    warning: 'bg-yellow-600',
+    info: 'bg-blue-600'
+  };
+
+  return (
+    <div className={`fixed bottom-4 right-4 ${colors[type]} text-white px-4 py-3 rounded-lg shadow-lg z-[70] text-sm font-medium`}>
+      {message}
+    </div>
+  );
+}
 
 function BulkImport({ entity, onImport, importFile, setImportFile, importResult }) {
   return (
