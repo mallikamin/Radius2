@@ -10,6 +10,7 @@ import HoverPlotDetails from './HoverPlotDetails';
 import LegendPanel from './LegendPanel';
 import Toolbar from './Toolbar';
 import Sidebar from './Sidebar';
+import FilterBar from './FilterBar';
 import KeyboardShortcutsOverlay from './KeyboardShortcutsOverlay';
 
 export default function VectorMap() {
@@ -742,12 +743,15 @@ export default function VectorMap() {
           vectorState.setPdfBase64(pdfBase64ToPreserve);
           console.log('handleLoadProject: Set pdfBase64 in state before loading PDF');
           
+          console.log('handleLoadProject: Calling loadPDFFromBase64, base64 length:', pdfBase64ToPreserve.length);
           const result = await loadPDFFromBase64(pdfBase64ToPreserve, (progress) => {
+            console.log('handleLoadProject: PDF onProgress callback - mapW:', progress.mapW, 'mapH:', progress.mapH, 'pdfImg:', !!progress.pdfImg);
             vectorState.setMapW(progress.mapW);
             vectorState.setMapH(progress.mapH);
             vectorState.setPdfScale(progress.pdfScale);
             vectorState.setPdfImg(progress.pdfImg);
           });
+          console.log('handleLoadProject: loadPDFFromBase64 completed, result.pdfImg:', !!result.pdfImg, 'mapW:', result.mapW, 'mapH:', result.mapH);
 
           // COORDINATE SCALING FIX: Scale imported coordinates to match re-rendered PDF dimensions
           // Old Vector used pdfScale cap of 4.0, Vector2 uses 3.0, causing coordinate misalignment
@@ -1075,22 +1079,27 @@ export default function VectorMap() {
       {/* Sidebar */}
       <Sidebar vectorState={vectorState} />
 
+      {/* Filter Bar */}
+      <div style={{ position: 'fixed', top: '40px', left: '256px', right: 0, zIndex: 20 }}>
+        <FilterBar vectorState={vectorState} />
+      </div>
+
       {/* Main canvas area */}
-      <div 
-        className="absolute" 
-        style={{ 
-          top: '40px', 
-          left: '256px', 
-          right: 0, 
+      <div
+        className="absolute"
+        style={{
+          top: '76px',
+          left: '256px',
+          right: 0,
           bottom: 0,
           width: 'calc(100vw - 256px)',
-          height: 'calc(100vh - 40px)'
+          height: 'calc(100vh - 76px)'
         }}
       >
         {vectorState.pdfImg ? (
-          <MapCanvas 
-            vectorState={vectorState} 
-            tool={tool} 
+          <MapCanvas
+            vectorState={vectorState}
+            tool={tool}
             setTool={setTool}
             displayMode={displayMode}
           />

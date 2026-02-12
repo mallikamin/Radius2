@@ -132,13 +132,18 @@ export default function Sidebar({ vectorState }) {
         {[
           { id: 'selection',   icon: '👆', label: 'Select' },
           { id: 'annotations', icon: '📝', label: 'Annotate' },
-          { id: 'pan',         icon: '✋', label: 'Pan' },
+          { id: 'pan',         icon: '✋', label: 'Pan', toolId: 'pan' },
           { id: 'search',      icon: '🔍', label: 'Search' },
           { id: 'settings',    icon: '⚙️', label: 'Settings' },
         ].map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              setActiveTab(tab.id);
+              if (tab.toolId && window.setVectorTool) {
+                window.setVectorTool(tab.toolId);
+              }
+            }}
             className={`flex flex-col items-center py-1.5 text-center ${
               activeTab === tab.id
                 ? 'bg-gray-100 border-b-2 border-gray-900'

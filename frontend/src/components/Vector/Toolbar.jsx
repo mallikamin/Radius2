@@ -424,16 +424,49 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
 
         <div className="w-px h-5 bg-gray-700 mx-1" />
 
+        {/* Color Mode Selector */}
+        <div className="flex items-center gap-0.5">
+          {[
+            { id: 'annotation', icon: '🎨', tip: 'Color by Annotation' },
+            { id: 'status', icon: '🚦', tip: 'Color by CRM Status' },
+            { id: 'price', icon: '💰', tip: 'Price Heatmap' }
+          ].map(cm => (
+            <button
+              key={cm.id}
+              onClick={() => vectorState.setColorMode(cm.id)}
+              className={`px-2 py-1 text-xs rounded ${
+                vectorState.colorMode === cm.id ? 'bg-indigo-600' : 'bg-gray-800 hover:bg-gray-700'
+              }`}
+              style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
+              title={cm.tip}
+            >
+              {cm.icon}
+            </button>
+          ))}
+        </div>
+
+        <div className="w-px h-5 bg-gray-700 mx-1" />
+
         {/* Display Mode & Zoom - Compact */}
         <div className="flex items-center gap-0.5">
-          <button
-            onClick={() => setDisplayMode(displayMode === 'plot' ? 'note' : 'plot')}
-            className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
-            style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
-            title={`Display: ${displayMode === 'plot' ? 'Plot Numbers' : 'Annotation Notes'}`}
-          >
-            {displayMode === 'plot' ? '🔢' : '📝'}
-          </button>
+          {[
+            { id: 'plot', icon: '🔢', tip: 'Plot Numbers' },
+            { id: 'name', icon: '👤', tip: 'Customer Names' },
+            { id: 'note', icon: '📝', tip: 'Annotation Notes' },
+            { id: 'price', icon: '₨', tip: 'Price Overlay' }
+          ].map(dm => (
+            <button
+              key={dm.id}
+              onClick={() => setDisplayMode(dm.id)}
+              className={`px-2 py-1 text-xs rounded ${
+                displayMode === dm.id ? 'bg-indigo-600' : 'bg-gray-800 hover:bg-gray-700'
+              }`}
+              style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
+              title={dm.tip}
+            >
+              {dm.icon}
+            </button>
+          ))}
           {onZoomIn && (
             <>
               <button

@@ -57,6 +57,20 @@ export function useVectorState() {
   // Active view mode: 'all' for all annotations, or annotation ID for single annotation view
   const [activeView, setActiveView] = useState('all');
 
+  // Color mode: 'annotation' (default) or 'status' (CRM inventory status) or 'price' (price heatmap)
+  const [colorMode, setColorMode] = useState('annotation');
+
+  // Filter state for FilterBar
+  const [plotFilters, setPlotFilters] = useState({
+    status: 'all',      // 'all', 'available', 'sold', 'buyback_pending', 'reserved'
+    sizeMin: '',        // marla min
+    sizeMax: '',        // marla max
+    block: 'all',       // annotation/block name or 'all'
+    priceMin: '',       // price min
+    priceMax: '',       // price max
+    searchPlot: ''      // plot number search
+  });
+
   // Save database mode to localStorage when it changes
   useEffect(() => {
     localStorage.setItem('vector_database_mode', databaseMode.toString());
@@ -517,6 +531,8 @@ export function useVectorState() {
     linkedProjectName,
     branchVisibility,
     activeView,
+    colorMode,
+    plotFilters,
 
     // Setters
     setProjectName,
@@ -549,6 +565,8 @@ export function useVectorState() {
     setLinkedProjectName,
     setBranchVisibility,
     setActiveView,
+    setColorMode,
+    setPlotFilters,
 
     // Actions
     loadProjectData,

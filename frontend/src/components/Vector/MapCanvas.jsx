@@ -105,7 +105,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    
+
     const ctx = canvas.getContext('2d');
     if (!ctx || !vectorState.pdfImg) return;
 
@@ -114,15 +114,15 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     if (!parent) return;
     const rect = parent.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    
+
     // Set actual canvas size (for rendering)
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
-    
+
     // Set display size (CSS)
     canvas.style.width = rect.width + 'px';
     canvas.style.height = rect.height + 'px';
-    
+
     // Scale context to handle DPR
     ctx.scale(dpr, dpr);
 
@@ -167,24 +167,133 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     // Check if we're in a specific annotation view mode
     const activeView = vectorState.activeView || 'all';
     const isFilteredView = activeView !== 'all';
+    const colorMode = vectorState.colorMode || 'annotation';
+    const plotFilters = vectorState.plotFilters || {};
 
-    // Helper function to get display color based on view mode
-    const getDisplayColor = (anno, originalColor) => {
+    // Status color palette (zameen.com inspired)
+    const STATUS_COLORS = {
+      available: '#22c55e',       // Green
+      sold: '#ef4444',            // Red
+      buyback_pending: '#f97316', // Orange
+      reserved: '#3b82f6',        // Blue
+      booked: '#8b5cf6',          // Purple
+      default: '#9ca3af'          // Gray (no status)
+    };
+
+    // Helper: get inventory status for a plot
+    const getPlotStatus = (plotNum) => {
+      const inv = vectorState.inventory[plotNum];
+      if (!inv) return null;
+      return (inv.status || '').toLowerCase().replace(/\s+/g, '_');
+    };
+
+    // Helper: get status color for a plot
+    const getStatusColor = (plotNum) => {
+      const status = getPlotStatus(plotNum);
+      if (!status) return STATUS_COLORS.default;
+      return STATUS_COLORS[status] || STATUS_COLORS.default;
+    };
+
+    // Helper: format price abbreviation for overlay
+    const formatPriceShort = (amount) => {
+      if (!amount) return '';
+      const num = parseFloat(amount);
+      if (num >= 10000000) return (num / 10000000).toFixed(1) + 'Cr';
+      if (num >= 100000) return (num / 100000).toFixed(1) + 'L';
+      if (num >= 1000) return (num / 1000).toFixed(0) + 'K';
+      return String(Math.round(num));
+    };
+
+    // Price range for heatmap interpolation (percentile-based to handle outliers)
+    let priceMin = 0, priceMax = 0;
+    if (colorMode === 'price') {
+      const priceValues = [];
+      Object.values(vectorState.inventory).forEach(inv => {
+        const rate = parseFloat(inv.ratePerMarla) || 0;
+        if (rate > 0) priceValues.push(rate);
+      });
+      if (priceValues.length > 0) {
+        priceValues.sort((a, b) => a - b);
+        // Use 5th and 95th percentile to clip outliers
+        priceMin = priceValues[Math.floor(priceValues.length * 0.05)] || priceValues[0];
+        priceMax = priceValues[Math.floor(priceValues.length * 0.95)] || priceValues[priceValues.length - 1];
+        if (priceMax <= priceMin) priceMax = priceMin + 1;
+      }
+    }
+
+    // Helper: get price heatmap color (green=low → yellow → red=high)
+    const getPriceColor = (plotNum) => {
+      const inv = vectorState.inventory[plotNum];
+      if (!inv || !inv.ratePerMarla) return STATUS_COLORS.default;
+      const rate = parseFloat(inv.ratePerMarla);
+      if (priceMax <= priceMin) return '#22c55e';
+      const t = Math.min(1, Math.max(0, (rate - priceMin) / (priceMax - priceMin)));
+      // Green → Yellow → Red
+      const r = Math.round(t < 0.5 ? t * 2 * 255 : 255);
+      const g = Math.round(t < 0.5 ? 255 : (1 - (t - 0.5) * 2) * 255);
+      return `rgb(${r},${g},50)`;
+    };
+
+    // Filter check: should this plot be visible based on active filters?
+    const hasActiveFilters = (plotFilters.status && plotFilters.status !== 'all') || plotFilters.sizeMin || plotFilters.sizeMax ||
+      (plotFilters.block && plotFilters.block !== 'all') || plotFilters.priceMin || plotFilters.priceMax || plotFilters.searchPlot;
+
+    const passesFilter = (plot) => {
+      if (!hasActiveFilters) return true;
+      const inv = vectorState.inventory[plot.n] || {};
+      const status = (inv.status || '').toLowerCase().replace(/\s+/g, '_');
+
+      // Status filter
+      if (plotFilters.status && plotFilters.status !== 'all') {
+        if (status !== plotFilters.status) return false;
+      }
+      // Size filter - exclude plots without size data when filter is active
+      if (plotFilters.sizeMin) {
+        if (!inv.marla || parseFloat(inv.marla) < parseFloat(plotFilters.sizeMin)) return false;
+      }
+      if (plotFilters.sizeMax) {
+        if (!inv.marla || parseFloat(inv.marla) > parseFloat(plotFilters.sizeMax)) return false;
+      }
+      // Block filter (matches annotation note)
+      if (plotFilters.block && plotFilters.block !== 'all') {
+        const anno = annoMap[String(plot.id)];
+        if (!anno || (anno.note !== plotFilters.block && anno.cat !== plotFilters.block)) return false;
+      }
+      // Price filter - exclude plots without price data when filter is active
+      if (plotFilters.priceMin) {
+        if (!inv.ratePerMarla || parseFloat(inv.ratePerMarla) < parseFloat(plotFilters.priceMin)) return false;
+      }
+      if (plotFilters.priceMax) {
+        if (!inv.ratePerMarla || parseFloat(inv.ratePerMarla) > parseFloat(plotFilters.priceMax)) return false;
+      }
+      // Plot number search
+      if (plotFilters.searchPlot) {
+        if (!String(plot.n).toLowerCase().includes(plotFilters.searchPlot.toLowerCase())) return false;
+      }
+      return true;
+    };
+
+    // Helper function to get display color based on view mode and color mode
+    const getDisplayColor = (anno, originalColor, plot) => {
+      // Color mode overrides
+      if (colorMode === 'status' && plot) return getStatusColor(plot.n);
+      if (colorMode === 'price' && plot) return getPriceColor(plot.n);
+      // Annotation mode (default)
       if (!isFilteredView || !anno) return originalColor;
-      // If this annotation matches the active view, use full color
       if (anno.id === activeView) return originalColor;
-      // Otherwise, return muted gray
-      return '#e5e7eb'; // Light gray for muted plots
+      return '#e5e7eb';
     };
 
     // Helper function to get opacity based on view mode
     const getDisplayOpacity = (anno, baseOpacity = 0.92) => {
       if (!isFilteredView || !anno) return baseOpacity;
-      // If this annotation matches the active view, use full opacity
       if (anno.id === activeView) return baseOpacity;
-      // Otherwise, use very low opacity
       return 0.3;
     };
+
+    // Count matching plots for filter bar display
+    let filteredCount = 0;
+    let totalCount = vectorState.plots.length;
 
     // Draw plots
     vectorState.plots.forEach(p => {
@@ -199,6 +308,23 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
           if (anno && anno.id !== activeView) return;
           if (!anno) return;
         }
+
+        // Apply filter bar - dim non-matching plots
+        const matchesFilter = passesFilter(p);
+        if (hasActiveFilters && !matchesFilter && !isSel && !isHovered) {
+          // Draw dimmed version for filtered-out plots
+          const offset = vectorState.plotOffsets[p.id] || { ox: 0, oy: 0 };
+          const drawX = p.x + offset.ox;
+          const drawY = p.y + offset.oy;
+          const w = p.w || 20;
+          const h = p.h || 14;
+          ctx.globalAlpha = 0.12;
+          ctx.fillStyle = '#d1d5db';
+          ctx.fillRect(drawX - w/2, drawY - h/2, w, h);
+          ctx.globalAlpha = 1;
+          return;
+        }
+        if (matchesFilter) filteredCount++;
 
         // Skip non-annotated manual plots if hide setting is on
         if (vectorState.hideNonAnnotatedManualPlots && p.manual && !anno) {
@@ -263,7 +389,19 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
         }
 
         if (anno || isSel || p.manual || isHovered) {
-          const displayText = anno ? (displayMode === 'note' ? (anno.note || anno.cat || '•') : p.n) : p.n;
+          // Display text depends on displayMode: 'plot' = numbers, 'name' = customer, 'note' = annotation text, 'price' = rate/marla
+          let displayText;
+          if (displayMode === 'price') {
+            const inv = vectorState.inventory[p.n];
+            displayText = inv?.ratePerMarla ? formatPriceShort(inv.ratePerMarla) + '/m' : p.n;
+          } else if (displayMode === 'name') {
+            const inv = vectorState.inventory[p.n];
+            displayText = inv?.customerName || inv?.customer || inv?.owner || p.n;
+          } else if (displayMode === 'note') {
+            displayText = anno ? (anno.note || anno.cat || '•') : p.n;
+          } else {
+            displayText = p.n;
+          }
           const fontSize = anno ? (anno.fontSize || 12) : 10;
           ctx.font = `bold ${fontSize}px Arial`;
 
@@ -280,7 +418,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
           // Connector line if offset
           if (anno && (offset.ox !== 0 || offset.oy !== 0)) {
-            ctx.strokeStyle = getDisplayColor(anno, anno.color);
+            ctx.strokeStyle = getDisplayColor(anno, anno.color, p);
             ctx.lineWidth = 1.5;
             ctx.globalAlpha = getDisplayOpacity(anno, 0.6);
             ctx.beginPath();
@@ -288,7 +426,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
             ctx.lineTo(drawX, drawY);
             ctx.stroke();
             ctx.globalAlpha = 1;
-            ctx.fillStyle = getDisplayColor(anno, anno.color);
+            ctx.fillStyle = getDisplayColor(anno, anno.color, p);
             ctx.beginPath();
             ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
             ctx.fill();
@@ -297,7 +435,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
           // Draw annotation box
           if (anno) {
             // Apply view mode filtering - mute non-active annotations
-            ctx.fillStyle = getDisplayColor(anno, anno.color);
+            ctx.fillStyle = getDisplayColor(anno, anno.color, p);
             ctx.globalAlpha = getDisplayOpacity(anno, 0.92);
 
             const plotRotation = vectorState.plotRotations[p.id] !== undefined 
@@ -417,6 +555,16 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       }
     });
 
+    // Expose filter counts for FilterBar via custom event
+    const reportedFiltered = hasActiveFilters ? filteredCount : totalCount;
+    window._vectorFilteredCount = reportedFiltered;
+    window._vectorTotalCount = totalCount;
+    try {
+      window.dispatchEvent(new CustomEvent('vectorFilterCounts', {
+        detail: { filtered: reportedFiltered, total: totalCount }
+      }));
+    } catch (e) { /* SSR safety */ }
+
     // Draw labels
     vectorState.labels.forEach(label => {
       try {
@@ -504,11 +652,13 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     });
 
     ctx.restore();
-  }, [vectorState, vectorState.annos, vectorState.plots, vectorState.plotOffsets, vectorState.activeView, scale, offX, offY, displayMode]);
+  }, [vectorState, vectorState.annos, vectorState.plots, vectorState.plotOffsets, vectorState.activeView, vectorState.colorMode, vectorState.plotFilters, vectorState.inventory, scale, offX, offY, displayMode]);
 
   // Batched draw via requestAnimationFrame to prevent redundant redraws
   const requestDraw = useCallback(() => {
-    if (drawRequestRef.current) return;
+    if (drawRequestRef.current) {
+      cancelAnimationFrame(drawRequestRef.current);
+    }
     drawRequestRef.current = requestAnimationFrame(() => {
       drawRequestRef.current = null;
       render();
@@ -913,6 +1063,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
   // Render on changes via requestAnimationFrame
   useEffect(() => {
+    console.log('useEffect[requestDraw] firing');
     requestDraw();
   }, [requestDraw]);
 
