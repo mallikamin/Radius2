@@ -102,6 +102,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('projects');
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  const [toasts, setToasts] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
   
   // Expose setActiveTab for Vector navigation
   useEffect(() => {
@@ -144,48 +148,84 @@ export default function App() {
     delete api.defaults.headers.common['Authorization'];
     setUser(null);
   };
-  
-  // Check for existing login on mount
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    const savedUser = localStorage.getItem('user');
-    if (token && savedUser) {
-      try {
-        const userData = JSON.parse(savedUser);
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        // Verify token is still valid
-        api.get('/auth/me').then(res => {
-          setUser(res.data);
-        }).catch(() => {
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-        });
-      } catch (e) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-      }
-    }
-  }, []);
 
-  // Close dropdown when clicking outside - MUST be before conditional returns
+  // CSV download helper for duplicate reports
+  const downloadCSV = (data, filename) => {
+    if (!data || !data.length) return;
+    const headers = Object.keys(data[0]);
+    const csvRows = [headers.join(',')];
+    for (const row of data) {
+      csvRows.push(headers.map(h => `"${String(row[h] ?? '').replace(/"/g, '""')}"`).join(','));
+    }
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // Toast system
+  const addToast = (title, message, type = 'info') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, title, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
+  };
+  useEffect(() => { window.showToast = addToast; return () => { window.showToast = null; }; }, []);
+
+  // Notification polling (every 30s when logged in)
   useEffect(() => {
-    if (!showMoreMenu) return;
-    
-    const handleClickOutside = (event) => {
-      const target = event.target;
-      const menuElement = document.querySelector('.more-menu-container');
-      const buttonElement = document.querySelector('.more-menu-button');
-      
-      if (menuElement && buttonElement && 
-          !menuElement.contains(target) && 
-          !buttonElement.contains(target)) {
-        setShowMoreMenu(false);
+    if (!user) return;
+    const fetchNotifs = async () => {
+      try {
+        const res = await api.get('/notifications/unread');
+        setNotifications(res.data.notifications || []);
+        setUnreadCount(res.data.count || 0);
+        // Show toast for new notifications
+        const lastCheck = parseInt(localStorage.getItem('lastNotifCheck') || '0');
+        const newOnes = (res.data.notifications || []).filter(n => new Date(n.created_at + 'Z').getTime() > lastCheck);
+        newOnes.slice(0, 3).forEach(n => addToast(n.title, n.message || '', n.type === 'search_alert' ? 'warning' : 'info'));
+        localStorage.setItem('lastNotifCheck', String(Date.now()));
+      } catch (e) {
+        if (e.response?.status === 401) {
+          handleLogout();
+          addToast('Session Expired', 'Please log in again', 'warning');
+        }
       }
     };
-    
+    fetchNotifs();
+    const interval = setInterval(fetchNotifs, 30000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  const markNotifRead = async (nid) => {
+    try { await api.post(`/notifications/${nid}/read`); setNotifications(prev => prev.filter(n => n.id !== nid)); setUnreadCount(prev => Math.max(0, prev - 1)); } catch (e) { /* silent */ }
+  };
+  const markAllRead = async () => {
+    try { await api.post('/notifications/read-all'); setNotifications([]); setUnreadCount(0); } catch (e) { /* silent */ }
+  };
+
+
+  // Close dropdowns when clicking outside - MUST be before conditional returns
+  useEffect(() => {
+    if (!showMoreMenu && !showNotifPanel) return;
+
+    const handleClickOutside = (event) => {
+      const target = event.target;
+      if (showMoreMenu) {
+        const menuElement = document.querySelector('.more-menu-container');
+        const buttonElement = document.querySelector('.more-menu-button');
+        if (menuElement && buttonElement && !menuElement.contains(target) && !buttonElement.contains(target)) {
+          setShowMoreMenu(false);
+        }
+      }
+      if (showNotifPanel) {
+        const notifPanel = target.closest('[data-notif-panel]');
+        if (!notifPanel) setShowNotifPanel(false);
+      }
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showMoreMenu]);
+  }, [showMoreMenu, showNotifPanel]);
 
   // Show login if not authenticated
   if (!user) {
@@ -203,6 +243,7 @@ export default function App() {
     // Role-based access rules
     const roleAccess = {
       admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector', 'settings'],
+      cco: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector', 'settings'],
       manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'media', 'vector'],
       creator: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector'],
       user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'media', 'vector'],
@@ -212,33 +253,28 @@ export default function App() {
     return roleAccess[role]?.includes(tabId) || false;
   };
   
-  // Primary tabs - always visible
+  // Primary tabs - always visible in header
   const primaryTabs = [
-    { id: 'dashboard', label: 'Dashboard' },
-    { id: 'projects', label: 'Projects' },
-    { id: 'inventory', label: 'Inventory' },
-    { id: 'transactions', label: 'Transactions' }
-  ].filter(tab => canAccess(tab.id));
-  
-  // Financial menu items
-  const financialTabs = [
-    { id: 'receipts', label: 'Receipts' },
-    { id: 'payments', label: 'Payments' },
-    { id: 'reports', label: 'Reports' }
-  ].filter(tab => canAccess(tab.id));
-  
-  // Management menu items
-  const managementTabs = [
-    { id: 'interactions', label: 'Interactions' },
-    { id: 'customers', label: 'Customers' },
-    { id: 'brokers', label: 'Brokers' },
+    { id: 'customers', label: 'Customers & Leads' },
     { id: 'campaigns', label: 'Campaigns' },
-    { id: 'media', label: 'Media Library' },
-    { id: 'vector', label: 'Vector' }
+    { id: 'interactions', label: 'Interactions' },
+    { id: 'reports', label: 'Reports' },
+    { id: 'vector', label: 'Vector' },
+    { id: 'dashboard', label: 'Analytics' }
   ].filter(tab => canAccess(tab.id));
-  
+
+  // More menu items - icon grid
+  const moreTabs = [
+    { id: 'projects', label: 'Projects', icon: '\u{1F3D7}' },
+    { id: 'inventory', label: 'Inventory', icon: '\u{1F4E6}' },
+    { id: 'transactions', label: 'Transactions', icon: '\u{1F4B1}' },
+    { id: 'receipts', label: 'Receipts', icon: '\u{1F4C4}' },
+    { id: 'payments', label: 'Payments', icon: '\u{1F4B8}' },
+    { id: 'media', label: 'Media Library', icon: '\u{1F4F7}' }
+  ].filter(tab => canAccess(tab.id));
+
   // All tabs for reference
-  const allTabs = [...primaryTabs, ...financialTabs, ...managementTabs];
+  const allTabs = [...primaryTabs, ...moreTabs];
   if (canAccess('settings')) allTabs.push({ id: 'settings', label: 'Settings' });
   
   // Show loading while checking auth, then show login if not authenticated
@@ -257,8 +293,40 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <h1 className="text-xl font-semibold tracking-tight text-gray-900">ORBIT</h1>
           <nav className="flex items-center gap-2">
-            <div className="text-sm text-gray-600 mr-4">
+            <div className="text-sm text-gray-600 mr-2">
               {user.name} <span className="text-gray-400">({user.role})</span>
+            </div>
+            {/* Notification Bell */}
+            <div className="relative" data-notif-panel>
+              <button onClick={() => setShowNotifPanel(!showNotifPanel)}
+                className="relative p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center font-medium">{unreadCount > 9 ? '9+' : unreadCount}</span>
+                )}
+              </button>
+              {showNotifPanel && (
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                    <span className="font-semibold text-sm text-gray-900">Notifications</span>
+                    {unreadCount > 0 && <button onClick={markAllRead} className="text-xs text-blue-600 hover:text-blue-800">Mark all read</button>}
+                  </div>
+                  <div className="overflow-y-auto max-h-72">
+                    {notifications.length === 0 ? (
+                      <div className="px-4 py-8 text-center text-sm text-gray-400">No new notifications</div>
+                    ) : notifications.map(n => (
+                      <div key={n.id} onClick={() => { markNotifRead(n.id); setShowNotifPanel(false); }}
+                        className="px-4 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
+                        <div className="text-sm font-medium text-gray-900">{n.title}</div>
+                        {n.message && <div className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</div>}
+                        <div className="text-xs text-gray-400 mt-1">{new Date(n.created_at).toLocaleString()}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             <button
               onClick={handleLogout}
@@ -276,45 +344,41 @@ export default function App() {
               ))}
             </div>
             
-            {/* More menu dropdown */}
+            {/* More menu dropdown - icon grid */}
+            {moreTabs.length > 0 && (
             <div className="relative">
-              <button 
+              <button
                 onClick={() => setShowMoreMenu(!showMoreMenu)}
-                className={`more-menu-button px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${showMoreMenu || financialTabs.some(t => t.id === activeTab) || managementTabs.some(t => t.id === activeTab) ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
+                className={`more-menu-button px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${showMoreMenu || moreTabs.some(t => t.id === activeTab) ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
                 More
               </button>
-              
+
               {showMoreMenu && (
-                <div className="more-menu-container absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
-                  <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Financial</div>
-                  {financialTabs.map(tab => (
-                    <button
-                      key={tab.id}
-                      onClick={() => { setActiveTab(tab.id); setShowMoreMenu(false); }}
-                      className={`w-full text-left px-4 py-2 text-sm transition-colors ${activeTab === tab.id ? 'bg-gray-100 text-gray-900 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                      {tab.label}
-                    </button>
-                  ))}
-                  <div className="border-t border-gray-100 my-1"></div>
-                  <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Management</div>
-                  {managementTabs.map(tab => (
-                    <button
-                      key={tab.id}
-                      onClick={() => { setActiveTab(tab.id); setShowMoreMenu(false); }}
-                      className={`w-full text-left px-4 py-2 text-sm transition-colors ${activeTab === tab.id ? 'bg-gray-100 text-gray-900 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
-                      {tab.label}
-                    </button>
-                  ))}
+                <div className="more-menu-container absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50">
+                  <div className="grid grid-cols-2 gap-1">
+                    {moreTabs.map(tab => (
+                      <button
+                        key={tab.id}
+                        onClick={() => { setActiveTab(tab.id); setShowMoreMenu(false); }}
+                        className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-colors ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                        <span className="text-base">{tab.icon}</span>
+                        <span className="font-medium">{tab.label}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
+            )}
             
-            {/* Settings button - less prominent */}
-            <button 
+            {/* Settings button - admin/cco only */}
+            {canAccess('settings') && (
+            <button
               onClick={() => setActiveTab('settings')}
               className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === 'settings' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}>
               Settings
             </button>
+            )}
           </nav>
         </div>
       </header>
@@ -328,12 +392,26 @@ export default function App() {
         {activeTab === 'reports' && <ReportsView />}
         {activeTab === 'interactions' && <InteractionsView />}
         {activeTab === 'customers' && <CustomersView />}
-        {activeTab === 'brokers' && <BrokersView />}
         {activeTab === 'campaigns' && <CampaignsView />}
         {activeTab === 'media' && <MediaView />}
         {activeTab === 'vector' && <VectorView />}
         {activeTab === 'settings' && <SettingsView />}
       </main>
+      {/* Toast Container */}
+      <div className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 max-w-sm">
+        {toasts.map(t => (
+          <div key={t.id} className={`px-4 py-3 rounded-lg shadow-lg border text-sm animate-slide-in ${
+            t.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' :
+            t.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' :
+            t.type === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-800' :
+            'bg-blue-50 border-blue-200 text-blue-800'
+          }`}>
+            <div className="font-medium">{t.title}</div>
+            {t.message && <div className="text-xs mt-0.5 opacity-80">{t.message}</div>}
+          </div>
+        ))}
+      </div>
+      <style>{`@keyframes slide-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } .animate-slide-in { animation: slide-in 0.3s ease-out; }`}</style>
     </div>
   );
 }
@@ -1378,6 +1456,442 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
 // CUSTOMERS VIEW
 // ============================================
 function CustomersView() {
+  const [subTab, setSubTab] = useState('pipeline');
+  const role = getUserRole();
+  const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
+
+  // Unified search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchType, setSearchType] = useState('mobile');
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+
+  const handleUnifiedSearch = async () => {
+    if (!searchQuery || searchQuery.length < 2) return;
+    setSearching(true);
+    try {
+      const res = await api.get(`/search/unified?q=${encodeURIComponent(searchQuery)}&search_type=${searchType}`);
+      setSearchResults(res.data.results);
+    } catch (e) { console.error(e); }
+    finally { setSearching(false); }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header with search */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">Customers & Leads</h2>
+          <p className="text-sm text-gray-500 mt-1">Unified customer and lead management</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select value={searchType} onChange={e => setSearchType(e.target.value)}
+            className="px-3 py-2 text-sm border rounded-lg bg-white">
+            <option value="mobile">Mobile</option>
+            <option value="name">Name</option>
+          </select>
+          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleUnifiedSearch()}
+            placeholder="Search customers & leads..."
+            className="px-3 py-2 text-sm border rounded-lg w-64" />
+          <button onClick={handleUnifiedSearch} disabled={searching}
+            className="bg-gray-900 text-white px-4 py-2 text-sm rounded-lg hover:bg-gray-800 disabled:opacity-50">
+            {searching ? '...' : 'Search'}
+          </button>
+        </div>
+      </div>
+
+      {/* Search Results Panel */}
+      {searchResults && (
+        <div className="bg-white rounded-2xl shadow-sm border p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold">Search Results ({searchResults.length})</h3>
+            <button onClick={() => setSearchResults(null)} className="text-xs text-gray-400 hover:text-gray-600">Clear</button>
+          </div>
+          {searchResults.length === 0 ? (
+            <p className="text-sm text-gray-400">No matches found</p>
+          ) : (
+            <div className="space-y-2">
+              {searchResults.map((r, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${r.type === 'customer' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                      {r.type}
+                    </span>
+                    <div>
+                      <div className="text-sm font-medium">{r.name}</div>
+                      <div className="text-xs text-gray-500">{r.entity_id} {r.mobile && `| ${r.mobile}`}</div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    {r.owner_rep && <div className="text-xs text-gray-500">Assigned to: <span className="font-medium">{r.owner_rep}</span></div>}
+                    {r.pipeline_stage && <span className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full">{r.pipeline_stage}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sub-tabs */}
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+        <button onClick={() => setSubTab('pipeline')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${subTab === 'pipeline' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+          Pipeline
+        </button>
+        <button onClick={() => setSubTab('customers')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${subTab === 'customers' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+          Customers
+        </button>
+        <button onClick={() => setSubTab('brokers')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${subTab === 'brokers' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+          Brokers
+        </button>
+      </div>
+
+      {subTab === 'pipeline' && <PipelineView />}
+      {subTab === 'customers' && <CustomerTableView />}
+      {subTab === 'brokers' && <BrokersView />}
+    </div>
+  );
+}
+
+// ============================================
+// PIPELINE VIEW (Lead Pipeline)
+// ============================================
+function PipelineView() {
+  const [pipelineData, setPipelineData] = useState(null);
+  const [stages, setStages] = useState([]);
+  const [activeStage, setActiveStage] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const [repFilter, setRepFilter] = useState('');
+  const [reps, setReps] = useState([]);
+  const [selectedLeads, setSelectedLeads] = useState([]);
+  const [assignRepId, setAssignRepId] = useState('');
+  const [showLeadDetail, setShowLeadDetail] = useState(null);
+  const role = getUserRole();
+  const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
+
+  useEffect(() => { loadPipeline(); loadReps(); }, [repFilter]);
+  const loadPipeline = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (repFilter) params.append('rep_id', repFilter);
+      const res = await api.get(`/leads/pipeline?${params}`);
+      setPipelineData(res.data);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+  const loadReps = async () => {
+    try { const res = await api.get('/company-reps'); setReps(res.data); } catch (e) { /* silent */ }
+  };
+
+  const handleBulkAssign = async () => {
+    if (!selectedLeads.length || !assignRepId) return;
+    try {
+      await api.post('/leads/bulk-assign', { lead_ids: selectedLeads, rep_id: assignRepId });
+      if (window.showToast) window.showToast('Leads Assigned', `${selectedLeads.length} leads assigned`, 'success');
+      setSelectedLeads([]); setAssignRepId(''); loadPipeline();
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Assignment failed', 'error'); }
+  };
+
+  const handleStageChange = async (leadId, newStage) => {
+    const terminalStages = allStages.filter(s => s.is_terminal).map(s => s.stage);
+    if (terminalStages.includes(newStage)) {
+      if (!confirm(`Moving to "${newStage}" will remove this lead from the active pipeline. Continue?`)) return;
+    }
+    try {
+      await api.put(`/leads/${leadId}/stage`, { stage: newStage });
+      loadPipeline();
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  const allStages = pipelineData?.pipeline || [];
+  const allLeads = allStages.flatMap(s => s.leads);
+  const displayLeads = activeStage === 'all' ? allLeads : (allStages.find(s => s.stage === activeStage)?.leads || []);
+
+  return (
+    <div className="space-y-4">
+      {/* Filters row */}
+      <div className="flex items-center gap-3 flex-wrap">
+        {isAdminLike && (
+          <select value={repFilter} onChange={e => { setRepFilter(e.target.value); setLoading(true); }}
+            className="px-3 py-2 text-sm border rounded-lg bg-white">
+            <option value="">All Reps</option>
+            {reps.map(r => <option key={r.id} value={r.rep_id}>{r.name}</option>)}
+          </select>
+        )}
+        {/* Bulk assign */}
+        {isAdminLike && selectedLeads.length > 0 && (
+          <div className="flex items-center gap-2 ml-auto bg-blue-50 px-3 py-1.5 rounded-lg">
+            <span className="text-sm text-blue-700 font-medium">{selectedLeads.length} selected</span>
+            <select value={assignRepId} onChange={e => setAssignRepId(e.target.value)}
+              className="px-2 py-1 text-sm border rounded bg-white">
+              <option value="">Assign to...</option>
+              {reps.map(r => <option key={r.id} value={r.rep_id}>{r.name}</option>)}
+            </select>
+            <button onClick={handleBulkAssign} disabled={!assignRepId}
+              className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Assign</button>
+            <button onClick={() => setSelectedLeads([])} className="text-xs text-blue-500 hover:text-blue-700">Clear</button>
+          </div>
+        )}
+      </div>
+
+      {/* Stage tabs */}
+      <div className="flex gap-1 overflow-x-auto pb-2">
+        <button onClick={() => setActiveStage('all')}
+          className={`px-3 py-1.5 text-sm font-medium rounded-full whitespace-nowrap transition-all ${activeStage === 'all' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+          All ({pipelineData?.total || 0})
+        </button>
+        {allStages.map(s => (
+          <button key={s.stage} onClick={() => setActiveStage(s.stage)}
+            className={`px-3 py-1.5 text-sm font-medium rounded-full whitespace-nowrap transition-all flex items-center gap-1.5 ${activeStage === s.stage ? 'text-white' : 'text-gray-600 hover:bg-gray-200'}`}
+            style={activeStage === s.stage ? { backgroundColor: s.color } : { backgroundColor: '#f3f4f6' }}>
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }}></span>
+            {s.stage} ({s.count})
+          </button>
+        ))}
+      </div>
+
+      {/* Lead cards */}
+      {loading ? <Loader /> : displayLeads.length === 0 ? <Empty msg="No leads in this stage" /> : (
+        <div className="space-y-2">
+          {displayLeads.map(lead => {
+            const stageInfo = allStages.find(s => s.stage === lead.pipeline_stage);
+            return (
+              <div key={lead.id} className="bg-white rounded-xl border p-4 hover:shadow-sm transition-shadow">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    {isAdminLike && (
+                      <input type="checkbox" checked={selectedLeads.includes(lead.id)}
+                        onChange={e => setSelectedLeads(prev => e.target.checked ? [...prev, lead.id] : prev.filter(x => x !== lead.id))}
+                        className="mt-1 rounded" />
+                    )}
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setShowLeadDetail(lead)}>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm">{lead.name}</span>
+                        <span className="text-xs font-mono text-gray-400">{lead.lead_id}</span>
+                        {lead.status === 'converted' && <span className="px-1.5 py-0.5 text-xs bg-green-200 text-green-800 rounded-full font-semibold">Won</span>}
+                        {lead.status === 'lost' && <span className="px-1.5 py-0.5 text-xs bg-red-200 text-red-800 rounded-full font-semibold">Lost</span>}
+                        {lead.is_stale && lead.status !== 'converted' && lead.status !== 'lost' && <span className="px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full">Stale</span>}
+                        {lead.converted_customer_id && lead.status !== 'converted' && <span className="px-1.5 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">Customer</span>}
+                        {lead.converted_broker_id && lead.status !== 'converted' && <span className="px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded-full">Broker</span>}
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                        {lead.mobile && <span>{lead.mobile}</span>}
+                        {lead.campaign_name && <span>via {lead.campaign_name}</span>}
+                        {lead.assigned_rep && <span>Rep: {lead.assigned_rep}</span>}
+                        {lead.days_since_contact !== null && <span>{lead.days_since_contact}d ago</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <select value={lead.pipeline_stage} onChange={e => handleStageChange(lead.id, e.target.value)}
+                      className="px-2 py-1 text-xs border rounded-lg bg-white"
+                      style={{ borderColor: stageInfo?.color || '#d1d5db' }}>
+                      {allStages.map(s => <option key={s.stage} value={s.stage}>{s.stage}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Lead Detail Modal */}
+      {showLeadDetail && <LeadDetailModal lead={showLeadDetail} onClose={() => { setShowLeadDetail(null); loadPipeline(); }}
+        stages={allStages} reps={reps} />}
+    </div>
+  );
+}
+
+// ============================================
+// LEAD DETAIL MODAL
+// ============================================
+function LeadDetailModal({ lead, onClose, stages, reps }) {
+  const [interactions, setInteractions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showLogForm, setShowLogForm] = useState(false);
+  const [logForm, setLogForm] = useState({ interaction_type: 'call', notes: '', next_follow_up: '' });
+  const [currentStage, setCurrentStage] = useState(lead.pipeline_stage);
+  const role = getUserRole();
+  const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+
+  useEffect(() => { loadInteractions(); }, []);
+  const loadInteractions = async () => {
+    try { const res = await api.get(`/interactions?lead_id=${lead.lead_id}&limit=50`); setInteractions(res.data); }
+    catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const handleStageChange = async (newStage) => {
+    const terminalStages = stages.filter(s => s.is_terminal).map(s => s.stage);
+    if (terminalStages.includes(newStage)) {
+      if (!confirm(`Moving to "${newStage}" will remove this lead from the active pipeline. Continue?`)) return;
+    }
+    try {
+      await api.put(`/leads/${lead.id}/stage`, { stage: newStage });
+      setCurrentStage(newStage);
+      if (window.showToast) window.showToast('Stage Updated', `Lead moved to ${newStage}`, 'success');
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  const handleLogInteraction = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post('/interactions', {
+        company_rep_id: currentUser.id,
+        lead_id: lead.lead_id,
+        interaction_type: logForm.interaction_type,
+        notes: logForm.notes,
+        next_follow_up: logForm.next_follow_up || null
+      });
+      setShowLogForm(false); setLogForm({ interaction_type: 'call', notes: '', next_follow_up: '' });
+      loadInteractions();
+      if (window.showToast) window.showToast('Logged', 'Interaction recorded', 'success');
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  const handleConvert = async (convertTo) => {
+    if (!confirm(`Sync "${lead.name}" to ${convertTo} database?`)) return;
+    try {
+      const res = await api.post(`/leads/${lead.id}/convert`, { convert_to: convertTo });
+      const msg = res.data.linked_existing
+        ? `Linked to existing ${convertTo} (${res.data.entity_id})`
+        : `New ${convertTo} created (${res.data.entity_id})`;
+      if (window.showToast) window.showToast('Synced', msg, 'success');
+      onClose(); // Refresh pipeline
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  const handleRequestAssignment = async () => {
+    const reason = prompt('Why do you want this lead assigned to you?');
+    if (reason === null) return;
+    try {
+      await api.post(`/leads/${lead.id}/request-assignment`, { reason });
+      if (window.showToast) window.showToast('Requested', 'Assignment request submitted', 'success');
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  return (
+    <Modal title={`Lead: ${lead.name}`} onClose={onClose} wide>
+      <div className="space-y-5">
+        {/* Lead info */}
+        <div className="grid grid-cols-2 gap-3 bg-gray-50 p-4 rounded-lg text-sm">
+          <div><span className="text-xs text-gray-500 block">Lead ID</span><span className="font-mono">{lead.lead_id}</span></div>
+          <div><span className="text-xs text-gray-500 block">Mobile</span>{lead.mobile || 'N/A'}</div>
+          <div><span className="text-xs text-gray-500 block">Email</span>{lead.email || 'N/A'}</div>
+          <div><span className="text-xs text-gray-500 block">Campaign</span>{lead.campaign_name || 'Direct'}</div>
+          <div><span className="text-xs text-gray-500 block">Assigned Rep</span>{lead.assigned_rep || 'Unassigned'}</div>
+          <div><span className="text-xs text-gray-500 block">Created</span>{new Date(lead.created_at).toLocaleDateString()}</div>
+        </div>
+
+        {/* Pipeline stage selector */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-2">Pipeline Stage</label>
+          <div className="flex gap-1 flex-wrap">
+            {stages.map(s => (
+              <button key={s.stage} onClick={() => handleStageChange(s.stage)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${currentStage === s.stage ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                style={currentStage === s.stage ? { backgroundColor: s.color } : {}}>
+                {s.stage}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowLogForm(!showLogForm)}
+            className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800">
+            Log Interaction
+          </button>
+          {lead.converted_customer_id ? (
+            <span className="px-3 py-1.5 text-sm bg-green-50 text-green-700 rounded-lg border border-green-200">Synced to Customer DB</span>
+          ) : (
+            <button onClick={() => handleConvert('customer')}
+              className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">
+              Sync to Customer DB
+            </button>
+          )}
+          {lead.converted_broker_id ? (
+            <span className="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 rounded-lg border border-purple-200">Synced to Broker DB</span>
+          ) : (
+            <button onClick={() => handleConvert('broker')}
+              className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+              Sync to Broker DB
+            </button>
+          )}
+          {role !== 'viewer' && lead.assigned_rep_id !== currentUser.rep_id && (
+            <button onClick={handleRequestAssignment}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+              Request Assignment
+            </button>
+          )}
+        </div>
+
+        {/* Log interaction form */}
+        {showLogForm && (
+          <form onSubmit={handleLogInteraction} className="bg-blue-50 p-4 rounded-lg space-y-3">
+            <div className="flex gap-3">
+              <select value={logForm.interaction_type} onChange={e => setLogForm({...logForm, interaction_type: e.target.value})}
+                className="px-3 py-2 text-sm border rounded-lg bg-white">
+                <option value="call">Call</option>
+                <option value="message">Message</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="meeting">Meeting</option>
+              </select>
+              <input type="date" value={logForm.next_follow_up} onChange={e => setLogForm({...logForm, next_follow_up: e.target.value})}
+                className="px-3 py-2 text-sm border rounded-lg" placeholder="Follow-up date" />
+            </div>
+            <textarea value={logForm.notes} onChange={e => setLogForm({...logForm, notes: e.target.value})}
+              placeholder="Notes..." rows={2} className="w-full px-3 py-2 text-sm border rounded-lg" />
+            <div className="flex gap-2">
+              <button type="submit" className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg">Save</button>
+              <button type="button" onClick={() => setShowLogForm(false)} className="px-3 py-1.5 text-sm text-gray-600">Cancel</button>
+            </div>
+          </form>
+        )}
+
+        {/* Interaction history */}
+        <div>
+          <h4 className="text-sm font-semibold text-gray-700 mb-2">Interaction History</h4>
+          {loading ? <Loader /> : interactions.length === 0 ? (
+            <p className="text-sm text-gray-400">No interactions yet</p>
+          ) : (
+            <div className="space-y-2 max-h-48 overflow-y-auto">
+              {interactions.map(i => (
+                <div key={i.id} className="flex items-start gap-3 p-2 bg-gray-50 rounded-lg text-sm">
+                  <span className={`px-2 py-0.5 text-xs rounded-full font-medium mt-0.5 ${
+                    i.interaction_type === 'call' ? 'bg-green-100 text-green-700' :
+                    i.interaction_type === 'whatsapp' ? 'bg-emerald-100 text-emerald-700' :
+                    i.interaction_type === 'meeting' ? 'bg-blue-100 text-blue-700' :
+                    'bg-gray-100 text-gray-700'
+                  }`}>{i.interaction_type}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-gray-700">{i.notes || 'No notes'}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {i.rep_name} | {new Date(i.created_at).toLocaleString()}
+                      {i.next_follow_up && ` | Follow-up: ${i.next_follow_up}`}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ============================================
+// CUSTOMER TABLE VIEW (sub-tab of Customers & Leads)
+// ============================================
+function CustomerTableView() {
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -1385,6 +1899,7 @@ function CustomersView() {
   const [form, setForm] = useState({ name: '', mobile: '', address: '', cnic: '', email: '' });
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [showDetail, setShowDetail] = useState(null);
 
   useEffect(() => { loadCustomers(); }, []);
   const loadCustomers = async () => {
@@ -1396,28 +1911,33 @@ function CustomersView() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      if (editing) { await api.put(`/customers/${editing.id}`, form); }
-      else { await api.post('/customers', form); }
+      const res = editing ? await api.put(`/customers/${editing.id}`, form) : await api.post('/customers', form);
+      if (res.data?.warnings?.length) {
+        if (window.showToast) res.data.warnings.forEach(w => window.showToast('Duplicate Warning', w, 'warning'));
+      }
       setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); loadCustomers();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+    } catch (e) {
+      if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Error', 'error');
+      else alert(e.response?.data?.detail || 'Error');
+    }
   };
 
   const handleDelete = async (c) => {
     const role = getUserRole();
-    if (role === 'creator') { alert('Creator role cannot delete records.'); return; }
+    if (role === 'creator') { if (window.showToast) window.showToast('Error', 'Creator role cannot delete records', 'error'); return; }
     if (role === 'admin') {
       if (!confirm(`Delete "${c.name}"?`)) return;
       try { await api.delete(`/customers/${c.id}`); loadCustomers(); }
-      catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Error', 'error'); }
     } else {
       const reason = prompt(`Request deletion of "${c.name}"?\nProvide a reason:`);
       if (reason === null) return;
       try {
         const res = await api.delete(`/customers/${c.id}`, { data: { reason } });
         if (res.data.pending) {
-          alert(`Deletion request submitted (${res.data.request_id}). An admin will review it.`);
+          if (window.showToast) window.showToast('Submitted', `Deletion request ${res.data.request_id} submitted`, 'info');
         } else { loadCustomers(); }
-      } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Error', 'error'); }
     }
   };
 
@@ -1430,11 +1950,17 @@ function CustomersView() {
     catch (e) { setImportResult({ success: 0, errors: [e.message] }); }
   };
 
+  const viewDetail = async (c) => {
+    try { const res = await api.get(`/customers/${c.id}/details`); setShowDetail(res.data); }
+    catch (e) { console.error(e); }
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div><h2 className="text-2xl font-semibold text-gray-900">Customers</h2><p className="text-sm text-gray-500 mt-1">{customers.length} total</p></div>
-        <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); setShowModal(true); }} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Customer</button>
+        <p className="text-sm text-gray-500">{customers.length} customers</p>
+        <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); setShowModal(true); }}
+          className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Customer</button>
       </div>
 
       {loading ? <Loader /> : customers.length === 0 ? <Empty msg="No customers" /> : (
@@ -1451,9 +1977,12 @@ function CustomersView() {
               {customers.map(c => (
                 <tr key={c.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{c.customer_id}</td>
-                  <td className="px-6 py-4"><div className="text-sm font-medium">{c.name}</div>{c.email && <div className="text-xs text-gray-400">{c.email}</div>}</td>
+                  <td className="px-6 py-4 cursor-pointer" onClick={() => viewDetail(c)}>
+                    <div className="text-sm font-medium text-blue-600 hover:text-blue-800">{c.name}</div>
+                    {c.email && <div className="text-xs text-gray-400">{c.email}</div>}
+                  </td>
                   <td className="px-6 py-4 text-sm">{c.mobile}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{c.cnic || '—'}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{c.cnic || '-'}</td>
                   <td className="px-6 py-4 text-right">
                     <button onClick={() => openEdit(c)} className="text-gray-400 hover:text-gray-600 mr-3">Edit</button>
                     {getUserRole() !== 'creator' && (
@@ -1482,8 +2011,19 @@ function CustomersView() {
               <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">{editing ? 'Update' : 'Create'}</button>
             </div>
           </form>
+          {editing && (
+            <div className="border-t pt-4 mt-4">
+              <MediaManager
+                entityType="customer"
+                entityId={editing.id || editing.customer_id}
+                onUpload={() => {}}
+              />
+            </div>
+          )}
         </Modal>
       )}
+
+      {showDetail && <CustomerDetailModal customer={showDetail} onClose={() => setShowDetail(null)} />}
     </div>
   );
 }
@@ -1647,6 +2187,15 @@ function BrokersView() {
               <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">{editing ? 'Update' : 'Create'}</button>
             </div>
           </form>
+          {editing && (
+            <div className="border-t pt-4 mt-4">
+              <MediaManager
+                entityType="broker"
+                entityId={editing.id || editing.broker_id}
+                onUpload={() => {}}
+              />
+            </div>
+          )}
         </Modal>
       )}
     </div>
@@ -2208,8 +2757,8 @@ function InteractionsView() {
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{i.interaction_id}</td>
                   <td className="px-6 py-4 text-sm">{i.rep_name}</td>
                   <td className="px-6 py-4">
-                    <div className="text-sm font-medium">{i.customer_name || i.broker_name}</div>
-                    <div className="text-xs text-gray-400">{i.customer_id ? 'Customer' : 'Broker'}</div>
+                    <div className="text-sm font-medium">{i.customer_name || i.broker_name || i.lead_name || '-'}</div>
+                    <div className="text-xs text-gray-400">{i.customer_id ? 'Customer' : i.broker_id ? 'Broker' : i.lead_id ? 'Lead' : '-'}</div>
                   </td>
                   <td className="px-6 py-4 text-center">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -2289,18 +2838,22 @@ function CampaignsView() {
   const [leadForm, setLeadForm] = useState({ name: '', mobile: '', email: '', assigned_rep_id: '', lead_type: 'prospect', notes: '' });
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [stages, setStages] = useState([]);
+  const [campaignSubTab, setCampaignSubTab] = useState('campaigns');
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
     try {
-      const [cmpRes, sumRes, repRes] = await Promise.all([
+      const [cmpRes, sumRes, repRes, stgRes] = await Promise.all([
         api.get('/campaigns').catch(() => ({ data: [] })),
         api.get('/campaigns/summary').catch(() => ({ data: { total_campaigns: 0, active_campaigns: 0, total_leads: 0, converted_leads: 0, total_budget: 0, conversion_rate: 0 } })),
-        api.get('/company-reps').catch(() => ({ data: [] }))
+        api.get('/company-reps').catch(() => ({ data: [] })),
+        api.get('/pipeline-stages').catch(() => ({ data: [] }))
       ]);
       setCampaigns(cmpRes.data || []);
       setSummary(sumRes.data);
       setReps(repRes.data || []);
+      setStages(stgRes.data || []);
     } catch (e) { console.error(e); setSummary({ total_campaigns: 0, active_campaigns: 0, total_leads: 0, converted_leads: 0, total_budget: 0, conversion_rate: 0 }); }
     finally { setLoading(false); }
   };
@@ -2331,7 +2884,17 @@ function CampaignsView() {
       setLeadForm({ name: '', mobile: '', email: '', assigned_rep_id: '', notes: '' });
       if (selectedCampaign) loadLeads(selectedCampaign);
       loadData();
-    } catch (e) { alert(e.response?.data?.detail || 'Error'); }
+      if (window.showToast) window.showToast('Success', 'Lead created successfully', 'success');
+    } catch (e) {
+      if (e.response?.status === 409 && e.response?.data?.detail?.duplicate) {
+        const dup = e.response.data.detail.duplicate;
+        const repInfo = dup.assigned_rep ? ` | Assigned to: ${dup.assigned_rep}` : '';
+        if (window.showToast) window.showToast('Duplicate Mobile', `Already exists as ${dup.type} ${dup.entity_id} — ${dup.name}${repInfo}`, 'error');
+        // Keep modal open so user can correct mobile
+      } else {
+        alert(e.response?.data?.detail?.message || e.response?.data?.detail || 'Error');
+      }
+    }
   };
 
   const handleImport = async () => {
@@ -2346,11 +2909,12 @@ function CampaignsView() {
     } catch (e) { setImportResult({ success: 0, errors: [e.message] }); }
   };
 
-  const updateLeadStatus = async (lead, status) => {
+  const updateLeadStage = async (lead, stage) => {
     try {
-      await api.put(`/leads/${lead.id}`, { status });
+      await api.put(`/leads/${lead.id}/stage`, { stage });
       if (selectedCampaign) loadLeads(selectedCampaign);
-    } catch (e) { alert('Error updating lead'); }
+      loadData();
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed to update stage', 'error'); }
   };
 
   const assignRep = async (lead, repId) => {
@@ -2360,14 +2924,17 @@ function CampaignsView() {
     } catch (e) { alert('Error assigning rep'); }
   };
 
-  const convertLead = async (lead, convertTo) => {
-    if (!confirm(`Convert "${lead.name}" to ${convertTo}? This will create a new ${convertTo} record.`)) return;
+  const syncLeadToDB = async (lead, convertTo) => {
+    if (!confirm(`Sync "${lead.name}" to ${convertTo} database? This will create or link a ${convertTo} record.`)) return;
     try {
-      await api.post(`/leads/${lead.id}/convert`, { convert_to: convertTo });
+      const res = await api.post(`/leads/${lead.id}/convert`, { convert_to: convertTo });
       if (selectedCampaign) loadLeads(selectedCampaign);
       loadData();
-      alert(`Lead converted to ${convertTo} successfully!`);
-    } catch (e) { alert(e.response?.data?.detail || 'Error converting lead'); }
+      const msg = res.data.linked_existing
+        ? `Linked to existing ${convertTo} (${res.data.entity_id})`
+        : `New ${convertTo} created (${res.data.entity_id})`;
+      if (window.showToast) window.showToast('Synced', msg, 'success');
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Sync failed', 'error'); }
   };
 
   return (
@@ -2375,9 +2942,27 @@ function CampaignsView() {
       <div className="flex items-center justify-between">
         <div><h2 className="text-2xl font-semibold text-gray-900">Campaigns</h2>
           <p className="text-sm text-gray-500 mt-1">Manage ad campaigns and leads</p></div>
-        <button onClick={() => setShowCampaignModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">New Campaign</button>
+        {campaignSubTab === 'campaigns' && (
+          <button onClick={() => setShowCampaignModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">New Campaign</button>
+        )}
       </div>
 
+      {/* Sub-tabs: Campaigns | Analytics */}
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+        <button onClick={() => setCampaignSubTab('campaigns')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${campaignSubTab === 'campaigns' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+          Campaigns
+        </button>
+        <button onClick={() => setCampaignSubTab('analytics')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${campaignSubTab === 'analytics' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+          Analytics
+        </button>
+      </div>
+
+      {campaignSubTab === 'analytics' && <CampaignAnalytics />}
+
+      {campaignSubTab === 'campaigns' && (
+      <>
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <SummaryCard label="Total Campaigns" value={summary.total_campaigns} />
@@ -2438,8 +3023,39 @@ function CampaignsView() {
             )}
             
             {importResult && (
-              <div className={`mb-4 p-3 rounded-lg text-sm ${importResult.success > 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                {importResult.success > 0 ? `✓ Imported ${importResult.success} leads` : 'Import failed'}
+              <div className="mb-4 space-y-2">
+                {importResult.success > 0 && (
+                  <div className="p-3 rounded-lg text-sm bg-green-50 text-green-700">
+                    Imported {importResult.success} lead{importResult.success > 1 ? 's' : ''} successfully
+                  </div>
+                )}
+                {importResult.errors?.length > 0 && (
+                  <div className="p-3 rounded-lg text-sm bg-red-50 text-red-700">
+                    <div className="font-medium">{importResult.errors.length} error{importResult.errors.length > 1 ? 's' : ''}</div>
+                    <ul className="mt-1 ml-4 list-disc text-xs max-h-24 overflow-y-auto">
+                      {importResult.errors.slice(0, 10).map((err, i) => <li key={i}>{err}</li>)}
+                      {importResult.errors.length > 10 && <li className="font-medium">...and {importResult.errors.length - 10} more</li>}
+                    </ul>
+                  </div>
+                )}
+                {importResult.duplicates?.length > 0 && (
+                  <div className="p-3 rounded-lg text-sm bg-amber-50 text-amber-700 border border-amber-200">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{importResult.duplicates.length} duplicate{importResult.duplicates.length > 1 ? 's' : ''} skipped</span>
+                      <button onClick={() => downloadCSV(importResult.duplicates.map(d => ({
+                        'Row': d.row, 'Uploaded Name': d.uploaded_name, 'Uploaded Mobile': d.uploaded_mobile,
+                        'System Type': d.system_type, 'System ID': d.system_entity_id,
+                        'System Name': d.system_name, 'System Mobile': d.system_mobile,
+                        'Assigned Rep': d.system_assigned_rep
+                      })), 'duplicate-leads-report.csv')} className="px-3 py-1 bg-amber-600 text-white text-xs rounded hover:bg-amber-700">
+                        Download CSV
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {importResult.success === 0 && !importResult.errors?.length && !importResult.duplicates?.length && (
+                  <div className="p-3 rounded-lg text-sm bg-red-50 text-red-700">Import failed</div>
+                )}
               </div>
             )}
 
@@ -2455,8 +3071,8 @@ function CampaignsView() {
                     <th className="text-left py-2 px-2 text-xs text-gray-500">Contact</th>
                     <th className="text-left py-2 px-2 text-xs text-gray-500">Rep</th>
                     <th className="text-left py-2 px-2 text-xs text-gray-500">Type</th>
-                    <th className="text-left py-2 px-2 text-xs text-gray-500">Status</th>
-                    <th className="text-right py-2 px-2 text-xs text-gray-500">Actions</th>
+                    <th className="text-left py-2 px-2 text-xs text-gray-500">Stage</th>
+                    <th className="text-right py-2 px-2 text-xs text-gray-500">Sync</th>
                   </tr></thead>
                   <tbody>
                     {leads.map(l => (
@@ -2469,7 +3085,7 @@ function CampaignsView() {
                         <td className="py-2 px-2">
                           <select value={l.rep_id || ''} onChange={e => assignRep(l, e.target.value)} className="text-xs rounded px-1 py-0.5 border">
                             <option value="">Unassigned</option>
-                            {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                            {reps.map(r => <option key={r.rep_id} value={r.rep_id}>{r.name}</option>)}
                           </select>
                         </td>
                         <td className="py-2 px-2">
@@ -2479,24 +3095,21 @@ function CampaignsView() {
                           }`}>{l.lead_type || 'prospect'}</span>
                         </td>
                         <td className="py-2 px-2">
-                          <select value={l.status} onChange={e => updateLeadStatus(l, e.target.value)}
-                            className={`text-xs rounded px-2 py-1 border-0 ${
-                              l.status === 'converted' ? 'bg-green-50 text-green-700' :
-                              l.status === 'lost' ? 'bg-red-50 text-red-700' :
-                              l.status === 'qualified' ? 'bg-blue-50 text-blue-700' : 'bg-gray-100'
-                            }`}>
-                            <option value="new">New</option>
-                            <option value="contacted">Contacted</option>
-                            <option value="qualified">Qualified</option>
-                            <option value="converted">Converted</option>
-                            <option value="lost">Lost</option>
+                          <select value={l.pipeline_stage || 'New'} onChange={e => updateLeadStage(l, e.target.value)}
+                            className="text-xs rounded px-2 py-1 border"
+                            style={{ borderColor: (stages.find(s => s.name === l.pipeline_stage) || {}).color || '#d1d5db' }}>
+                            {stages.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
                           </select>
                         </td>
                         <td className="py-2 px-2 text-right">
-                          {l.status !== 'converted' && (
+                          {l.converted_customer_id ? (
+                            <span className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded-full">Synced: Customer</span>
+                          ) : l.converted_broker_id ? (
+                            <span className="text-xs px-2 py-1 bg-purple-50 text-purple-700 rounded-full">Synced: Broker</span>
+                          ) : (
                             <div className="flex gap-1 justify-end">
-                              <button onClick={() => convertLead(l, 'customer')} className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="Convert to Customer">→ Customer</button>
-                              <button onClick={() => convertLead(l, 'broker')} className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded hover:bg-purple-100" title="Convert to Broker">→ Broker</button>
+                              <button onClick={() => syncLeadToDB(l, 'customer')} className="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="Sync to Customer DB">Sync Customer</button>
+                              <button onClick={() => syncLeadToDB(l, 'broker')} className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded hover:bg-purple-100" title="Sync to Broker DB">Sync Broker</button>
                             </div>
                           )}
                         </td>
@@ -2509,6 +3122,8 @@ function CampaignsView() {
           </div>
         </div>
       </div>
+      </>
+      )}
 
       {showCampaignModal && (
         <Modal title="New Campaign" onClose={() => setShowCampaignModal(false)}>
@@ -2566,6 +3181,294 @@ function CampaignsView() {
             </div>
           </form>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// CAMPAIGN ANALYTICS COMPONENT
+// ============================================
+function CampaignAnalytics() {
+  const [metrics, setMetrics] = useState(null);
+  const [repData, setRepData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [funnelView, setFunnelView] = useState('bar');
+  const [campaignFilter, setCampaignFilter] = useState('');
+  const [campaigns, setCampaigns] = useState([]);
+
+  useEffect(() => { loadAnalytics(); }, []);
+
+  const loadAnalytics = async (campId) => {
+    setLoading(true);
+    try {
+      const params = campId ? `?campaign_id=${campId}` : '';
+      const [mRes, rRes, cRes] = await Promise.all([
+        api.get(`/analytics/campaign-metrics${params}`).catch(() => ({ data: null })),
+        api.get(`/analytics/rep-performance${params}`).catch(() => ({ data: null })),
+        api.get('/campaigns').catch(() => ({ data: [] }))
+      ]);
+      setMetrics(mRes.data);
+      setRepData(rRes.data);
+      setCampaigns(cRes.data || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const handleFilterChange = (val) => {
+    setCampaignFilter(val);
+    loadAnalytics(val || undefined);
+  };
+
+  if (loading) return <Loader />;
+  if (!metrics) return <div className="text-center py-12 text-gray-400">No analytics data available</div>;
+
+  const funnelData = (metrics.funnel || []).filter(s => s.count > 0);
+  const funnelMax = funnelData.length > 0 ? Math.max(...funnelData.map(s => s.count)) : 1;
+
+  return (
+    <div className="space-y-6">
+      {/* Filter bar */}
+      <div className="flex items-center gap-4">
+        <select value={campaignFilter} onChange={e => handleFilterChange(e.target.value)}
+          className="border rounded-lg px-3 py-2 text-sm bg-white">
+          <option value="">All Campaigns</option>
+          {campaigns.map(c => <option key={c.id} value={c.campaign_id}>{c.name}</option>)}
+        </select>
+      </div>
+
+      {/* Overall KPI cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <SummaryCard label="Total Leads" value={metrics.overall?.total_leads} />
+        <SummaryCard label="Converted" value={metrics.overall?.converted} />
+        <SummaryCard label="Conversion Rate" value={`${metrics.overall?.conversion_rate}%`} />
+        <SummaryCard label="Revenue Generated" value={formatCurrency(metrics.overall?.total_revenue_attributed)} />
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <SummaryCard label="Active Leads" value={metrics.overall?.active} />
+        <SummaryCard label="Lost" value={metrics.overall?.lost} />
+        <SummaryCard label="Avg Days to Convert" value={metrics.overall?.avg_days_to_conversion || 'N/A'} />
+        <SummaryCard label="Overall ROI" value={`${metrics.overall?.overall_roi || 0}%`} />
+      </div>
+
+      {/* Conversion Funnel */}
+      {funnelData.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Conversion Funnel</h3>
+            <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+              {[{id:'trapezoid',label:'Funnel'},{id:'bar',label:'Bar'},{id:'kanban',label:'Kanban'}].map(v => (
+                <button key={v.id} onClick={() => setFunnelView(v.id)}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${funnelView === v.id ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500'}`}>{v.label}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Trapezoid Funnel */}
+          {funnelView === 'trapezoid' && (
+            <div className="flex flex-col items-center gap-1">
+              {funnelData.map((s, i) => {
+                const widthPct = Math.max(20, (s.count / funnelMax) * 100);
+                return (
+                  <div key={s.stage} className="relative flex items-center justify-center text-white text-sm font-medium rounded-md transition-all"
+                    style={{ width: `${widthPct}%`, height: '44px', backgroundColor: s.color || '#6B7280', minWidth: '120px' }}>
+                    <span>{s.stage}: {s.count}</span>
+                    {i > 0 && <span className="absolute -top-3 right-2 text-xs text-gray-500">{s.pct_of_previous}% from prev</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Horizontal Bar */}
+          {funnelView === 'bar' && (
+            <div className="space-y-3">
+              {funnelData.map(s => (
+                <div key={s.stage} className="flex items-center gap-3">
+                  <div className="w-28 text-sm font-medium text-gray-700 text-right">{s.stage}</div>
+                  <div className="flex-1 h-9 bg-gray-100 rounded-lg overflow-hidden relative">
+                    <div className="h-full rounded-lg transition-all" style={{ width: `${s.pct_of_total}%`, backgroundColor: s.color || '#6B7280', minWidth: s.count > 0 ? '24px' : '0' }} />
+                    <span className="absolute inset-0 flex items-center px-3 text-xs font-semibold text-gray-900">{s.count} ({s.pct_of_total}%)</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Kanban Cards */}
+          {funnelView === 'kanban' && (
+            <div className="flex gap-2 overflow-x-auto pb-2">
+              {funnelData.map((s, i) => (
+                <div key={s.stage} className="flex items-center gap-2 flex-shrink-0">
+                  <div className="border rounded-xl p-4 min-w-[120px] text-center" style={{ borderColor: s.color || '#6B7280' }}>
+                    <div className="text-2xl font-bold" style={{ color: s.color || '#6B7280' }}>{s.count}</div>
+                    <div className="text-xs font-medium text-gray-700 mt-1">{s.stage}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{s.pct_of_total}%</div>
+                  </div>
+                  {i < funnelData.length - 1 && (
+                    <div className="text-gray-300 text-lg flex-shrink-0">&rarr;</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Rep Lead Aging Table */}
+      {repData?.reps?.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Rep Lead Aging</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left p-2 font-semibold text-gray-700">Rep</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Total</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">0-7d</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">7-14d</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">14d+</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Pending F/U</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Interactions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {repData.reps.map(r => (
+                  <tr key={r.rep_id} className="border-b hover:bg-gray-50">
+                    <td className="p-2">
+                      <button onClick={() => { if (window.setActiveTab) window.setActiveTab('interactions'); }} className="text-left hover:text-blue-600">
+                        <div className="font-medium">{r.name}</div>
+                        <div className="text-xs text-gray-500">{r.rep_id}</div>
+                      </button>
+                    </td>
+                    <td className="text-right p-2 font-medium">{r.total_assigned}</td>
+                    <td className="text-right p-2"><span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['0_7d'] > 0 ? 'bg-green-100 text-green-800' : 'text-gray-400'}`}>{r.not_attempted['0_7d']}</span></td>
+                    <td className="text-right p-2"><span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['7_14d'] > 0 ? 'bg-yellow-100 text-yellow-800' : 'text-gray-400'}`}>{r.not_attempted['7_14d']}</span></td>
+                    <td className="text-right p-2"><span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['14d_plus'] > 0 ? 'bg-red-100 text-red-800' : 'text-gray-400'}`}>{r.not_attempted['14d_plus']}</span></td>
+                    <td className="text-right p-2"><span className={r.pending_followups > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}>{r.pending_followups}</span></td>
+                    <td className="text-right p-2">{r.interactions?.total || 0}</td>
+                  </tr>
+                ))}
+                {/* Totals row */}
+                <tr className="border-t-2 font-semibold bg-gray-50">
+                  <td className="p-2">Totals</td>
+                  <td className="text-right p-2">{repData.totals?.total_assigned}</td>
+                  <td className="text-right p-2">{repData.reps.reduce((s, r) => s + r.not_attempted['0_7d'], 0)}</td>
+                  <td className="text-right p-2">{repData.reps.reduce((s, r) => s + r.not_attempted['7_14d'], 0)}</td>
+                  <td className="text-right p-2">{repData.reps.reduce((s, r) => s + r.not_attempted['14d_plus'], 0)}</td>
+                  <td className="text-right p-2">{repData.totals?.total_pending_followups}</td>
+                  <td className="text-right p-2">{repData.reps.reduce((s, r) => s + (r.interactions?.total || 0), 0)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Source Performance */}
+      {metrics.by_source?.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Source Performance</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {metrics.by_source.map(s => (
+              <div key={s.source} className="border rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold text-gray-900 capitalize">{s.source}</span>
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${s.conversion_rate >= 20 ? 'bg-green-100 text-green-800' : s.conversion_rate >= 10 ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-600'}`}>{s.conversion_rate}%</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div><span className="text-gray-500">Leads:</span> <span className="font-medium">{s.leads}</span></div>
+                  <div><span className="text-gray-500">Converted:</span> <span className="font-medium text-green-600">{s.converted}</span></div>
+                  {s.budget > 0 && <div><span className="text-gray-500">Budget:</span> <span className="font-medium">{formatCurrency(s.budget)}</span></div>}
+                  {s.cost_per_lead > 0 && <div><span className="text-gray-500">CPL:</span> <span className="font-medium">{formatCurrency(s.cost_per_lead)}</span></div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Rep Conversion Table */}
+      {repData?.reps?.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Rep Conversion Performance</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left p-2 font-semibold text-gray-700">Rep</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Assigned</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Converted</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Lost</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Active</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Rate</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Avg Response</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Interactions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...repData.reps].sort((a, b) => b.conversion_rate - a.conversion_rate).map(r => (
+                  <tr key={r.rep_id} className="border-b hover:bg-gray-50">
+                    <td className="p-2"><div className="font-medium">{r.name}</div></td>
+                    <td className="text-right p-2">{r.total_assigned}</td>
+                    <td className="text-right p-2 text-green-600 font-medium">{r.converted}</td>
+                    <td className="text-right p-2 text-red-600">{r.lost}</td>
+                    <td className="text-right p-2">{r.active}</td>
+                    <td className="text-right p-2">
+                      <span className={`px-2 py-0.5 rounded text-xs font-semibold ${r.conversion_rate >= 30 ? 'bg-green-100 text-green-800' : r.conversion_rate >= 15 ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-600'}`}>{r.conversion_rate}%</span>
+                    </td>
+                    <td className="text-right p-2">{r.avg_response_days !== null ? `${r.avg_response_days}d` : '-'}</td>
+                    <td className="text-right p-2 text-gray-600">{r.interactions?.total || 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Campaign Comparison Table */}
+      {metrics.by_campaign?.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Campaign Comparison</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left p-2 font-semibold text-gray-700">Campaign</th>
+                  <th className="text-left p-2 font-semibold text-gray-700">Source</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Leads</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Converted</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Lost</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Rate</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Budget</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">Revenue</th>
+                  <th className="text-right p-2 font-semibold text-gray-700">ROI</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.by_campaign.map(c => (
+                  <tr key={c.campaign_id} className="border-b hover:bg-gray-50">
+                    <td className="p-2">
+                      <button onClick={() => { if (window.setActiveTab) window.setActiveTab('campaigns'); }} className="text-left hover:text-blue-600">
+                        <div className="font-medium">{c.name}</div>
+                        <div className="text-xs text-gray-500">{c.campaign_id}</div>
+                      </button>
+                    </td>
+                    <td className="p-2 capitalize">{c.source}</td>
+                    <td className="text-right p-2">{c.leads}</td>
+                    <td className="text-right p-2 text-green-600 font-medium">{c.converted}</td>
+                    <td className="text-right p-2 text-red-600">{c.lost}</td>
+                    <td className="text-right p-2">{c.conversion_rate}%</td>
+                    <td className="text-right p-2">{formatCurrency(c.budget)}</td>
+                    <td className="text-right p-2 font-medium">{formatCurrency(c.revenue_generated)}</td>
+                    <td className="text-right p-2"><span className={c.roi > 0 ? 'text-green-600 font-semibold' : c.roi < 0 ? 'text-red-600' : 'text-gray-500'}>{c.roi}%</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -3061,6 +3964,24 @@ function PaymentDetailModal({ payment, onClose }) {
 // ============================================
 // DASHBOARD VIEW
 // ============================================
+function StaleLeadsCard() {
+  const [staleCount, setStaleCount] = useState(null);
+  useEffect(() => {
+    api.get('/leads/stale').then(res => setStaleCount(res.data.length)).catch(() => {});
+  }, []);
+  if (staleCount === null || staleCount === 0) return null;
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:bg-amber-100 transition-colors"
+      onClick={() => { if (window.setActiveTab) window.setActiveTab('customers'); }}>
+      <div>
+        <div className="text-sm font-medium text-amber-800">Stale Leads</div>
+        <div className="text-xs text-amber-600">Leads with no interaction in 60+ days</div>
+      </div>
+      <div className="text-2xl font-bold text-amber-700">{staleCount}</div>
+    </div>
+  );
+}
+
 function DashboardView() {
   const [summary, setSummary] = useState(null);
   const [customerStats, setCustomerStats] = useState([]);
@@ -3073,17 +3994,29 @@ function DashboardView() {
   const [customerDetails, setCustomerDetails] = useState(null);
   const [brokerDetails, setBrokerDetails] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [dashSubTab, setDashSubTab] = useState('overview');
+  // Enrichment states
+  const [brokerSummary, setBrokerSummary] = useState(null);
+  const [txnSummary, setTxnSummary] = useState(null);
+  const [receiptSummary, setReceiptSummary] = useState(null);
+  const [revenueTrends, setRevenueTrends] = useState([]);
+  const [campaignMetrics, setCampaignMetrics] = useState(null);
+  const [campaignMetricsLoading, setCampaignMetricsLoading] = useState(false);
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
     try {
-      const [sumRes, custRes, projRes, brkRes, recRes, invRes] = await Promise.all([
+      const [sumRes, custRes, projRes, brkRes, recRes, invRes, brkSumRes, txnSumRes, rcptSumRes, trendRes] = await Promise.all([
         api.get('/dashboard/summary').catch(() => ({ data: null })),
         api.get('/dashboard/customer-stats').catch(() => ({ data: [] })),
         api.get('/dashboard/project-stats').catch(() => ({ data: [] })),
         api.get('/dashboard/broker-stats').catch(() => ({ data: [] })),
         api.get('/dashboard/top-receivables?limit=10').catch(() => ({ data: [] })),
-        api.get('/dashboard/project-inventory').catch(() => ({ data: [] }))
+        api.get('/dashboard/project-inventory').catch(() => ({ data: [] })),
+        api.get('/brokers/summary').catch(() => ({ data: null })),
+        api.get('/transactions/summary').catch(() => ({ data: null })),
+        api.get('/receipts/summary').catch(() => ({ data: null })),
+        api.get('/dashboard/revenue-trends').catch(() => ({ data: [] }))
       ]);
       setSummary(sumRes.data);
       setCustomerStats(custRes.data || []);
@@ -3091,9 +4024,24 @@ function DashboardView() {
       setBrokerStats(brkRes.data || []);
       setTopReceivables(recRes.data || []);
       setProjectInventory(invRes.data || []);
+      setBrokerSummary(brkSumRes.data);
+      setTxnSummary(txnSumRes.data);
+      setReceiptSummary(rcptSumRes.data);
+      setRevenueTrends(trendRes.data || []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
+
+  // Load campaign metrics on-demand
+  useEffect(() => {
+    if (dashSubTab === 'campaigns' && !campaignMetrics && !campaignMetricsLoading) {
+      setCampaignMetricsLoading(true);
+      api.get('/analytics/campaign-metrics')
+        .then(res => setCampaignMetrics(res.data))
+        .catch(() => setCampaignMetrics(null))
+        .finally(() => setCampaignMetricsLoading(false));
+    }
+  }, [dashSubTab]);
 
   const loadCustomerDetails = async (customerId) => {
     try {
@@ -3111,246 +4059,407 @@ function DashboardView() {
     } catch (e) { alert('Error loading broker details'); }
   };
 
-  const topBroker = brokerStats.length > 0 ? brokerStats.sort((a, b) => b.total_sale_value - a.total_sale_value)[0] : null;
+  const topBroker = brokerStats.length > 0 ? [...brokerStats].sort((a, b) => b.total_sale_value - a.total_sale_value)[0] : null;
+
+  const dashMiniTabs = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'receivables', label: 'Receivables' },
+    { id: 'sales', label: 'Sales' },
+    { id: 'brokers', label: 'Brokers' },
+    { id: 'projects', label: 'Projects & Inventory' },
+    { id: 'campaigns', label: 'Campaigns' }
+  ];
+
+  // Revenue trends max for scaling
+  const trendMax = revenueTrends.length > 0 ? Math.max(...revenueTrends.map(d => Math.max(d.receipts || 0, d.payments || 0)), 1) : 1;
 
   return (
     <div className="space-y-6">
-      <div><h2 className="text-2xl font-semibold text-gray-900">Dashboard</h2>
-        <p className="text-sm text-gray-500 mt-1">Comprehensive system overview & analytics</p></div>
+      <div>
+        <h2 className="text-2xl font-semibold text-gray-900">Analytics Engine</h2>
+        <p className="text-sm text-gray-500 mt-1">Comprehensive system overview & analytics</p>
+      </div>
+
+      {/* Mini-tab bar */}
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit flex-wrap">
+        {dashMiniTabs.map(t => (
+          <button key={t.id} onClick={() => setDashSubTab(t.id)}
+            className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${dashSubTab === t.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
       {loading ? <Loader /> : summary && (
         <>
-          {/* Key Metrics Row 1 */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <SummaryCard label="Total Customers" value={summary.customers?.total} />
-            <SummaryCard label="Total Transactions" value={summary.transactions?.total} />
-            <SummaryCard label="Total Sale Value" value={formatCurrency(summary.financials?.total_sale)} />
-            <SummaryCard label="Total Received" value={formatCurrency(summary.financials?.total_received)} />
-          </div>
-
-          {/* Outstanding Breakdown - NEW */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-white rounded-2xl shadow-sm border p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">Outstanding Breakdown</h3>
+          {/* ====== OVERVIEW TAB ====== */}
+          {dashSubTab === 'overview' && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <SummaryCard label="Total Customers" value={summary.customers?.total} />
+                <SummaryCard label="Total Transactions" value={summary.transactions?.total} />
+                <SummaryCard label="Total Sale Value" value={formatCurrency(summary.financials?.total_sale)} />
+                <SummaryCard label="Total Received" value={formatCurrency(summary.financials?.total_received)} />
               </div>
-              <div className="space-y-4">
-                <div className="p-4 bg-red-50 rounded-lg border-l-4 border-red-500">
+              {['admin', 'cco', 'manager'].includes(getUserRole()) && <StaleLeadsCard />}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <SummaryCard label="This Month Sale" value={formatCurrency(summary.transactions?.this_month_value)} />
+                <SummaryCard label="Active Projects" value={summary.projects?.active} />
+                <SummaryCard label="Available Inventory" value={summary.inventory?.available} sub={`${summary.inventory?.total} total units`} />
+                <SummaryCard label="Active Brokers" value={summary.brokers?.active} />
+              </div>
+              {/* Quick outstanding summary */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-red-50 border border-red-200 rounded-2xl p-4">
                   <div className="text-xs font-medium text-red-600 uppercase mb-1">Total Overdue</div>
                   <div className="text-2xl font-bold text-red-700">{formatCurrency(summary.financials?.total_overdue || 0)}</div>
-                  <div className="text-xs text-red-600 mt-1">Installments due on or before today</div>
                 </div>
-                <div className="p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
+                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
                   <div className="text-xs font-medium text-blue-600 uppercase mb-1">Future Receivable</div>
                   <div className="text-2xl font-bold text-blue-700">{formatCurrency(summary.financials?.future_receivable || 0)}</div>
-                  <div className="text-xs text-blue-600 mt-1">Not due yet</div>
                 </div>
-                <div className="pt-3 border-t">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium text-gray-600">Total Outstanding</span>
-                    <span className="text-lg font-semibold text-gray-900">{formatCurrency(summary.financials?.total_outstanding)}</span>
-                  </div>
+                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4">
+                  <div className="text-xs font-medium text-gray-600 uppercase mb-1">Total Outstanding</div>
+                  <div className="text-2xl font-bold text-gray-900">{formatCurrency(summary.financials?.total_outstanding)}</div>
                 </div>
               </div>
-            </div>
+            </>
+          )}
 
-            {/* Broker Performance Card - NEW */}
-            {topBroker && (
-              <div className="bg-white rounded-2xl shadow-sm border p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-gray-900">Top Broker Performance</h3>
-                  <span className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded">#1</span>
+          {/* ====== RECEIVABLES TAB ====== */}
+          {dashSubTab === 'receivables' && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-red-50 border border-red-200 rounded-2xl p-5">
+                  <div className="text-xs font-medium text-red-600 uppercase mb-1">Total Overdue</div>
+                  <div className="text-2xl font-bold text-red-700">{formatCurrency(summary.financials?.total_overdue || 0)}</div>
+                  <div className="text-xs text-red-500 mt-1">Installments due on or before today</div>
                 </div>
-                <div className="space-y-4">
-                  <div>
+                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5">
+                  <div className="text-xs font-medium text-blue-600 uppercase mb-1">Future Receivable</div>
+                  <div className="text-2xl font-bold text-blue-700">{formatCurrency(summary.financials?.future_receivable || 0)}</div>
+                  <div className="text-xs text-blue-500 mt-1">Not due yet</div>
+                </div>
+                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5">
+                  <div className="text-xs font-medium text-gray-600 uppercase mb-1">Total Outstanding</div>
+                  <div className="text-2xl font-bold text-gray-900">{formatCurrency(summary.financials?.total_outstanding)}</div>
+                  <div className="text-xs text-gray-500 mt-1">Sale: {formatCurrency(summary.financials?.total_sale)} | Received: {formatCurrency(summary.financials?.total_received)}</div>
+                </div>
+              </div>
+              {topReceivables.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm border p-6">
+                  <h3 className="text-lg font-semibold mb-4">Top Receivables by Customer</h3>
+                  <div className="space-y-3">
+                    {topReceivables.map(c => (
+                      <div key={c.customer_id} className="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                        <div className="flex justify-between items-start mb-3">
+                          <button onClick={() => loadCustomerDetails(c.customer_id)} className="text-left hover:text-blue-600 transition-colors">
+                            <div className="font-semibold text-gray-900">{c.customer_name}</div>
+                            <div className="text-xs text-gray-500">{c.customer_id} {c.mobile && `\u2022 ${c.mobile}`}</div>
+                          </button>
+                          <div className="text-right">
+                            <div className="font-semibold text-gray-900">{formatCurrency(c.total_outstanding)}</div>
+                            <div className="text-xs text-gray-500">{c.transaction_count} transactions</div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3 pt-3 border-t">
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Overdue</div>
+                            <div className="text-sm font-semibold text-red-600">{formatCurrency(c.overdue)}</div>
+                            <div className="text-xs text-gray-400">{c.overdue_installments?.length || 0} installments</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Future Receivable</div>
+                            <div className="text-sm font-semibold text-blue-600">{formatCurrency(c.future_receivable)}</div>
+                            <div className="text-xs text-gray-400">{c.future_installments?.length || 0} installments</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Total Sale</div>
+                            <div className="text-sm font-semibold text-gray-900">{formatCurrency(c.total_sale)}</div>
+                            <div className="text-xs text-gray-400">{formatCurrency(c.total_received)} received</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ====== SALES TAB ====== */}
+          {dashSubTab === 'sales' && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <SummaryCard label="Total Sale Value" value={formatCurrency(summary.financials?.total_sale)} />
+                <SummaryCard label="This Month Sale" value={formatCurrency(summary.transactions?.this_month_value)} />
+                <SummaryCard label="Total Received" value={formatCurrency(summary.financials?.total_received)} />
+                {receiptSummary && <SummaryCard label="This Month Received" value={formatCurrency(receiptSummary.month_amount)} />}
+              </div>
+              {txnSummary && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <SummaryCard label="Total Transactions" value={txnSummary.total_transactions} />
+                  <SummaryCard label="This Month Txns" value={txnSummary.this_month_count} />
+                  {receiptSummary && <SummaryCard label="Today Receipts" value={receiptSummary.today_count} sub={formatCurrency(receiptSummary.today_amount)} />}
+                  {receiptSummary && <SummaryCard label="By Cash" value={formatCurrency(receiptSummary.by_method?.cash || 0)} />}
+                </div>
+              )}
+              {/* Revenue Trends Chart */}
+              {revenueTrends.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm border p-6">
+                  <h3 className="text-lg font-semibold mb-4">Revenue Trends (Last 90 Days)</h3>
+                  <div className="flex items-end gap-px h-48 overflow-x-auto">
+                    {revenueTrends.slice(-60).map((d, i) => (
+                      <div key={i} className="flex flex-col items-center flex-shrink-0" style={{ width: `${Math.max(100 / Math.min(revenueTrends.length, 60), 1.5)}%` }}>
+                        <div className="w-full flex flex-col items-center gap-px" style={{ height: '180px' }}>
+                          <div className="w-full flex items-end justify-center gap-0.5" style={{ height: '180px' }}>
+                            <div className="bg-green-400 rounded-t" title={`Receipts: ${formatCurrency(d.receipts)}`}
+                              style={{ width: '45%', height: `${Math.max((d.receipts / trendMax) * 100, 1)}%`, minHeight: '2px' }} />
+                            <div className="bg-red-300 rounded-t" title={`Payments: ${formatCurrency(d.payments)}`}
+                              style={{ width: '45%', height: `${Math.max((d.payments / trendMax) * 100, 1)}%`, minHeight: '2px' }} />
+                          </div>
+                        </div>
+                        {i % Math.max(Math.floor(revenueTrends.slice(-60).length / 8), 1) === 0 && (
+                          <div className="text-xs text-gray-400 mt-1 transform -rotate-45 origin-top-left whitespace-nowrap">{d.date?.slice(5)}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-400 rounded inline-block" /> Receipts</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-300 rounded inline-block" /> Payments</span>
+                  </div>
+                </div>
+              )}
+              {/* Top Customers by Sale Value */}
+              {customerStats.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm border p-6">
+                  <h3 className="text-lg font-semibold mb-4">Top Customers by Sale Value</h3>
+                  <div className="space-y-2">
+                    {[...customerStats].sort((a, b) => b.total_sale - a.total_sale).slice(0, 10).map(c => (
+                      <div key={c.customer_id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                        <button onClick={() => loadCustomerDetails(c.customer_id)} className="text-left hover:text-blue-600 transition-colors">
+                          <div className="font-medium">{c.name}</div>
+                          <div className="text-xs text-gray-500">{c.customer_id}</div>
+                        </button>
+                        <div className="text-right">
+                          <div className="font-semibold">{formatCurrency(c.total_sale)}</div>
+                          <div className="text-xs text-gray-500">{c.transaction_count} transactions</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ====== BROKERS TAB ====== */}
+          {dashSubTab === 'brokers' && (
+            <>
+              {brokerSummary && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <SummaryCard label="Total Brokers" value={brokerSummary.total_brokers} />
+                  <SummaryCard label="Active Brokers" value={brokerSummary.active_brokers} />
+                  <SummaryCard label="Total Commission" value={formatCurrency(brokerSummary.total_commission_owed)} />
+                  <SummaryCard label="Total Deal Value" value={formatCurrency(brokerSummary.total_deals_value)} />
+                </div>
+              )}
+              {brokerSummary && (
+                <div className="grid grid-cols-2 gap-4">
+                  <SummaryCard label="Deals This Month" value={brokerSummary.deals_this_month} sub={formatCurrency(brokerSummary.deals_this_month_value)} />
+                  <SummaryCard label="Top Performers" value={brokerSummary.top_performers?.length || 0} />
+                </div>
+              )}
+              {topBroker && (
+                <div className="bg-white rounded-2xl shadow-sm border p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-900">Top Broker Performance</h3>
+                    <span className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded">#1</span>
+                  </div>
+                  <div className="space-y-4">
                     <button onClick={() => loadBrokerDetails(topBroker.broker_id)} className="text-left w-full hover:bg-gray-50 p-2 rounded-lg transition-colors">
                       <div className="font-semibold text-gray-900">{topBroker.name}</div>
-                      <div className="text-xs text-gray-500">{topBroker.broker_id} • {topBroker.mobile}</div>
+                      <div className="text-xs text-gray-500">{topBroker.broker_id} {topBroker.mobile && `\u2022 ${topBroker.mobile}`}</div>
                     </button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 pt-3 border-t">
-                    <div>
-                      <div className="text-xs text-gray-500">Total Sales</div>
-                      <div className="text-lg font-semibold">{formatCurrency(topBroker.total_sale_value)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Transactions</div>
-                      <div className="text-lg font-semibold">{topBroker.total_transactions}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Commission Rate</div>
-                      <div className="text-lg font-semibold">{topBroker.commission?.rate}%</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Commission Earned</div>
-                      <div className="text-lg font-semibold text-green-600">{formatCurrency(topBroker.commission?.total_earned)}</div>
+                    <div className="grid grid-cols-2 gap-3 pt-3 border-t">
+                      <div><div className="text-xs text-gray-500">Total Sales</div><div className="text-lg font-semibold">{formatCurrency(topBroker.total_sale_value)}</div></div>
+                      <div><div className="text-xs text-gray-500">Transactions</div><div className="text-lg font-semibold">{topBroker.total_transactions}</div></div>
+                      <div><div className="text-xs text-gray-500">Commission Rate</div><div className="text-lg font-semibold">{topBroker.commission?.rate}%</div></div>
+                      <div><div className="text-xs text-gray-500">Commission Earned</div><div className="text-lg font-semibold text-green-600">{formatCurrency(topBroker.commission?.total_earned)}</div></div>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
-
-          {/* Key Metrics Row 2 */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <SummaryCard label="This Month Sale" value={formatCurrency(summary.transactions?.this_month_value)} />
-            <SummaryCard label="Active Projects" value={summary.projects?.active} />
-            <SummaryCard label="Available Inventory" value={summary.inventory?.available} sub={`${summary.inventory?.total} total units`} />
-            <SummaryCard label="Active Brokers" value={summary.brokers?.active} />
-          </div>
-
-          {/* Project Inventory Details - NEW */}
-          {projectInventory.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-sm border p-6">
-              <h3 className="text-lg font-semibold mb-4">Project-Wise Inventory Analysis</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left p-3 font-semibold text-gray-700">Project</th>
-                      <th className="text-right p-3 font-semibold text-gray-700">Total Units</th>
-                      <th className="text-right p-3 font-semibold text-gray-700">Available</th>
-                      <th className="text-right p-3 font-semibold text-gray-700">Sold</th>
-                      <th className="text-right p-3 font-semibold text-gray-700">Total Marlas</th>
-                      <th className="text-right p-3 font-semibold text-gray-700">Available Marlas</th>
-                      <th className="text-right p-3 font-semibold text-gray-700">Total Value</th>
-                      <th className="text-right p-3 font-semibold text-gray-700">Available Value</th>
-                      <th className="text-right p-3 font-semibold text-gray-700">Utilization</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projectInventory.map(p => (
-                      <tr key={p.project_id} className="border-b hover:bg-gray-50">
-                        <td className="p-3">
-                          <div className="font-medium">{p.name}</div>
-                          <div className="text-xs text-gray-500">{p.location || 'N/A'}</div>
-                        </td>
-                        <td className="text-right p-3">{p.summary.total_units}</td>
-                        <td className="text-right p-3 text-green-600 font-medium">{p.summary.available_units}</td>
-                        <td className="text-right p-3 text-blue-600 font-medium">{p.summary.sold_units}</td>
-                        <td className="text-right p-3">{p.area.total_marlas.toFixed(2)}</td>
-                        <td className="text-right p-3 text-green-600">{p.area.available_marlas.toFixed(2)}</td>
-                        <td className="text-right p-3 font-medium">{formatCurrency(p.value.total_value)}</td>
-                        <td className="text-right p-3 text-green-600 font-medium">{formatCurrency(p.value.available_value)}</td>
-                        <td className="text-right p-3">
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            p.summary.utilization_rate >= 80 ? 'bg-green-100 text-green-800' :
-                            p.summary.utilization_rate >= 50 ? 'bg-yellow-100 text-yellow-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {p.summary.utilization_rate.toFixed(1)}%
-                          </span>
-                        </td>
-                      </tr>
+              )}
+              {/* All brokers ranked */}
+              {brokerStats.length > 1 && (
+                <div className="bg-white rounded-2xl shadow-sm border p-6">
+                  <h3 className="text-lg font-semibold mb-4">Broker Rankings</h3>
+                  <div className="space-y-2">
+                    {[...brokerStats].sort((a, b) => b.total_sale_value - a.total_sale_value).map((b, i) => (
+                      <div key={b.broker_id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                        <div className="flex items-center gap-3">
+                          <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-yellow-100 text-yellow-800' : i === 1 ? 'bg-gray-200 text-gray-700' : i === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-500'}`}>{i + 1}</span>
+                          <button onClick={() => loadBrokerDetails(b.broker_id)} className="text-left hover:text-blue-600">
+                            <div className="font-medium">{b.name}</div>
+                            <div className="text-xs text-gray-500">{b.broker_id}</div>
+                          </button>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-semibold">{formatCurrency(b.total_sale_value)}</div>
+                          <div className="text-xs text-gray-500">{b.total_transactions} deals</div>
+                        </div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
-          {/* Top Receivables by Customer - NEW */}
-          {topReceivables.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-sm border p-6">
-              <h3 className="text-lg font-semibold mb-4">Top Receivables by Customer</h3>
-              <div className="space-y-3">
-                {topReceivables.map(c => (
-                  <div key={c.customer_id} className="border rounded-lg p-4 hover:bg-gray-50 transition-colors">
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <button onClick={() => loadCustomerDetails(c.customer_id)} className="text-left hover:text-blue-600 transition-colors">
-                          <div className="font-semibold text-gray-900">{c.customer_name}</div>
-                          <div className="text-xs text-gray-500">{c.customer_id} • {c.mobile}</div>
-                        </button>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-semibold text-gray-900">{formatCurrency(c.total_outstanding)}</div>
-                        <div className="text-xs text-gray-500">{c.transaction_count} transactions</div>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3 pt-3 border-t">
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Overdue</div>
-                        <div className="text-sm font-semibold text-red-600">{formatCurrency(c.overdue)}</div>
-                        <div className="text-xs text-gray-400">{c.overdue_installments.length} installments</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Future Receivable</div>
-                        <div className="text-sm font-semibold text-blue-600">{formatCurrency(c.future_receivable)}</div>
-                        <div className="text-xs text-gray-400">{c.future_installments.length} installments</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500 mb-1">Total Sale</div>
-                        <div className="text-sm font-semibold text-gray-900">{formatCurrency(c.total_sale)}</div>
-                        <div className="text-xs text-gray-400">{formatCurrency(c.total_received)} received</div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+          {/* ====== PROJECTS & INVENTORY TAB ====== */}
+          {dashSubTab === 'projects' && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <SummaryCard label="Active Projects" value={summary.projects?.active} sub={`${summary.projects?.total} total`} />
+                <SummaryCard label="Total Inventory" value={summary.inventory?.total} />
+                <SummaryCard label="Available" value={summary.inventory?.available} />
+                <SummaryCard label="Sold" value={summary.inventory?.sold} />
               </div>
-            </div>
+              {projectInventory.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm border p-6">
+                  <h3 className="text-lg font-semibold mb-4">Project-Wise Inventory Analysis</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left p-3 font-semibold text-gray-700">Project</th>
+                          <th className="text-right p-3 font-semibold text-gray-700">Total</th>
+                          <th className="text-right p-3 font-semibold text-gray-700">Available</th>
+                          <th className="text-right p-3 font-semibold text-gray-700">Sold</th>
+                          <th className="text-right p-3 font-semibold text-gray-700">Marlas</th>
+                          <th className="text-right p-3 font-semibold text-gray-700">Total Value</th>
+                          <th className="text-right p-3 font-semibold text-gray-700">Utilization</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {projectInventory.map(p => (
+                          <tr key={p.project_id} className="border-b hover:bg-gray-50">
+                            <td className="p-3"><div className="font-medium">{p.name}</div><div className="text-xs text-gray-500">{p.location || ''}</div></td>
+                            <td className="text-right p-3">{p.summary.total_units}</td>
+                            <td className="text-right p-3 text-green-600 font-medium">{p.summary.available_units}</td>
+                            <td className="text-right p-3 text-blue-600 font-medium">{p.summary.sold_units}</td>
+                            <td className="text-right p-3">{p.area.total_marlas.toFixed(1)}</td>
+                            <td className="text-right p-3 font-medium">{formatCurrency(p.value.total_value)}</td>
+                            <td className="text-right p-3">
+                              <span className={`px-2 py-1 rounded text-xs font-medium ${p.summary.utilization_rate >= 80 ? 'bg-green-100 text-green-800' : p.summary.utilization_rate >= 50 ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'}`}>{p.summary.utilization_rate.toFixed(1)}%</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {projectStats.length > 0 && (
+                <div className="bg-white rounded-2xl shadow-sm border p-6">
+                  <h3 className="text-lg font-semibold mb-4">Project Performance</h3>
+                  <div className="space-y-2">
+                    {[...projectStats].sort((a, b) => b.financials.total_sale - a.financials.total_sale).slice(0, 10).map(p => (
+                      <div key={p.project_id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                        <div><div className="font-medium">{p.name}</div><div className="text-xs text-gray-500">{p.project_id}</div></div>
+                        <div className="text-right"><div className="font-semibold">{formatCurrency(p.financials.total_sale)}</div><div className="text-xs text-gray-500">{p.transaction_count} transactions</div></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
-          {/* Top Customers */}
-          {customerStats.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-sm border p-6">
-              <h3 className="text-lg font-semibold mb-4">Top Customers by Sale Value</h3>
-              <div className="space-y-2">
-                {customerStats.sort((a, b) => b.total_sale - a.total_sale).slice(0, 5).map(c => (
-                  <div key={c.customer_id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                    <div>
-                      <button onClick={() => loadCustomerDetails(c.customer_id)} className="text-left hover:text-blue-600 transition-colors">
-                        <div className="font-medium">{c.name}</div>
-                        <div className="text-xs text-gray-500">{c.customer_id}</div>
-                      </button>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-semibold">{formatCurrency(c.total_sale)}</div>
-                      <div className="text-xs text-gray-500">{c.transaction_count} transactions</div>
-                    </div>
+          {/* ====== CAMPAIGNS TAB (mini analytics summary) ====== */}
+          {dashSubTab === 'campaigns' && (
+            <>
+              {campaignMetricsLoading && <Loader />}
+              {campaignMetrics && (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <SummaryCard label="Total Leads" value={campaignMetrics.overall?.total_leads} />
+                    <SummaryCard label="Converted" value={campaignMetrics.overall?.converted} />
+                    <SummaryCard label="Conversion Rate" value={`${campaignMetrics.overall?.conversion_rate}%`} />
+                    <SummaryCard label="Revenue Attributed" value={formatCurrency(campaignMetrics.overall?.total_revenue_attributed)} />
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Top Projects */}
-          {projectStats.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-sm border p-6">
-              <h3 className="text-lg font-semibold mb-4">Project Performance</h3>
-              <div className="space-y-2">
-                {projectStats.sort((a, b) => b.financials.total_sale - a.financials.total_sale).slice(0, 5).map(p => (
-                  <div key={p.project_id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <div className="font-medium">{p.name}</div>
-                      <div className="text-xs text-gray-500">{p.project_id}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-semibold">{formatCurrency(p.financials.total_sale)}</div>
-                      <div className="text-xs text-gray-500">{p.transaction_count} transactions</div>
-                    </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <SummaryCard label="Active Leads" value={campaignMetrics.overall?.active} />
+                    <SummaryCard label="Lost" value={campaignMetrics.overall?.lost} />
+                    <SummaryCard label="Avg Days to Convert" value={campaignMetrics.overall?.avg_days_to_conversion} />
+                    <SummaryCard label="ROI" value={`${campaignMetrics.overall?.overall_roi}%`} />
                   </div>
-                ))}
-              </div>
-            </div>
+                  {/* Mini funnel */}
+                  {campaignMetrics.funnel?.length > 0 && (
+                    <div className="bg-white rounded-2xl shadow-sm border p-6">
+                      <h3 className="text-lg font-semibold mb-4">Conversion Funnel</h3>
+                      <div className="space-y-2">
+                        {campaignMetrics.funnel.filter(s => s.count > 0).map((s, i) => (
+                          <div key={s.stage} className="flex items-center gap-3">
+                            <div className="w-28 text-sm font-medium text-gray-700 text-right">{s.stage}</div>
+                            <div className="flex-1 h-8 bg-gray-100 rounded-lg overflow-hidden relative">
+                              <div className="h-full rounded-lg transition-all" style={{ width: `${s.pct_of_total}%`, backgroundColor: s.color || '#6B7280', minWidth: s.count > 0 ? '20px' : '0' }} />
+                              <span className="absolute inset-0 flex items-center px-3 text-xs font-semibold">{s.count} ({s.pct_of_total}%)</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Campaign comparison */}
+                  {campaignMetrics.by_campaign?.length > 0 && (
+                    <div className="bg-white rounded-2xl shadow-sm border p-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold">Campaign Comparison</h3>
+                        <button onClick={() => { if (window.setActiveTab) window.setActiveTab('campaigns'); }} className="text-sm text-blue-600 hover:text-blue-800">View Full Analytics &rarr;</button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead><tr className="border-b">
+                            <th className="text-left p-2 font-semibold text-gray-700">Campaign</th>
+                            <th className="text-right p-2 font-semibold text-gray-700">Leads</th>
+                            <th className="text-right p-2 font-semibold text-gray-700">Converted</th>
+                            <th className="text-right p-2 font-semibold text-gray-700">Rate</th>
+                            <th className="text-right p-2 font-semibold text-gray-700">Revenue</th>
+                            <th className="text-right p-2 font-semibold text-gray-700">ROI</th>
+                          </tr></thead>
+                          <tbody>
+                            {campaignMetrics.by_campaign.slice(0, 8).map(c => (
+                              <tr key={c.campaign_id} className="border-b hover:bg-gray-50">
+                                <td className="p-2"><div className="font-medium">{c.name}</div><div className="text-xs text-gray-500">{c.source}</div></td>
+                                <td className="text-right p-2">{c.leads}</td>
+                                <td className="text-right p-2 text-green-600 font-medium">{c.converted}</td>
+                                <td className="text-right p-2">{c.conversion_rate}%</td>
+                                <td className="text-right p-2 font-medium">{formatCurrency(c.revenue_generated)}</td>
+                                <td className="text-right p-2"><span className={c.roi > 0 ? 'text-green-600' : 'text-red-600'}>{c.roi}%</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+              {!campaignMetricsLoading && !campaignMetrics && (
+                <div className="text-center py-12 text-gray-400">No campaign analytics data available</div>
+              )}
+            </>
           )}
         </>
       )}
 
-      {/* Customer Details Modal */}
       {selectedCustomer && customerDetails && (
-        <CustomerDetailModal 
-          customer={customerDetails} 
-          onClose={() => { setSelectedCustomer(null); setCustomerDetails(null); }} 
-        />
+        <CustomerDetailModal customer={customerDetails} onClose={() => { setSelectedCustomer(null); setCustomerDetails(null); }} />
       )}
-
-      {/* Broker Details Modal */}
       {selectedBroker && brokerDetails && (
-        <BrokerDetailModal 
-          broker={brokerDetails} 
-          onClose={() => { setSelectedBroker(null); setBrokerDetails(null); }} 
-        />
+        <BrokerDetailModal broker={brokerDetails} onClose={() => { setSelectedBroker(null); setBrokerDetails(null); }} />
       )}
     </div>
   );
@@ -4449,15 +5558,29 @@ function SettingsView() {
         >
           Project Linking
         </button>
-        {getUserRole() === 'admin' && (
-          <button
-            onClick={() => setSettingsTab('deletion-requests')}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
-              settingsTab === 'deletion-requests' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Deletion Requests {pendingCount > 0 && <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">{pendingCount}</span>}
-          </button>
+        {['admin', 'cco'].includes(getUserRole()) && (
+          <>
+            <button
+              onClick={() => setSettingsTab('deletion-requests')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+                settingsTab === 'deletion-requests' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Deletion Requests {pendingCount > 0 && <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">{pendingCount}</span>}
+            </button>
+            <button onClick={() => setSettingsTab('pipeline-stages')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'pipeline-stages' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              Pipeline Stages
+            </button>
+            <button onClick={() => setSettingsTab('lead-assignments')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'lead-assignments' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              Lead Assignments
+            </button>
+            <button onClick={() => setSettingsTab('search-audit')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'search-audit' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              Search Audit
+            </button>
+          </>
         )}
       </div>
 
@@ -4546,6 +5669,10 @@ function SettingsView() {
         </div>
       )}
 
+      {settingsTab === 'pipeline-stages' && <PipelineStagesSettings />}
+      {settingsTab === 'lead-assignments' && <LeadAssignmentsSettings />}
+      {settingsTab === 'search-audit' && <SearchAuditSettings />}
+
       {settingsTab === 'reps' && (
       <div className="bg-white rounded-2xl shadow-sm border p-6">
         <div className="flex items-center justify-between mb-4">
@@ -4594,6 +5721,7 @@ function SettingsView() {
                 <select value={form.role || 'user'} onChange={e => setForm({...form, role: e.target.value})}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-1 focus:ring-gray-900">
                   <option value="admin">Admin</option>
+                  <option value="cco">CCO</option>
                   <option value="manager">Manager</option>
                   <option value="creator">Creator</option>
                   <option value="user">User</option>
@@ -4955,14 +6083,253 @@ function MediaManager({ entityType, entityId, onUpload }) {
 // ============================================
 // DETAIL MODALS
 // ============================================
+// ============================================
+// SETTINGS: PIPELINE STAGES MANAGEMENT
+// ============================================
+function PipelineStagesSettings() {
+  const [stages, setStages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: '', display_order: 99, color: '#6B7280', is_terminal: false });
+
+  useEffect(() => { loadStages(); }, []);
+  const loadStages = async () => {
+    try { const res = await api.get('/pipeline-stages'); setStages(res.data); }
+    catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post('/pipeline-stages', form);
+      setShowForm(false); setForm({ name: '', display_order: 99, color: '#6B7280', is_terminal: false }); loadStages();
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  const handleDelete = async (s) => {
+    if (!confirm(`Delete stage "${s.name}"?`)) return;
+    try { await api.delete(`/pipeline-stages/${s.id}`); loadStages(); }
+    catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  const handleReorder = async (s, direction) => {
+    const idx = stages.findIndex(st => st.id === s.id);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= stages.length) return;
+    try {
+      await api.put(`/pipeline-stages/${s.id}`, { display_order: stages[swapIdx].display_order });
+      await api.put(`/pipeline-stages/${stages[swapIdx].id}`, { display_order: s.display_order });
+      loadStages();
+    } catch (e) { console.error(e); }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Pipeline Stages</h3>
+          <p className="text-sm text-gray-500">Configure lead pipeline stages</p>
+        </div>
+        <button onClick={() => setShowForm(!showForm)} className="bg-gray-900 text-white px-4 py-2 text-sm rounded-lg hover:bg-gray-800">
+          {showForm ? 'Cancel' : 'Add Stage'}
+        </button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleCreate} className="bg-gray-50 p-4 rounded-lg mb-4 flex items-end gap-3 flex-wrap">
+          <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+          <Input label="Order" type="number" value={form.display_order} onChange={e => setForm({...form, display_order: parseInt(e.target.value)})} />
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Color</label>
+            <input type="color" value={form.color} onChange={e => setForm({...form, color: e.target.value})} className="h-9 w-16 border rounded-lg cursor-pointer" />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.is_terminal} onChange={e => setForm({...form, is_terminal: e.target.checked})} />
+            Terminal
+          </label>
+          <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Create</button>
+        </form>
+      )}
+
+      {loading ? <Loader /> : (
+        <div className="space-y-2">
+          {stages.map((s, i) => (
+            <div key={s.id} className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
+              <div className="flex items-center gap-3">
+                <span className="w-4 h-4 rounded-full" style={{ backgroundColor: s.color }}></span>
+                <span className="font-medium text-sm">{s.name}</span>
+                <span className="text-xs text-gray-400">#{s.display_order}</span>
+                {s.is_terminal && <span className="px-2 py-0.5 text-xs bg-gray-200 text-gray-600 rounded-full">Terminal</span>}
+              </div>
+              <div className="flex items-center gap-1">
+                <button onClick={() => handleReorder(s, 'up')} disabled={i === 0} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30">^</button>
+                <button onClick={() => handleReorder(s, 'down')} disabled={i === stages.length - 1} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30">v</button>
+                <button onClick={() => handleDelete(s)} className="p-1 text-red-400 hover:text-red-600 ml-2">Del</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// SETTINGS: LEAD ASSIGNMENT REQUESTS
+// ============================================
+function LeadAssignmentsSettings() {
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('pending');
+
+  useEffect(() => { loadRequests(); }, [filter]);
+  const loadRequests = async () => {
+    setLoading(true);
+    try { const res = await api.get(`/lead-assignment-requests?status=${filter}`); setRequests(res.data); }
+    catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const handleReview = async (reqId, action) => {
+    try {
+      await api.post(`/lead-assignment-requests/${reqId}/review`, { action });
+      if (window.showToast) window.showToast('Done', `Request ${action}d`, 'success');
+      loadRequests();
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Lead Assignment Requests</h3>
+          <p className="text-sm text-gray-500">Review assignment requests from sales reps</p>
+        </div>
+        <div className="flex gap-1">
+          {['pending', 'approved', 'rejected'].map(s => (
+            <button key={s} onClick={() => setFilter(s)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg ${filter === s ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              {s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? <Loader /> : requests.length === 0 ? (
+        <div className="text-center py-8 text-gray-400">No {filter} requests</div>
+      ) : (
+        <div className="divide-y">
+          {requests.map(r => (
+            <div key={r.id} className="py-3 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-xs font-mono text-gray-400">{r.request_id}</span>
+                  <span className="font-medium text-sm">{r.lead_name}</span>
+                  <span className="text-xs text-gray-400">({r.lead_id})</span>
+                </div>
+                <div className="text-xs text-gray-500">
+                  Requested by <span className="font-medium">{r.requested_by}</span>
+                  {r.reason && <span> — {r.reason}</span>}
+                  <span className="ml-2 text-gray-400">{new Date(r.created_at).toLocaleDateString()}</span>
+                </div>
+              </div>
+              {r.status === 'pending' && (
+                <div className="flex gap-2">
+                  <button onClick={() => handleReview(r.id, 'approve')} className="px-3 py-1 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">Approve</button>
+                  <button onClick={() => handleReview(r.id, 'reject')} className="px-3 py-1 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Reject</button>
+                </div>
+              )}
+              {r.status !== 'pending' && (
+                <span className={`px-2 py-1 text-xs rounded-full ${r.status === 'approved' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{r.status}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// SETTINGS: SEARCH AUDIT LOG
+// ============================================
+function SearchAuditSettings() {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { loadLogs(); }, []);
+  const loadLogs = async () => {
+    try { const res = await api.get('/search-log?limit=100'); setLogs(res.data); }
+    catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border p-6">
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold text-gray-900">Search Audit Log</h3>
+        <p className="text-sm text-gray-500">Cross-rep search activity — when a rep searches for another rep's customer/lead</p>
+      </div>
+
+      {loading ? <Loader /> : logs.length === 0 ? (
+        <div className="text-center py-8 text-gray-400">No search activity recorded yet</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Searcher</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Query</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Type</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Matched</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Owner Rep</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Date</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {logs.map(l => (
+                <tr key={l.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-mono text-xs">{l.searcher_rep_id}</td>
+                  <td className="px-4 py-3">{l.search_query}</td>
+                  <td className="px-4 py-3"><span className="px-2 py-0.5 text-xs bg-gray-100 rounded">{l.search_type}</span></td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-0.5 text-xs rounded-full ${l.matched_entity_type === 'customer' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                      {l.matched_entity_type}
+                    </span>
+                    <span className="ml-1">{l.matched_entity_name}</span>
+                    <span className="text-xs text-gray-400 ml-1">({l.matched_entity_id})</span>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs">{l.owner_rep_id}</td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{new Date(l.created_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CustomerDetailModal({ customer, onClose }) {
   const formatDate = (dateStr) => {
     if (!dateStr) return 'N/A';
     return new Date(dateStr).toLocaleDateString('en-PK', { year: 'numeric', month: 'short', day: 'numeric' });
   };
 
+  const installments = customer.installments || { overdue: [], future: [], paid: [] };
+  const receipts = Array.isArray(customer.receipts) ? customer.receipts : [];
+  const interactions = Array.isArray(customer.interactions) ? customer.interactions : [];
+  const financials = {
+    total_sale: customer.financials?.total_sale || 0,
+    total_received: customer.financials?.total_received || 0,
+    total_overdue: customer.financials?.total_overdue ?? customer.financials?.overdue ?? 0,
+    future_receivable: customer.financials?.future_receivable || 0,
+  };
+
   return (
-    <Modal title={`Customer Details: ${customer.customer.name}`} onClose={onClose} wide>
+    <Modal title={`Customer Details: ${customer.customer?.name || 'Unknown'}`} onClose={onClose} wide>
       <div className="space-y-6 max-h-[80vh] overflow-y-auto">
         {/* Personal Details */}
         <div>
@@ -4997,27 +6364,27 @@ function CustomerDetailModal({ customer, onClose }) {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-blue-50 p-4 rounded-lg">
               <div className="text-xs text-blue-600 mb-1">Total Sale</div>
-              <div className="text-lg font-semibold text-blue-900">{formatCurrency(customer.financials.total_sale)}</div>
+              <div className="text-lg font-semibold text-blue-900">{formatCurrency(financials.total_sale)}</div>
             </div>
             <div className="bg-green-50 p-4 rounded-lg">
               <div className="text-xs text-green-600 mb-1">Total Received</div>
-              <div className="text-lg font-semibold text-green-900">{formatCurrency(customer.financials.total_received)}</div>
+              <div className="text-lg font-semibold text-green-900">{formatCurrency(financials.total_received)}</div>
             </div>
             <div className="bg-red-50 p-4 rounded-lg">
               <div className="text-xs text-red-600 mb-1">Total Overdue</div>
-              <div className="text-lg font-semibold text-red-900">{formatCurrency(customer.financials.total_overdue)}</div>
+              <div className="text-lg font-semibold text-red-900">{formatCurrency(financials.total_overdue)}</div>
             </div>
             <div className="bg-purple-50 p-4 rounded-lg">
               <div className="text-xs text-purple-600 mb-1">Future Receivable</div>
-              <div className="text-lg font-semibold text-purple-900">{formatCurrency(customer.financials.future_receivable)}</div>
+              <div className="text-lg font-semibold text-purple-900">{formatCurrency(financials.future_receivable)}</div>
             </div>
           </div>
         </div>
 
         {/* Overdue Installments */}
-        {customer.installments.overdue.length > 0 && (
+        {installments.overdue.length > 0 && (
           <div>
-            <h3 className="text-sm font-semibold text-red-700 uppercase mb-3">Overdue Installments ({customer.installments.overdue.length})</h3>
+            <h3 className="text-sm font-semibold text-red-700 uppercase mb-3">Overdue Installments ({installments.overdue.length})</h3>
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-red-50">
@@ -5031,7 +6398,7 @@ function CustomerDetailModal({ customer, onClose }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {customer.installments.overdue.map((inst, idx) => (
+                  {installments.overdue.map((inst, idx) => (
                     <tr key={idx} className="border-t hover:bg-red-50">
                       <td className="p-2">{inst.project_name || 'N/A'}</td>
                       <td className="p-2">{inst.unit_number || 'N/A'}</td>
@@ -5048,9 +6415,9 @@ function CustomerDetailModal({ customer, onClose }) {
         )}
 
         {/* Future Installments */}
-        {customer.installments.future.length > 0 && (
+        {installments.future.length > 0 && (
           <div>
-            <h3 className="text-sm font-semibold text-blue-700 uppercase mb-3">Future Installments ({customer.installments.future.length})</h3>
+            <h3 className="text-sm font-semibold text-blue-700 uppercase mb-3">Future Installments ({installments.future.length})</h3>
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-blue-50">
@@ -5063,7 +6430,7 @@ function CustomerDetailModal({ customer, onClose }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {customer.installments.future.map((inst, idx) => (
+                  {installments.future.map((inst, idx) => (
                     <tr key={idx} className="border-t hover:bg-blue-50">
                       <td className="p-2">{inst.project_name || 'N/A'}</td>
                       <td className="p-2">{inst.unit_number || 'N/A'}</td>
@@ -5079,9 +6446,9 @@ function CustomerDetailModal({ customer, onClose }) {
         )}
 
         {/* Receipts */}
-        {customer.receipts.length > 0 && (
+        {receipts.length > 0 && (
           <div>
-            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Receipts ({customer.receipts.length})</h3>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Receipts ({receipts.length})</h3>
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
@@ -5094,7 +6461,7 @@ function CustomerDetailModal({ customer, onClose }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {customer.receipts.map((r, idx) => (
+                  {receipts.map((r, idx) => (
                     <tr key={idx} className="border-t hover:bg-gray-50">
                       <td className="p-2">{r.receipt_id}</td>
                       <td className="text-right p-2">{formatDate(r.payment_date)}</td>
@@ -5110,11 +6477,11 @@ function CustomerDetailModal({ customer, onClose }) {
         )}
 
         {/* Interactions */}
-        {customer.interactions.length > 0 && (
+        {interactions.length > 0 && (
           <div>
-            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Recent Interactions ({customer.interactions.length})</h3>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Recent Interactions ({interactions.length})</h3>
             <div className="space-y-2">
-              {customer.interactions.map((i, idx) => (
+              {interactions.map((i, idx) => (
                 <div key={idx} className="border rounded-lg p-3 bg-gray-50">
                   <div className="flex justify-between items-start mb-2">
                     <div className="font-medium">{i.interaction_type}</div>
@@ -5128,6 +6495,12 @@ function CustomerDetailModal({ customer, onClose }) {
             </div>
           </div>
         )}
+
+        {/* Customer Documents */}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Documents</h3>
+          <MediaManager entityType="customer" entityId={customer.customer.id} />
+        </div>
       </div>
     </Modal>
   );

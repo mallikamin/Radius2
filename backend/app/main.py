@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Query, Fo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, text
+from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, Boolean, text, or_, and_, case, literal
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from sqlalchemy.sql import func
@@ -111,7 +111,7 @@ class CompanyRep(Base):
     mobile = Column(String(20))
     email = Column(String(255))
     password_hash = Column(String(255))  # Hashed password
-    role = Column(String(50), default="user")  # admin, manager, user, viewer
+    role = Column(String(50), default="user")  # admin, manager, cco, user, viewer, creator
     status = Column(String(20), default="active")
     created_at = Column(DateTime, server_default=func.now())
 
@@ -183,6 +183,7 @@ class Interaction(Base):
     status = Column(String(50))
     notes = Column(Text)
     next_follow_up = Column(Date)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="SET NULL"))
     created_at = Column(DateTime, server_default=func.now())
 
 class Campaign(Base):
@@ -214,6 +215,9 @@ class Lead(Base):
     converted_customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"))
     converted_broker_id = Column(UUID(as_uuid=True), ForeignKey("brokers.id"))
     notes = Column(Text)
+    pipeline_stage = Column(String(100), default="New")
+    last_contacted_at = Column(DateTime)
+    is_stale = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -311,6 +315,58 @@ class DeletionRequest(Base):
     reviewed_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     reviewed_at = Column(DateTime)
     rejection_reason = Column(Text)
+
+# ============================================
+# NOTIFICATION & PIPELINE MODELS
+# ============================================
+class Notification(Base):
+    __tablename__ = "notifications"
+    id = Column(Integer, primary_key=True)
+    notification_id = Column(String(20), unique=True)
+    user_rep_id = Column(String(20), nullable=False)
+    title = Column(String(200), nullable=False)
+    message = Column(Text)
+    type = Column(String(50), default="info")
+    category = Column(String(50))
+    entity_type = Column(String(50))
+    entity_id = Column(String(50))
+    is_read = Column(Boolean, default=False)
+    data = Column(JSONB, default=dict)
+    created_at = Column(DateTime, server_default=func.now())
+    read_at = Column(DateTime)
+
+class SearchLog(Base):
+    __tablename__ = "search_log"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    searcher_rep_id = Column(String(20), nullable=False)
+    search_query = Column(String(255), nullable=False)
+    search_type = Column(String(50))
+    matched_entity_type = Column(String(50))
+    matched_entity_id = Column(String(50))
+    matched_entity_name = Column(String(255))
+    owner_rep_id = Column(String(20))
+    created_at = Column(DateTime, server_default=func.now())
+
+class LeadAssignmentRequest(Base):
+    __tablename__ = "lead_assignment_requests"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_id = Column(String(20), unique=True)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False)
+    requested_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="SET NULL"))
+    reason = Column(Text)
+    status = Column(String(20), default="pending")
+    reviewed_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    reviewed_at = Column(DateTime)
+    created_at = Column(DateTime, server_default=func.now())
+
+class PipelineStage(Base):
+    __tablename__ = "pipeline_stages"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False, unique=True)
+    display_order = Column(Integer, nullable=False)
+    color = Column(String(20), default="#6B7280")
+    is_terminal = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
 
 # ============================================
 # VECTOR MODELS
@@ -436,6 +492,137 @@ class VectorReconciliation(Base):
     last_sync_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
+
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
+def normalize_mobile(mobile):
+    """Normalize Pakistan mobile number for duplicate detection"""
+    if not mobile:
+        return None
+    m = mobile.strip().replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+    if m.startswith("+92"):
+        m = "0" + m[3:]
+    elif m.startswith("92") and len(m) > 10:
+        m = "0" + m[2:]
+    return m if m else None
+
+def create_notification(db, user_rep_id, notif_type, title, message, category=None, entity_type=None, entity_id=None, data=None):
+    """Helper to create a notification record"""
+    n = Notification(
+        user_rep_id=user_rep_id,
+        type=notif_type,
+        title=title,
+        message=message,
+        category=category or notif_type,
+        entity_type=entity_type,
+        entity_id=str(entity_id) if entity_id else None,
+        data=data or {}
+    )
+    db.add(n)
+    return n
+
+def notify_duplicate_attempt(db, duplicates, attempted_by_user, action_type, campaign_name=None):
+    """Send notifications when duplicate lead addition is attempted.
+    action_type: 'single' = notify original rep + admin/CCO, 'bulk' = admin/CCO only.
+    """
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    campaign_info = f" to campaign '{campaign_name}'" if campaign_name else ""
+
+    # For single add: notify original lead owner
+    if action_type == "single":
+        notified_reps = set()
+        for dup in duplicates:
+            if dup["type"] == "lead" and dup.get("assigned_rep_id"):
+                rep_id = dup["assigned_rep_id"]
+                if rep_id not in notified_reps and rep_id != attempted_by_user.rep_id:
+                    notified_reps.add(rep_id)
+                    create_notification(
+                        db, rep_id, "duplicate_attempt",
+                        "Duplicate Lead Attempt",
+                        f"{attempted_by_user.name} tried adding your lead {dup['name']} ({dup['entity_id']}){campaign_info} on {timestamp}",
+                        category="lead", entity_type="lead", entity_id=dup["entity_id"],
+                        data={"attempted_by": attempted_by_user.rep_id, "attempted_by_name": attempted_by_user.name,
+                              "mobile": dup["mobile"], "campaign": campaign_name}
+                    )
+
+    # Notify all admin/CCO users
+    admins = db.query(CompanyRep).filter(
+        CompanyRep.role.in_(["admin", "cco"]), CompanyRep.status == "active"
+    ).all()
+    for admin in admins:
+        if admin.rep_id == attempted_by_user.rep_id:
+            continue
+        if action_type == "single":
+            dup = duplicates[0]
+            create_notification(
+                db, admin.rep_id, "duplicate_attempt",
+                "Duplicate Lead Blocked",
+                f"{attempted_by_user.name} tried adding duplicate lead (matches {dup['type']} {dup['entity_id']} — {dup['name']}){campaign_info} on {timestamp}",
+                category="admin", entity_type=dup["type"], entity_id=dup["entity_id"],
+                data={"attempted_by": attempted_by_user.rep_id, "attempted_by_name": attempted_by_user.name,
+                      "mobile": dup["mobile"], "campaign": campaign_name}
+            )
+        else:  # bulk
+            create_notification(
+                db, admin.rep_id, "duplicate_attempt",
+                "Bulk Import — Duplicates Found",
+                f"{attempted_by_user.name} bulk imported leads with {len(duplicates)} duplicate(s) detected{campaign_info} on {timestamp}",
+                category="admin", entity_type="lead", entity_id=None,
+                data={"attempted_by": attempted_by_user.rep_id, "attempted_by_name": attempted_by_user.name,
+                      "duplicate_count": len(duplicates), "campaign": campaign_name}
+            )
+
+def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id=None, exclude_broker_id=None):
+    """Check if mobile exists in customers, leads, or brokers tables. Returns list of matches."""
+    if not mobile:
+        return []
+    normalized = normalize_mobile(mobile)
+    if not normalized:
+        return []
+    # Use last 7 digits for fuzzy SQL match (avoids dash/format mismatch in stored values)
+    suffix = normalized[-7:]
+    # Strip non-digits in SQL for reliable matching: regexp_replace(mobile, '[^0-9]', '', 'g')
+    stripped_cust = func.regexp_replace(Customer.mobile, '[^0-9]', '', 'g')
+    stripped_lead = func.regexp_replace(Lead.mobile, '[^0-9]', '', 'g')
+    stripped_broker = func.regexp_replace(Broker.mobile, '[^0-9]', '', 'g')
+    matches = []
+    # Check customers via SQL
+    cust_q = db.query(Customer).filter(Customer.mobile.isnot(None), stripped_cust.like(f"%{suffix}%"))
+    if exclude_customer_id:
+        cust_q = cust_q.filter(Customer.id != exclude_customer_id)
+    for c in cust_q.all():
+        if normalize_mobile(c.mobile) == normalized:
+            matches.append({
+                "type": "customer", "id": str(c.id), "entity_id": c.customer_id,
+                "name": c.name, "mobile": c.mobile
+            })
+    # Check leads via SQL
+    lead_q = db.query(Lead, CompanyRep).outerjoin(
+        CompanyRep, Lead.assigned_rep_id == CompanyRep.id
+    ).filter(Lead.status != "converted", Lead.mobile.isnot(None), stripped_lead.like(f"%{suffix}%"))
+    if exclude_lead_id:
+        lead_q = lead_q.filter(Lead.id != exclude_lead_id)
+    for l, rep in lead_q.all():
+        if normalize_mobile(l.mobile) == normalized:
+            matches.append({
+                "type": "lead", "id": str(l.id), "entity_id": l.lead_id,
+                "name": l.name, "mobile": l.mobile,
+                "assigned_rep": rep.name if rep else None,
+                "assigned_rep_id": rep.rep_id if rep else None
+            })
+    # Check brokers via SQL
+    broker_q = db.query(Broker).filter(Broker.mobile.isnot(None), stripped_broker.like(f"%{suffix}%"))
+    if exclude_broker_id:
+        broker_q = broker_q.filter(Broker.id != exclude_broker_id)
+    for b in broker_q.all():
+        if normalize_mobile(b.mobile) == normalized:
+            matches.append({
+                "type": "broker", "id": str(b.id), "entity_id": b.broker_id,
+                "name": b.name, "mobile": b.mobile
+            })
+    return matches
 
 # ============================================
 # AUTHENTICATION SETUP
@@ -939,10 +1126,19 @@ def get_customer(cid: str, db: Session = Depends(get_db)):
 def create_customer(data: dict, db: Session = Depends(get_db)):
     if db.query(Customer).filter(Customer.mobile == data["mobile"]).first():
         raise HTTPException(400, f"Customer with mobile {data['mobile']} already exists")
+    # Check for duplicate mobile in leads
+    warnings = []
+    dupes = check_duplicate_mobile(db, data.get("mobile"))
+    for d in dupes:
+        if d["type"] == "lead":
+            warnings.append(f"Lead {d['entity_id']} ({d['name']}) has same mobile — assigned to {d.get('assigned_rep', 'unassigned')}")
     c = Customer(name=data["name"], mobile=data["mobile"], address=data.get("address"),
                  cnic=data.get("cnic"), email=data.get("email"))
     db.add(c); db.commit(); db.refresh(c)
-    return {"message": "Customer created", "id": str(c.id), "customer_id": c.customer_id}
+    result = {"message": "Customer created", "id": str(c.id), "customer_id": c.customer_id}
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 @app.put("/api/customers/{cid}")
 def update_customer(cid: str, data: dict, db: Session = Depends(get_db)):
@@ -991,8 +1187,11 @@ async def bulk_import_customers(file: UploadFile = File(...), db: Session = Depe
         try:
             name, mobile = row.get('name*', '').strip(), row.get('mobile*', '').strip()
             if not name or not mobile: results["errors"].append(f"Row {i}: Name and mobile required"); continue
-            if db.query(Customer).filter(Customer.mobile == mobile).first():
-                results["errors"].append(f"Row {i}: Mobile exists"); continue
+            dupes = check_duplicate_mobile(db, mobile)
+            if dupes:
+                dup = dupes[0]
+                results["errors"].append(f"Row {i}: Mobile exists in {dup['type']} {dup['entity_id']} ({dup['name']})")
+                continue
             c = Customer(name=name, mobile=mobile, address=row.get('address'), cnic=row.get('cnic'), email=row.get('email'))
             db.add(c); db.flush()
             results["success"] += 1
@@ -1147,8 +1346,13 @@ async def bulk_import_brokers(file: UploadFile = File(...), db: Session = Depend
         try:
             name, mobile = row.get('name*', '').strip(), row.get('mobile*', '').strip()
             if not name or not mobile: results["errors"].append(f"Row {i}: Name and mobile required"); continue
-            if db.query(Broker).filter(Broker.mobile == mobile).first():
-                results["errors"].append(f"Row {i}: Broker exists"); continue
+            # Check for duplicate brokers and leads (exclude customers — brokers link to matching customers)
+            dupes = check_duplicate_mobile(db, mobile)
+            broker_or_lead_dupes = [d for d in dupes if d["type"] in ("broker", "lead")]
+            if broker_or_lead_dupes:
+                dup = broker_or_lead_dupes[0]
+                results["errors"].append(f"Row {i}: Mobile exists in {dup['type']} {dup['entity_id']} ({dup['name']})")
+                continue
             customer = db.query(Customer).filter(Customer.mobile == mobile).first()
             rate = row.get('commission_rate', '').strip()
             b = Broker(name=name, mobile=mobile, company=row.get('company'),
@@ -1280,11 +1484,12 @@ def create_rep(data: dict, db: Session = Depends(get_db), current_user: CompanyR
 def update_rep(rid: str, data: dict, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
     r = db.query(CompanyRep).filter((CompanyRep.id == rid) | (CompanyRep.rep_id == rid)).first()
     if not r: raise HTTPException(404, "Rep not found")
-    
-    # Only admin can change roles, users can only update their own info
-    if "role" in data and current_user.role != "admin":
-        raise HTTPException(403, "Only admin can change roles")
-    if str(r.id) != str(current_user.id) and current_user.role != "admin":
+
+    # Only admin can change roles or status
+    if ("role" in data or "status" in data) and current_user.role != "admin":
+        raise HTTPException(403, "Only admin can change roles or status")
+    # Non-admin/cco can only update their own profile (name, mobile, email, password)
+    if str(r.id) != str(current_user.id) and current_user.role not in ["admin", "cco"]:
         raise HTTPException(403, "Can only update your own profile")
     
     for k in ["name", "mobile", "email", "status", "role"]:
@@ -1301,9 +1506,9 @@ def delete_rep(rid: str, db: Session = Depends(get_db), current_user: CompanyRep
     r = find_entity(db, CompanyRep, "rep_id", rid)
     if not r: raise HTTPException(404, "Rep not found")
 
-    # Creator role cannot delete
-    if current_user.role == "creator":
-        raise HTTPException(403, "Creator role cannot delete records")
+    # Only admin, cco, or manager can delete (or request deletion)
+    if current_user.role not in ["admin", "cco", "manager"]:
+        raise HTTPException(403, "Insufficient permissions to delete reps")
 
     # Admin can delete directly
     if current_user.role == "admin":
@@ -1693,8 +1898,8 @@ def update_installment(iid: str, data: dict, db: Session = Depends(get_db)):
 # INTERACTIONS API
 # ============================================
 @app.get("/api/interactions")
-def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: str = None, 
-                      limit: int = 100, db: Session = Depends(get_db)):
+def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: str = None,
+                      lead_id: str = None, limit: int = 100, db: Session = Depends(get_db)):
     q = db.query(Interaction)
     if rep_id:
         r = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
@@ -1705,18 +1910,38 @@ def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: st
     if broker_id:
         b = db.query(Broker).filter((Broker.id == broker_id) | (Broker.broker_id == broker_id)).first()
         if b: q = q.filter(Interaction.broker_id == b.id)
-    
+    if lead_id:
+        try:
+            lid_uuid = uuid.UUID(str(lead_id))
+            ld = db.query(Lead).filter((Lead.id == lid_uuid) | (Lead.lead_id == lead_id)).first()
+        except (ValueError, AttributeError):
+            ld = db.query(Lead).filter(Lead.lead_id == lead_id).first()
+        if ld: q = q.filter(Interaction.lead_id == ld.id)
+
     interactions = q.order_by(Interaction.created_at.desc()).limit(limit).all()
+
+    # Pre-fetch related entities to avoid N+1 queries
+    rep_ids = set(i.company_rep_id for i in interactions if i.company_rep_id)
+    cust_ids = set(i.customer_id for i in interactions if i.customer_id)
+    broker_ids = set(i.broker_id for i in interactions if i.broker_id)
+    lead_ids = set(i.lead_id for i in interactions if i.lead_id)
+    reps_map = {r.id: r for r in db.query(CompanyRep).filter(CompanyRep.id.in_(rep_ids)).all()} if rep_ids else {}
+    custs_map = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(cust_ids)).all()} if cust_ids else {}
+    brokers_map = {b.id: b for b in db.query(Broker).filter(Broker.id.in_(broker_ids)).all()} if broker_ids else {}
+    leads_map = {l.id: l for l in db.query(Lead).filter(Lead.id.in_(lead_ids)).all()} if lead_ids else {}
+
     result = []
     for i in interactions:
-        rep = db.query(CompanyRep).filter(CompanyRep.id == i.company_rep_id).first()
-        cust = db.query(Customer).filter(Customer.id == i.customer_id).first() if i.customer_id else None
-        broker = db.query(Broker).filter(Broker.id == i.broker_id).first() if i.broker_id else None
+        rep = reps_map.get(i.company_rep_id)
+        cust = custs_map.get(i.customer_id)
+        broker = brokers_map.get(i.broker_id)
+        ld = leads_map.get(i.lead_id)
         result.append({
             "id": str(i.id), "interaction_id": i.interaction_id,
             "rep_name": rep.name if rep else None, "rep_id": rep.rep_id if rep else None,
             "customer_name": cust.name if cust else None, "customer_id": cust.customer_id if cust else None,
             "broker_name": broker.name if broker else None, "broker_id": broker.broker_id if broker else None,
+            "lead_name": ld.name if ld else None, "lead_id": ld.lead_id if ld else None,
             "interaction_type": i.interaction_type, "status": i.status,
             "notes": i.notes, "next_follow_up": str(i.next_follow_up) if i.next_follow_up else None,
             "created_at": str(i.created_at)
@@ -1753,30 +1978,64 @@ def get_interactions_summary(db: Session = Depends(get_db)):
     }
 
 @app.post("/api/interactions")
-def create_interaction(data: dict, db: Session = Depends(get_db)):
-    rep = db.query(CompanyRep).filter((CompanyRep.id == data["company_rep_id"]) | (CompanyRep.rep_id == data["company_rep_id"])).first()
+def create_interaction(data: dict, db: Session = Depends(get_db),
+                       current_user: CompanyRep = Depends(get_current_user)):
+    try:
+        rep_uuid = uuid.UUID(str(data["company_rep_id"]))
+        rep = db.query(CompanyRep).filter((CompanyRep.id == rep_uuid) | (CompanyRep.rep_id == data["company_rep_id"])).first()
+    except (ValueError, AttributeError):
+        rep = db.query(CompanyRep).filter(CompanyRep.rep_id == data["company_rep_id"]).first()
     if not rep: raise HTTPException(404, "Company rep not found")
-    
+
     customer = None
     broker = None
+    lead = None
     if data.get("customer_id"):
-        customer = db.query(Customer).filter((Customer.id == data["customer_id"]) | (Customer.customer_id == data["customer_id"]) | (Customer.mobile == data["customer_id"])).first()
+        try:
+            cid = uuid.UUID(str(data["customer_id"]))
+            customer = db.query(Customer).filter((Customer.id == cid) | (Customer.customer_id == data["customer_id"])).first()
+        except (ValueError, AttributeError):
+            customer = db.query(Customer).filter((Customer.customer_id == data["customer_id"]) | (Customer.mobile == data["customer_id"])).first()
     if data.get("broker_id"):
-        broker = db.query(Broker).filter((Broker.id == data["broker_id"]) | (Broker.broker_id == data["broker_id"]) | (Broker.mobile == data["broker_id"])).first()
-    
-    if not customer and not broker:
-        raise HTTPException(400, "Must specify customer or broker")
-    
+        try:
+            bid = uuid.UUID(str(data["broker_id"]))
+            broker = db.query(Broker).filter((Broker.id == bid) | (Broker.broker_id == data["broker_id"])).first()
+        except (ValueError, AttributeError):
+            broker = db.query(Broker).filter((Broker.broker_id == data["broker_id"]) | (Broker.mobile == data["broker_id"])).first()
+    if data.get("lead_id"):
+        try:
+            lid_uuid = uuid.UUID(str(data["lead_id"]))
+            lead = db.query(Lead).filter((Lead.id == lid_uuid) | (Lead.lead_id == data["lead_id"])).first()
+        except (ValueError, AttributeError):
+            lead = db.query(Lead).filter(Lead.lead_id == data["lead_id"]).first()
+
+    # Auto-link customer/broker if lead has been synced
+    if lead and not customer and lead.converted_customer_id:
+        customer = db.query(Customer).filter(Customer.id == lead.converted_customer_id).first()
+    if lead and not broker and lead.converted_broker_id:
+        broker = db.query(Broker).filter(Broker.id == lead.converted_broker_id).first()
+
+    if not customer and not broker and not lead:
+        raise HTTPException(400, "Must specify customer, broker, or lead")
+
     i = Interaction(
         company_rep_id=rep.id,
         customer_id=customer.id if customer else None,
         broker_id=broker.id if broker else None,
+        lead_id=lead.id if lead else None,
         interaction_type=data["interaction_type"],
         status=data.get("status"),
         notes=data.get("notes"),
         next_follow_up=date.fromisoformat(data["next_follow_up"]) if data.get("next_follow_up") else None
     )
     db.add(i); db.commit(); db.refresh(i)
+
+    # Update lead's last_contacted_at if interaction is for a lead
+    if lead:
+        lead.last_contacted_at = datetime.utcnow()
+        lead.is_stale = False
+        db.commit()
+
     return {"message": "Interaction created", "id": str(i.id), "interaction_id": i.interaction_id}
 
 @app.put("/api/interactions/{iid}")
@@ -1918,43 +2177,81 @@ def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None,
         if status and status.strip(): q = q.filter(Lead.status == status)
         
         leads = q.order_by(Lead.created_at.desc()).limit(limit).all()
+        # Pre-fetch related entities to avoid N+1
+        camp_ids = set(l.campaign_id for l in leads if l.campaign_id)
+        rep_ids = set(l.assigned_rep_id for l in leads if l.assigned_rep_id)
+        camps_map = {c.id: c for c in db.query(Campaign).filter(Campaign.id.in_(camp_ids)).all()} if camp_ids else {}
+        reps_map = {r.id: r for r in db.query(CompanyRep).filter(CompanyRep.id.in_(rep_ids)).all()} if rep_ids else {}
         result = []
         for l in leads:
-            campaign = db.query(Campaign).filter(Campaign.id == l.campaign_id).first() if l.campaign_id else None
-            rep = db.query(CompanyRep).filter(CompanyRep.id == l.assigned_rep_id).first() if l.assigned_rep_id else None
+            campaign = camps_map.get(l.campaign_id)
+            rep = reps_map.get(l.assigned_rep_id)
             result.append({
                 "id": str(l.id), "lead_id": l.lead_id, "name": l.name,
                 "mobile": l.mobile, "email": l.email,
                 "campaign_name": campaign.name if campaign else None,
                 "campaign_id": campaign.campaign_id if campaign else None,
-            "assigned_rep": rep.name if rep else None, "rep_id": rep.rep_id if rep else None,
-            "status": l.status, "lead_type": l.lead_type or "prospect", "notes": l.notes,
-            "created_at": str(l.created_at)
-        })
+                "assigned_rep": rep.name if rep else None, "rep_id": rep.rep_id if rep else None,
+                "status": l.status, "lead_type": l.lead_type or "prospect", "notes": l.notes,
+                "pipeline_stage": l.pipeline_stage or "New",
+                "converted_customer_id": str(l.converted_customer_id) if l.converted_customer_id else None,
+                "converted_broker_id": str(l.converted_broker_id) if l.converted_broker_id else None,
+                "created_at": str(l.created_at)
+            })
         return result
     except Exception as e:
         print(f"Error listing leads: {e}")
         return []
 
 @app.post("/api/leads")
-def create_lead(data: dict, db: Session = Depends(get_db)):
+def create_lead(data: dict, db: Session = Depends(get_db),
+                current_user: CompanyRep = Depends(get_current_user)):
     try:
         campaign = None
         rep = None
+        campaign_name = None
         if data.get("campaign_id"):
             campaign = db.query(Campaign).filter((Campaign.id == data["campaign_id"]) | (Campaign.campaign_id == data["campaign_id"])).first()
+            campaign_name = campaign.name if campaign else None
         if data.get("assigned_rep_id"):
             rep = db.query(CompanyRep).filter((CompanyRep.id == data["assigned_rep_id"]) | (CompanyRep.rep_id == data["assigned_rep_id"])).first()
-        
+
+        # Check for duplicates — block creation if mobile matches existing record
+        mobile = data.get("mobile", "").strip() if data.get("mobile") else ""
+        if mobile:
+            dupes = check_duplicate_mobile(db, mobile)
+            if dupes:
+                # Send notifications before blocking
+                notify_duplicate_attempt(db, dupes, current_user, "single", campaign_name)
+                db.commit()
+                dup = dupes[0]
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Duplicate mobile number detected",
+                        "duplicate": {
+                            "type": dup["type"],
+                            "entity_id": dup["entity_id"],
+                            "name": dup["name"],
+                            "mobile": dup["mobile"],
+                            "assigned_rep": dup.get("assigned_rep"),
+                            "assigned_rep_id": dup.get("assigned_rep_id")
+                        }
+                    }
+                )
+
         l = Lead(
             campaign_id=campaign.id if campaign else None,
             assigned_rep_id=rep.id if rep else None,
-            name=data["name"], mobile=data.get("mobile"), email=data.get("email"),
+            name=data["name"], mobile=mobile or None, email=data.get("email"),
             source_details=data.get("source_details"), status=data.get("status", "new"),
-            lead_type=data.get("lead_type", "prospect"), notes=data.get("notes")
+            lead_type=data.get("lead_type", "prospect"), notes=data.get("notes"),
+            pipeline_stage=data.get("pipeline_stage", "New")
         )
         db.add(l); db.commit(); db.refresh(l)
         return {"message": "Lead created", "id": str(l.id), "lead_id": l.lead_id}
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         print(f"Error creating lead: {e}")
@@ -1973,88 +2270,143 @@ def download_leads_template():
                              headers={"Content-Disposition": "attachment; filename=leads_template.csv"})
 
 @app.post("/api/leads/bulk-import")
-async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = None, db: Session = Depends(get_db)):
+async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = None, db: Session = Depends(get_db),
+                            current_user: CompanyRep = Depends(get_current_user)):
     campaign = None
+    campaign_name = None
     if campaign_id:
         campaign = db.query(Campaign).filter((Campaign.id == campaign_id) | (Campaign.campaign_id == campaign_id)).first()
-    
+        campaign_name = campaign.name if campaign else None
+
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode('utf-8-sig')))
-    results = {"success": 0, "errors": []}
+    results = {"success": 0, "errors": [], "duplicates": []}
+    all_dup_records = []  # For notification at end
     for i, row in enumerate(reader, 2):
         try:
             name = row.get('name', '').strip()
             if not name: results["errors"].append(f"Row {i}: Name required"); continue
-            
+
+            mobile = (row.get('mobile') or '').strip()
+            # Check for duplicates if mobile provided
+            if mobile:
+                dupes = check_duplicate_mobile(db, mobile)
+                if dupes:
+                    for dup in dupes:
+                        results["duplicates"].append({
+                            "row": i, "uploaded_name": name, "uploaded_mobile": mobile,
+                            "system_type": dup["type"], "system_entity_id": dup["entity_id"],
+                            "system_name": dup["name"], "system_mobile": dup["mobile"],
+                            "system_assigned_rep": dup.get("assigned_rep") or "N/A"
+                        })
+                        all_dup_records.append(dup)
+                    continue  # Skip this row
+
             rep = None
             if row.get('assigned_rep'):
                 rep = db.query(CompanyRep).filter(
                     (CompanyRep.rep_id == row['assigned_rep']) | (CompanyRep.name == row['assigned_rep'])
                 ).first()
-            
+
             l = Lead(
                 campaign_id=campaign.id if campaign else None,
                 assigned_rep_id=rep.id if rep else None,
-                name=name, mobile=row.get('mobile'), email=row.get('email'),
+                name=name, mobile=mobile or None, email=row.get('email'),
                 source_details=row.get('source_details'), notes=row.get('notes')
             )
             db.add(l); db.flush()
             results["success"] += 1
         except Exception as e: results["errors"].append(f"Row {i}: {e}")
     db.commit()
+    # Notify admin/CCO about duplicates (not individual reps)
+    if all_dup_records:
+        notify_duplicate_attempt(db, all_dup_records, current_user, "bulk", campaign_name)
+        db.commit()
     return results
 
 @app.put("/api/leads/{lid}")
-def update_lead(lid: str, data: dict, db: Session = Depends(get_db)):
+def update_lead(lid: str, data: dict, db: Session = Depends(get_db),
+                current_user: CompanyRep = Depends(get_current_user)):
     l = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
     if not l: raise HTTPException(404, "Lead not found")
-    for k in ["name", "mobile", "email", "source_details", "status", "lead_type", "notes"]:
+    for k in ["name", "mobile", "email", "source_details", "status", "lead_type", "notes", "pipeline_stage"]:
         if k in data and data[k] is not None: setattr(l, k, data[k])
     if "assigned_rep_id" in data:
-        rep = db.query(CompanyRep).filter((CompanyRep.id == data["assigned_rep_id"]) | (CompanyRep.rep_id == data["assigned_rep_id"])).first() if data["assigned_rep_id"] else None
+        rep = None
+        if data["assigned_rep_id"]:
+            try:
+                rid = uuid.UUID(str(data["assigned_rep_id"]))
+                rep = db.query(CompanyRep).filter((CompanyRep.id == rid) | (CompanyRep.rep_id == data["assigned_rep_id"])).first()
+            except (ValueError, AttributeError):
+                rep = db.query(CompanyRep).filter(CompanyRep.rep_id == data["assigned_rep_id"]).first()
         l.assigned_rep_id = rep.id if rep else None
     db.commit()
     return {"message": "Lead updated"}
 
 @app.post("/api/leads/{lid}/convert")
-def convert_lead(lid: str, data: dict, db: Session = Depends(get_db)):
-    """Convert a lead to customer or broker"""
+def convert_lead(lid: str, data: dict, db: Session = Depends(get_db),
+                 current_user: CompanyRep = Depends(get_current_user)):
+    """Sync a lead to the customer or broker database. Does NOT mark as converted — that only happens when pipeline_stage is set to Won."""
     l = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
     if not l: raise HTTPException(404, "Lead not found")
-    
+
     convert_to = data.get("convert_to")  # 'customer' or 'broker'
     if convert_to == "customer":
-        # Check if customer with same mobile exists
-        existing = db.query(Customer).filter(Customer.mobile == l.mobile).first() if l.mobile else None
+        # Check if customer with same mobile already exists (using normalized comparison)
+        existing = None
+        if l.mobile:
+            normalized = normalize_mobile(l.mobile)
+            if normalized:
+                patterns = [normalized]
+                if normalized.startswith("0"):
+                    patterns.append("+92" + normalized[1:])
+                    patterns.append("92" + normalized[1:])
+                existing = db.query(Customer).filter(or_(*[Customer.mobile.ilike(p) for p in patterns])).first()
+        linked_existing = False
         if existing:
             l.converted_customer_id = existing.id
-            l.lead_type = "customer"
-            l.status = "converted"
+            linked_existing = True
+            entity_id = existing.customer_id
         else:
-            # Create new customer
             c = Customer(name=l.name, mobile=l.mobile or f"lead-{l.lead_id}", email=l.email)
             db.add(c); db.flush()
             l.converted_customer_id = c.id
-            l.lead_type = "customer"
-            l.status = "converted"
+            entity_id = c.customer_id
+        l.lead_type = "customer"
+        # Carry forward lead interactions to the customer
+        db.query(Interaction).filter(
+            Interaction.lead_id == l.id,
+            Interaction.customer_id.is_(None)
+        ).update({"customer_id": l.converted_customer_id}, synchronize_session="fetch")
         db.commit()
-        return {"message": "Lead converted to customer", "customer_id": str(l.converted_customer_id)}
-    
+        return {"message": "Lead synced to customer DB", "customer_id": str(l.converted_customer_id),
+                "linked_existing": linked_existing, "entity_id": entity_id}
+
     elif convert_to == "broker":
-        existing = db.query(Broker).filter(Broker.mobile == l.mobile).first() if l.mobile else None
+        existing = None
+        if l.mobile:
+            normalized = normalize_mobile(l.mobile)
+            if normalized:
+                patterns = [normalized]
+                if normalized.startswith("0"):
+                    patterns.append("+92" + normalized[1:])
+                    patterns.append("92" + normalized[1:])
+                existing = db.query(Broker).filter(or_(*[Broker.mobile.ilike(p) for p in patterns])).first()
+        linked_existing = False
         if existing:
             l.converted_broker_id = existing.id
-            l.lead_type = "broker"
-            l.status = "converted"
+            linked_existing = True
+            entity_id = existing.broker_id
         else:
             b = Broker(name=l.name, mobile=l.mobile or f"lead-{l.lead_id}", email=l.email)
             db.add(b); db.flush()
             l.converted_broker_id = b.id
-            l.lead_type = "broker"
-            l.status = "converted"
+            entity_id = b.broker_id
+        l.lead_type = "broker"
         db.commit()
-        return {"message": "Lead converted to broker", "broker_id": str(l.converted_broker_id)}
-    
+        return {"message": "Lead synced to broker DB", "broker_id": str(l.converted_broker_id),
+                "linked_existing": linked_existing, "entity_id": entity_id}
+
     raise HTTPException(400, "Invalid conversion type")
 
 @app.delete("/api/leads/{lid}")
@@ -3732,9 +4084,9 @@ async def upload_media(
     db: Session = Depends(get_db)
 ):
     """Upload media file"""
-    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment"]:
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker"]:
         raise HTTPException(400, "Invalid entity_type")
-    
+
     # Verify entity exists
     entity = None
     if entity_type == "transaction":
@@ -3747,10 +4099,14 @@ async def upload_media(
         entity = db.query(Receipt).filter((Receipt.id == entity_id) | (Receipt.receipt_id == entity_id)).first()
     elif entity_type == "payment":
         entity = db.query(Payment).filter((Payment.id == entity_id) | (Payment.payment_id == entity_id)).first()
-    
+    elif entity_type == "customer":
+        entity = db.query(Customer).filter((Customer.id == entity_id) | (Customer.customer_id == entity_id)).first()
+    elif entity_type == "broker":
+        entity = db.query(Broker).filter((Broker.id == entity_id) | (Broker.broker_id == entity_id)).first()
+
     if not entity:
         raise HTTPException(404, f"{entity_type} not found")
-    
+
     # Get rep if provided
     rep = None
     if uploaded_by_rep_id:
@@ -3885,9 +4241,9 @@ def download_media_file(file_id: str, db: Session = Depends(get_db)):
 @app.get("/api/media/{entity_type}/{entity_id}")
 def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get_db)):
     """List media files for an entity"""
-    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment"]:
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker"]:
         raise HTTPException(400, "Invalid entity_type")
-    
+
     # Get entity
     entity = None
     if entity_type == "transaction":
@@ -3900,10 +4256,14 @@ def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get
         entity = db.query(Receipt).filter((Receipt.id == entity_id) | (Receipt.receipt_id == entity_id)).first()
     elif entity_type == "payment":
         entity = db.query(Payment).filter((Payment.id == entity_id) | (Payment.payment_id == entity_id)).first()
-    
+    elif entity_type == "customer":
+        entity = db.query(Customer).filter((Customer.id == entity_id) | (Customer.customer_id == entity_id)).first()
+    elif entity_type == "broker":
+        entity = db.query(Broker).filter((Broker.id == entity_id) | (Broker.broker_id == entity_id)).first()
+
     if not entity:
         raise HTTPException(404, f"{entity_type} not found")
-    
+
     files = db.query(MediaFile).filter(
         MediaFile.entity_type == entity_type,
         MediaFile.entity_id == entity.id
@@ -6918,3 +7278,951 @@ def get_link_suggestions(
         "suggestions": suggestions,
         "total": len(suggestions)
     }
+
+# ============================================
+# NOTIFICATION API
+# ============================================
+@app.get("/api/notifications")
+def list_notifications(limit: int = 50, db: Session = Depends(get_db),
+                       current_user: CompanyRep = Depends(get_current_user)):
+    notifs = db.query(Notification).filter(
+        Notification.user_rep_id == current_user.rep_id
+    ).order_by(Notification.created_at.desc()).limit(limit).all()
+    return [{
+        "id": n.id, "notification_id": n.notification_id,
+        "title": n.title, "message": n.message, "type": n.type,
+        "category": n.category, "entity_type": n.entity_type,
+        "entity_id": n.entity_id, "is_read": bool(n.is_read),
+        "data": n.data or {}, "created_at": str(n.created_at),
+        "read_at": str(n.read_at) if n.read_at else None
+    } for n in notifs]
+
+@app.get("/api/notifications/unread")
+def get_unread_notifications(db: Session = Depends(get_db),
+                              current_user: CompanyRep = Depends(get_current_user)):
+    notifs = db.query(Notification).filter(
+        Notification.user_rep_id == current_user.rep_id,
+        Notification.is_read == False
+    ).order_by(Notification.created_at.desc()).limit(20).all()
+    count = db.query(Notification).filter(
+        Notification.user_rep_id == current_user.rep_id,
+        Notification.is_read == False
+    ).count()
+    return {
+        "count": count,
+        "notifications": [{
+            "id": n.id, "notification_id": n.notification_id,
+            "title": n.title, "message": n.message, "type": n.type,
+            "category": n.category, "data": n.data or {},
+            "created_at": str(n.created_at)
+        } for n in notifs]
+    }
+
+@app.post("/api/notifications/{nid}/read")
+def mark_notification_read(nid: int, db: Session = Depends(get_db),
+                           current_user: CompanyRep = Depends(get_current_user)):
+    n = db.query(Notification).filter(
+        Notification.id == nid,
+        Notification.user_rep_id == current_user.rep_id
+    ).first()
+    if not n: raise HTTPException(404, "Notification not found")
+    n.is_read = True
+    n.read_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Marked as read"}
+
+@app.post("/api/notifications/read-all")
+def mark_all_notifications_read(db: Session = Depends(get_db),
+                                 current_user: CompanyRep = Depends(get_current_user)):
+    db.query(Notification).filter(
+        Notification.user_rep_id == current_user.rep_id,
+        Notification.is_read == False
+    ).update({"is_read": True, "read_at": datetime.utcnow()}, synchronize_session="fetch")
+    db.commit()
+    return {"message": "All notifications marked as read"}
+
+# ============================================
+# DUPLICATE CHECK API
+# ============================================
+@app.get("/api/duplicate-check")
+def duplicate_check(mobile: str = None, db: Session = Depends(get_db),
+                    current_user: CompanyRep = Depends(get_current_user)):
+    if not mobile:
+        return {"found": False, "matches": []}
+    matches = check_duplicate_mobile(db, mobile)
+    return {"found": len(matches) > 0, "matches": matches}
+
+# ============================================
+# UNIFIED SEARCH API
+# ============================================
+@app.get("/api/search/unified")
+def unified_search(q: str = "", search_type: str = "mobile",
+                   db: Session = Depends(get_db),
+                   current_user: CompanyRep = Depends(get_current_user)):
+    if not q or len(q) < 2:
+        return {"results": []}
+
+    results = []
+    seen_ids = set()  # Deduplicate results from multi-transaction JOINs
+
+    if search_type == "mobile":
+        normalized = normalize_mobile(q)
+        if normalized:
+            suffix = normalized[-7:]  # last 7 digits for fuzzy SQL match
+            # Strip non-digits in SQL for reliable matching
+            stripped_cust_mobile = func.regexp_replace(Customer.mobile, '[^0-9]', '', 'g')
+            stripped_lead_mobile = func.regexp_replace(Lead.mobile, '[^0-9]', '', 'g')
+
+            # Search customers via SQL with JOIN for rep
+            cust_rows = db.query(Customer, CompanyRep).outerjoin(
+                Transaction, Transaction.customer_id == Customer.id
+            ).outerjoin(
+                CompanyRep, CompanyRep.id == Transaction.company_rep_id
+            ).filter(
+                Customer.mobile.isnot(None),
+                stripped_cust_mobile.like(f"%{suffix}%")
+            ).all()
+            for c, rep in cust_rows:
+                if str(c.id) in seen_ids:
+                    continue
+                if normalize_mobile(c.mobile) == normalized:
+                    seen_ids.add(str(c.id))
+                    results.append({
+                        "type": "customer", "id": str(c.id), "entity_id": c.customer_id,
+                        "name": c.name, "mobile": c.mobile,
+                        "owner_rep": rep.name if rep else None,
+                        "owner_rep_id": rep.rep_id if rep else None
+                    })
+            # Search leads via SQL with JOIN for rep
+            lead_rows = db.query(Lead, CompanyRep).outerjoin(
+                CompanyRep, CompanyRep.id == Lead.assigned_rep_id
+            ).filter(
+                Lead.status != "converted",
+                Lead.mobile.isnot(None),
+                stripped_lead_mobile.like(f"%{suffix}%")
+            ).all()
+            for l, rep in lead_rows:
+                if normalize_mobile(l.mobile) == normalized:
+                    results.append({
+                        "type": "lead", "id": str(l.id), "entity_id": l.lead_id,
+                        "name": l.name, "mobile": l.mobile,
+                        "pipeline_stage": l.pipeline_stage,
+                        "owner_rep": rep.name if rep else None,
+                        "owner_rep_id": rep.rep_id if rep else None
+                    })
+    else:
+        # Name search via SQL ILIKE
+        cust_rows = db.query(Customer, CompanyRep).outerjoin(
+            Transaction, Transaction.customer_id == Customer.id
+        ).outerjoin(
+            CompanyRep, CompanyRep.id == Transaction.company_rep_id
+        ).filter(
+            Customer.name.ilike(f"%{q}%")
+        ).all()
+        for c, rep in cust_rows:
+            if str(c.id) in seen_ids:
+                continue
+            seen_ids.add(str(c.id))
+            results.append({
+                "type": "customer", "id": str(c.id), "entity_id": c.customer_id,
+                "name": c.name, "mobile": c.mobile,
+                "owner_rep": rep.name if rep else None,
+                "owner_rep_id": rep.rep_id if rep else None
+            })
+        lead_rows = db.query(Lead, CompanyRep).outerjoin(
+            CompanyRep, CompanyRep.id == Lead.assigned_rep_id
+        ).filter(
+            Lead.status != "converted",
+            Lead.name.ilike(f"%{q}%")
+        ).all()
+        for l, rep in lead_rows:
+            results.append({
+                "type": "lead", "id": str(l.id), "entity_id": l.lead_id,
+                "name": l.name, "mobile": l.mobile,
+                "pipeline_stage": l.pipeline_stage,
+                "owner_rep": rep.name if rep else None,
+                "owner_rep_id": rep.rep_id if rep else None
+            })
+
+    # Log search if results found belonging to another rep, aggregate notifications per owner
+    owner_results = {}  # owner_rep_id -> list of result names
+    for r in results:
+        if r.get("owner_rep_id") and r["owner_rep_id"] != current_user.rep_id:
+            # Log each search hit individually
+            log = SearchLog(
+                searcher_rep_id=current_user.rep_id,
+                search_query=q,
+                search_type=search_type,
+                matched_entity_type=r["type"],
+                matched_entity_id=r["entity_id"],
+                matched_entity_name=r["name"],
+                owner_rep_id=r["owner_rep_id"]
+            )
+            db.add(log)
+            # Aggregate for notification
+            owner_id = r["owner_rep_id"]
+            if owner_id not in owner_results:
+                owner_results[owner_id] = []
+            owner_results[owner_id].append(r["name"])
+    # Send one aggregated notification per owner rep
+    for owner_id, names in owner_results.items():
+        count = len(names)
+        preview = ", ".join(names[:3])
+        if count > 3:
+            preview += f" (+{count - 3} more)"
+        create_notification(
+            db, owner_id, "search_alert",
+            f"{current_user.name} searched your records ({count} found)",
+            f"{current_user.name} ({current_user.rep_id}) searched for '{q}' — matched: {preview}",
+            category="search_alert",
+            data={"searcher_rep_id": current_user.rep_id, "searcher_name": current_user.name, "match_count": count}
+        )
+    if owner_results:
+        try:
+            db.commit()
+        except Exception as e:
+            print(f"[WARN] Search log commit failed: {e}")
+            db.rollback()
+
+    return {"results": results}
+
+@app.get("/api/search-log")
+def get_search_log(limit: int = 50, db: Session = Depends(get_db),
+                   current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    logs = db.query(SearchLog).order_by(SearchLog.created_at.desc()).limit(limit).all()
+    return [{
+        "id": str(l.id), "searcher_rep_id": l.searcher_rep_id,
+        "search_query": l.search_query, "search_type": l.search_type,
+        "matched_entity_type": l.matched_entity_type,
+        "matched_entity_id": l.matched_entity_id,
+        "matched_entity_name": l.matched_entity_name,
+        "owner_rep_id": l.owner_rep_id,
+        "created_at": str(l.created_at)
+    } for l in logs]
+
+# ============================================
+# PIPELINE STAGES API
+# ============================================
+@app.get("/api/pipeline-stages")
+def list_pipeline_stages(db: Session = Depends(get_db),
+                         current_user: CompanyRep = Depends(get_current_user)):
+    stages = db.query(PipelineStage).order_by(PipelineStage.display_order).all()
+    return [{
+        "id": str(s.id), "name": s.name, "display_order": s.display_order,
+        "color": s.color, "is_terminal": bool(s.is_terminal),
+        "created_at": str(s.created_at)
+    } for s in stages]
+
+@app.post("/api/pipeline-stages")
+def create_pipeline_stage(data: dict, db: Session = Depends(get_db),
+                          current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    s = PipelineStage(
+        name=data["name"],
+        display_order=data.get("display_order", 99),
+        color=data.get("color", "#6B7280"),
+        is_terminal=bool(data.get("is_terminal", False))
+    )
+    db.add(s); db.commit(); db.refresh(s)
+    return {"message": "Stage created", "id": str(s.id)}
+
+@app.put("/api/pipeline-stages/{sid}")
+def update_pipeline_stage(sid: str, data: dict, db: Session = Depends(get_db),
+                          current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    s = db.query(PipelineStage).filter(PipelineStage.id == sid).first()
+    if not s: raise HTTPException(404, "Stage not found")
+    for k in ["name", "display_order", "color"]:
+        if k in data: setattr(s, k, data[k])
+    if "is_terminal" in data:
+        s.is_terminal = bool(data["is_terminal"])
+    db.commit()
+    return {"message": "Stage updated"}
+
+@app.delete("/api/pipeline-stages/{sid}")
+def delete_pipeline_stage(sid: str, data: dict = {}, db: Session = Depends(get_db),
+                          current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    s = db.query(PipelineStage).filter(PipelineStage.id == sid).first()
+    if not s: raise HTTPException(404, "Stage not found")
+    # Don't delete if leads exist in this stage
+    count = db.query(Lead).filter(Lead.pipeline_stage == s.name).count()
+    if count > 0:
+        raise HTTPException(400, f"Cannot delete stage with {count} leads. Move leads first.")
+    db.delete(s); db.commit()
+    return {"message": "Stage deleted"}
+
+# ============================================
+# LEAD PIPELINE API
+# ============================================
+@app.get("/api/leads/pipeline")
+def get_leads_pipeline(rep_id: str = None, campaign_id: str = None,
+                       stale_only: bool = False, db: Session = Depends(get_db),
+                       current_user: CompanyRep = Depends(get_current_user)):
+    # User role only sees their own leads
+    effective_rep_id = None
+    if current_user.role == "user":
+        effective_rep_id = current_user.id
+    elif rep_id:
+        r = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
+        if r: effective_rep_id = r.id
+
+    # Include active leads + recently Won/Lost (last 90 days) so they appear in terminal stages
+    cutoff = datetime.utcnow() - timedelta(days=90)
+    q = db.query(Lead).filter(
+        or_(
+            Lead.status.notin_(["converted", "lost"]),
+            and_(Lead.status.in_(["converted", "lost"]), Lead.updated_at >= cutoff)
+        )
+    )
+    if effective_rep_id:
+        q = q.filter(Lead.assigned_rep_id == effective_rep_id)
+    if campaign_id:
+        camp = db.query(Campaign).filter((Campaign.id == campaign_id) | (Campaign.campaign_id == campaign_id)).first()
+        if camp: q = q.filter(Lead.campaign_id == camp.id)
+    if stale_only:
+        q = q.filter(Lead.is_stale == True)
+
+    leads = q.order_by(Lead.created_at.desc()).all()
+
+    # Pre-fetch all reps and campaigns to avoid N+1 queries
+    rep_ids = set(l.assigned_rep_id for l in leads if l.assigned_rep_id)
+    camp_ids = set(l.campaign_id for l in leads if l.campaign_id)
+    reps_map = {r.id: r for r in db.query(CompanyRep).filter(CompanyRep.id.in_(rep_ids)).all()} if rep_ids else {}
+    camps_map = {c.id: c for c in db.query(Campaign).filter(Campaign.id.in_(camp_ids)).all()} if camp_ids else {}
+
+    # Group by pipeline_stage
+    stages = db.query(PipelineStage).order_by(PipelineStage.display_order).all()
+    pipeline = {}
+    for s in stages:
+        pipeline[s.name] = {"stage": s.name, "color": s.color, "is_terminal": bool(s.is_terminal), "leads": [], "count": 0}
+
+    for l in leads:
+        rep = reps_map.get(l.assigned_rep_id)
+        camp = camps_map.get(l.campaign_id)
+        days_since_contact = None
+        if l.last_contacted_at:
+            days_since_contact = (datetime.utcnow() - l.last_contacted_at).days
+
+        lead_data = {
+            "id": str(l.id), "lead_id": l.lead_id, "name": l.name,
+            "mobile": l.mobile, "email": l.email,
+            "pipeline_stage": l.pipeline_stage or "New",
+            "status": l.status, "lead_type": l.lead_type,
+            "campaign_name": camp.name if camp else None,
+            "campaign_source": camp.source if camp else None,
+            "assigned_rep": rep.name if rep else None,
+            "assigned_rep_id": rep.rep_id if rep else None,
+            "days_since_contact": days_since_contact,
+            "is_stale": bool(l.is_stale),
+            "converted_customer_id": str(l.converted_customer_id) if l.converted_customer_id else None,
+            "converted_broker_id": str(l.converted_broker_id) if l.converted_broker_id else None,
+            "notes": l.notes, "created_at": str(l.created_at)
+        }
+
+        stage_name = l.pipeline_stage or "New"
+        if stage_name in pipeline:
+            pipeline[stage_name]["leads"].append(lead_data)
+            pipeline[stage_name]["count"] += 1
+        else:
+            if "New" in pipeline:
+                pipeline["New"]["leads"].append(lead_data)
+                pipeline["New"]["count"] += 1
+
+    return {"pipeline": list(pipeline.values()), "total": len(leads)}
+
+@app.put("/api/leads/{lid}/stage")
+def update_lead_stage(lid: str, data: dict, db: Session = Depends(get_db),
+                      current_user: CompanyRep = Depends(get_current_user)):
+    l = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
+    if not l: raise HTTPException(404, "Lead not found")
+    # Viewers cannot modify leads
+    if current_user.role == "viewer":
+        raise HTTPException(403, "Insufficient permissions")
+    # Non-privileged roles can only update their own assigned leads
+    if current_user.role in ("user", "creator") and l.assigned_rep_id != current_user.id:
+        raise HTTPException(403, "You can only update your own leads")
+    new_stage = data.get("stage")
+    if not new_stage: raise HTTPException(400, "Stage required")
+    # Verify stage exists
+    stage = db.query(PipelineStage).filter(PipelineStage.name == new_stage).first()
+    if not stage: raise HTTPException(400, f"Invalid stage: {new_stage}")
+    l.pipeline_stage = new_stage
+    # If terminal stage, update status
+    if stage.is_terminal:
+        if new_stage == "Won":
+            l.status = "converted"  # Sale closed
+        elif new_stage == "Lost":
+            l.status = "lost"
+    db.commit()
+    return {"message": f"Lead moved to {new_stage}"}
+
+# ============================================
+# LEAD ASSIGNMENT API
+# ============================================
+@app.post("/api/leads/bulk-assign")
+def bulk_assign_leads(data: dict, db: Session = Depends(get_db),
+                      current_user: CompanyRep = Depends(require_role(["admin", "manager", "cco"]))):
+    lead_ids = data.get("lead_ids", [])
+    rep_id = data.get("rep_id")
+    if not lead_ids or not rep_id:
+        raise HTTPException(400, "lead_ids and rep_id required")
+
+    rep = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
+    if not rep: raise HTTPException(404, "Rep not found")
+
+    # Batch fetch leads to avoid N+1
+    leads = db.query(Lead).filter(
+        or_(Lead.id.in_(lead_ids), Lead.lead_id.in_(lead_ids))
+    ).all()
+    count = 0
+    for l in leads:
+        l.assigned_rep_id = rep.id
+        count += 1
+
+    # Notification + data in single atomic commit
+    create_notification(
+        db, rep.rep_id, "assignment",
+        f"{count} leads assigned to you",
+        f"{current_user.name} assigned {count} leads to you",
+        category="assignment"
+    )
+    db.commit()
+    return {"message": f"{count} leads assigned to {rep.name}"}
+
+@app.post("/api/leads/{lid}/request-assignment")
+def request_lead_assignment(lid: str, data: dict, db: Session = Depends(get_db),
+                            current_user: CompanyRep = Depends(get_current_user)):
+    l = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
+    if not l: raise HTTPException(404, "Lead not found")
+
+    # Check if there's already a pending request
+    existing = db.query(LeadAssignmentRequest).filter(
+        LeadAssignmentRequest.lead_id == l.id,
+        LeadAssignmentRequest.requested_by == current_user.id,
+        LeadAssignmentRequest.status == "pending"
+    ).first()
+    if existing:
+        raise HTTPException(400, "You already have a pending request for this lead")
+
+    req = LeadAssignmentRequest(
+        lead_id=l.id,
+        requested_by=current_user.id,
+        reason=data.get("reason", "")
+    )
+    db.add(req); db.commit(); db.refresh(req)
+
+    # Notify admin/cco
+    admins = db.query(CompanyRep).filter(CompanyRep.role.in_(["admin", "cco"]), CompanyRep.status == "active").all()
+    for admin in admins:
+        create_notification(
+            db, admin.rep_id, "assignment_request",
+            f"{current_user.name} requests lead {l.lead_id}",
+            f"{current_user.name} wants to be assigned lead {l.name} ({l.lead_id}). Reason: {data.get('reason', 'N/A')}",
+            category="assignment_request",
+            entity_type="lead",
+            entity_id=l.lead_id
+        )
+    db.commit()
+    return {"message": "Assignment request submitted", "request_id": req.request_id}
+
+@app.get("/api/lead-assignment-requests")
+def list_assignment_requests(status: str = "pending", db: Session = Depends(get_db),
+                             current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    q = db.query(LeadAssignmentRequest)
+    if status:
+        q = q.filter(LeadAssignmentRequest.status == status)
+    requests = q.order_by(LeadAssignmentRequest.created_at.desc()).all()
+    # Pre-fetch related entities to avoid N+1
+    lead_ids = set(r.lead_id for r in requests if r.lead_id)
+    rep_ids = set(r.requested_by for r in requests) | set(r.reviewed_by for r in requests if r.reviewed_by)
+    leads_map = {l.id: l for l in db.query(Lead).filter(Lead.id.in_(lead_ids)).all()} if lead_ids else {}
+    reps_map = {r.id: r for r in db.query(CompanyRep).filter(CompanyRep.id.in_(rep_ids)).all()} if rep_ids else {}
+    result = []
+    for r in requests:
+        lead = leads_map.get(r.lead_id)
+        requester = reps_map.get(r.requested_by)
+        reviewer = reps_map.get(r.reviewed_by)
+        result.append({
+            "id": str(r.id), "request_id": r.request_id,
+            "lead_id": lead.lead_id if lead else None, "lead_name": lead.name if lead else None,
+            "requested_by": requester.name if requester else None,
+            "requester_rep_id": requester.rep_id if requester else None,
+            "reason": r.reason, "status": r.status,
+            "reviewed_by": reviewer.name if reviewer else None,
+            "reviewed_at": str(r.reviewed_at) if r.reviewed_at else None,
+            "created_at": str(r.created_at)
+        })
+    return result
+
+@app.post("/api/lead-assignment-requests/{rid}/review")
+def review_assignment_request(rid: str, data: dict, db: Session = Depends(get_db),
+                              current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    req = db.query(LeadAssignmentRequest).filter(
+        (LeadAssignmentRequest.id == rid) | (LeadAssignmentRequest.request_id == rid)
+    ).first()
+    if not req: raise HTTPException(404, "Request not found")
+    if req.status != "pending": raise HTTPException(400, "Request is not pending")
+
+    action = data.get("action")  # "approve" or "reject"
+    if action == "approve":
+        req.status = "approved"
+        req.reviewed_by = current_user.id
+        req.reviewed_at = datetime.utcnow()
+
+        # Assign the lead
+        lead = db.query(Lead).filter(Lead.id == req.lead_id).first()
+        if lead:
+            lead.assigned_rep_id = req.requested_by
+
+        # Notify requester
+        requester = db.query(CompanyRep).filter(CompanyRep.id == req.requested_by).first()
+        if requester:
+            create_notification(
+                db, requester.rep_id, "assignment_approved",
+                f"Lead assignment approved",
+                f"Your request for lead {lead.lead_id if lead else 'unknown'} ({lead.name if lead else ''}) was approved by {current_user.name}",
+                category="assignment"
+            )
+    elif action == "reject":
+        req.status = "rejected"
+        req.reviewed_by = current_user.id
+        req.reviewed_at = datetime.utcnow()
+
+        requester = db.query(CompanyRep).filter(CompanyRep.id == req.requested_by).first()
+        lead = db.query(Lead).filter(Lead.id == req.lead_id).first()
+        if requester:
+            create_notification(
+                db, requester.rep_id, "assignment_rejected",
+                f"Lead assignment rejected",
+                f"Your request for lead {lead.lead_id if lead else 'unknown'} was rejected by {current_user.name}",
+                category="assignment"
+            )
+    else:
+        raise HTTPException(400, "Action must be 'approve' or 'reject'")
+
+    db.commit()
+    return {"message": f"Request {action}d"}
+
+# ============================================
+# STALE LEAD API
+# ============================================
+@app.get("/api/leads/stale")
+def list_stale_leads(db: Session = Depends(get_db),
+                     current_user: CompanyRep = Depends(require_role(["admin", "manager", "cco"]))):
+    stale_rows = db.query(Lead, CompanyRep).outerjoin(
+        CompanyRep, CompanyRep.id == Lead.assigned_rep_id
+    ).filter(
+        Lead.is_stale == True,
+        Lead.status.notin_(["converted", "lost"])
+    ).order_by(Lead.last_contacted_at.asc().nullsfirst()).all()
+    result = []
+    for l, rep in stale_rows:
+        days = None
+        if l.last_contacted_at:
+            days = (datetime.utcnow() - l.last_contacted_at).days
+        result.append({
+            "id": str(l.id), "lead_id": l.lead_id, "name": l.name,
+            "mobile": l.mobile, "pipeline_stage": l.pipeline_stage,
+            "assigned_rep": rep.name if rep else None,
+            "assigned_rep_id": rep.rep_id if rep else None,
+            "days_since_contact": days,
+            "created_at": str(l.created_at)
+        })
+    return result
+
+@app.post("/api/leads/check-stale")
+def check_stale_leads(db: Session = Depends(get_db),
+                      current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    """Flag leads with no interaction in 60 days"""
+    threshold = datetime.utcnow() - timedelta(days=60)
+
+    # Bulk SQL: flag newly stale (no contact in 60+ days, not already stale)
+    newly_stale = db.query(Lead).filter(
+        Lead.status.notin_(["converted", "lost"]),
+        or_(Lead.last_contacted_at == None, Lead.last_contacted_at < threshold),
+        or_(Lead.is_stale == False, Lead.is_stale == None)
+    ).update({"is_stale": True}, synchronize_session="fetch")
+
+    # Bulk SQL: unflag recovered leads (contacted recently but still marked stale)
+    db.query(Lead).filter(
+        Lead.status.notin_(["converted", "lost"]),
+        Lead.is_stale == True,
+        Lead.last_contacted_at != None,
+        Lead.last_contacted_at >= threshold
+    ).update({"is_stale": False}, synchronize_session="fetch")
+
+    db.commit()
+
+    # Notify admin/cco about newly stale leads
+    if newly_stale > 0:
+        admins = db.query(CompanyRep).filter(
+            CompanyRep.role.in_(["admin", "cco"]),
+            CompanyRep.status == "active"
+        ).all()
+        for admin in admins:
+            create_notification(
+                db, admin.rep_id, "stale_lead",
+                f"{newly_stale} leads flagged as stale",
+                f"{newly_stale} leads have had no interaction in 60+ days and need attention",
+                category="stale_lead"
+            )
+        db.commit()
+
+    return {"message": f"Stale check complete. {newly_stale} newly flagged.", "total_stale": db.query(Lead).filter(Lead.is_stale == True).count()}
+
+@app.post("/api/leads/{lid}/reassign")
+def reassign_lead(lid: str, data: dict, db: Session = Depends(get_db),
+                  current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    l = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
+    if not l: raise HTTPException(404, "Lead not found")
+
+    new_rep_id = data.get("rep_id")
+    if not new_rep_id: raise HTTPException(400, "rep_id required")
+
+    new_rep = db.query(CompanyRep).filter((CompanyRep.id == new_rep_id) | (CompanyRep.rep_id == new_rep_id)).first()
+    if not new_rep: raise HTTPException(404, "Rep not found")
+
+    old_rep = db.query(CompanyRep).filter(CompanyRep.id == l.assigned_rep_id).first() if l.assigned_rep_id else None
+
+    l.assigned_rep_id = new_rep.id
+
+    # Notifications + data in single atomic commit
+    create_notification(
+        db, new_rep.rep_id, "assignment",
+        f"Lead {l.lead_id} assigned to you",
+        f"{current_user.name} assigned lead {l.name} ({l.lead_id}) to you",
+        category="assignment",
+        entity_type="lead",
+        entity_id=l.lead_id
+    )
+    if old_rep:
+        create_notification(
+            db, old_rep.rep_id, "reassignment",
+            f"Lead {l.lead_id} reassigned",
+            f"Lead {l.name} ({l.lead_id}) has been reassigned from you to {new_rep.name} by {current_user.name}",
+            category="reassignment",
+            entity_type="lead",
+            entity_id=l.lead_id
+        )
+    db.commit()
+    return {"message": f"Lead reassigned to {new_rep.name}"}
+
+
+# ============================================
+# ANALYTICS ENGINE ENDPOINTS
+# ============================================
+
+@app.get("/api/analytics/campaign-metrics")
+def analytics_campaign_metrics(
+    campaign_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(["admin", "cco", "manager", "creator"]))
+):
+    """Comprehensive campaign analytics with funnel, source breakdown, and revenue attribution."""
+    try:
+        # Build base lead query with optional filters
+        lead_q = db.query(Lead)
+        if campaign_id:
+            camp = db.query(Campaign).filter(
+                (Campaign.campaign_id == campaign_id) | (Campaign.id == campaign_id)
+            ).first()
+            if camp:
+                lead_q = lead_q.filter(Lead.campaign_id == camp.id)
+        if start_date:
+            lead_q = lead_q.filter(Lead.created_at >= start_date)
+        if end_date:
+            lead_q = lead_q.filter(Lead.created_at <= end_date)
+
+        all_leads = lead_q.all()
+        total = len(all_leads)
+
+        # Overall metrics
+        converted = sum(1 for l in all_leads if l.status == "converted")
+        lost = sum(1 for l in all_leads if l.status == "lost")
+        active = total - converted - lost
+        conversion_rate = round((converted / total * 100), 1) if total > 0 else 0.0
+
+        # Average days to conversion
+        conv_days = []
+        for l in all_leads:
+            if l.status == "converted" and l.updated_at and l.created_at:
+                delta = (l.updated_at - l.created_at).days
+                conv_days.append(delta)
+        avg_days = round(sum(conv_days) / len(conv_days), 1) if conv_days else 0.0
+
+        # Funnel: count by pipeline_stage, ordered by PipelineStage.display_order
+        stages_db = db.query(PipelineStage).order_by(PipelineStage.display_order).all()
+        stage_order = {s.name: (s.display_order, s.color) for s in stages_db}
+        stage_counts = {}
+        for l in all_leads:
+            ps = l.pipeline_stage or "New"
+            stage_counts[ps] = stage_counts.get(ps, 0) + 1
+
+        funnel = []
+        prev_count = total
+        for s in stages_db:
+            count = stage_counts.pop(s.name, 0)
+            pct_total = round(count / total * 100, 1) if total > 0 else 0.0
+            pct_prev = round(count / prev_count * 100, 1) if prev_count > 0 else 0.0
+            funnel.append({
+                "stage": s.name, "count": count, "color": s.color,
+                "pct_of_total": pct_total, "pct_of_previous": pct_prev
+            })
+            if count > 0:
+                prev_count = count
+        # Any stages not in DB config
+        for stage_name, count in stage_counts.items():
+            pct_total = round(count / total * 100, 1) if total > 0 else 0.0
+            funnel.append({
+                "stage": stage_name, "count": count, "color": "#6B7280",
+                "pct_of_total": pct_total, "pct_of_previous": 0.0
+            })
+
+        # By source: group by campaign.source
+        campaigns = db.query(Campaign).all()
+        camp_map = {c.id: c for c in campaigns}
+        source_data = {}
+        for l in all_leads:
+            c = camp_map.get(l.campaign_id)
+            src = c.source if c else "unknown"
+            if src not in source_data:
+                source_data[src] = {"leads": 0, "converted": 0, "budget": 0.0}
+            source_data[src]["leads"] += 1
+            if l.status == "converted":
+                source_data[src]["converted"] += 1
+            if c and c.budget and src not in source_data.get("_budgeted", set()):
+                source_data.setdefault("_camp_ids", set())
+                if c.id not in source_data.get("_camp_ids", set()):
+                    source_data[src]["budget"] += float(c.budget or 0)
+                    source_data.setdefault("_camp_ids", set()).add(c.id)
+
+        source_data.pop("_camp_ids", None)
+        by_source = []
+        for src, d in source_data.items():
+            cr = round(d["converted"] / d["leads"] * 100, 1) if d["leads"] > 0 else 0.0
+            cpl = round(d["budget"] / d["leads"], 0) if d["leads"] > 0 and d["budget"] > 0 else 0.0
+            by_source.append({
+                "source": src, "leads": d["leads"], "converted": d["converted"],
+                "conversion_rate": cr, "budget": d["budget"], "cost_per_lead": cpl
+            })
+
+        # By campaign: per-campaign breakdown with revenue attribution
+        # Pre-fetch revenue: lead -> converted_customer_id -> transactions
+        converted_cust_ids = [l.converted_customer_id for l in all_leads if l.converted_customer_id]
+        revenue_by_customer = {}
+        if converted_cust_ids:
+            txn_rows = db.query(
+                Transaction.customer_id,
+                func.sum(Transaction.total_value).label("revenue"),
+                func.count(Transaction.id).label("deals")
+            ).filter(Transaction.customer_id.in_(converted_cust_ids)).group_by(Transaction.customer_id).all()
+            for row in txn_rows:
+                revenue_by_customer[row.customer_id] = {"revenue": float(row.revenue or 0), "deals": int(row.deals)}
+
+        # Build lead-to-campaign mapping for revenue rollup
+        camp_revenue = {}
+        for l in all_leads:
+            if l.converted_customer_id and l.converted_customer_id in revenue_by_customer:
+                cid = l.campaign_id
+                if cid not in camp_revenue:
+                    camp_revenue[cid] = {"revenue": 0.0, "deals": 0}
+                camp_revenue[cid]["revenue"] += revenue_by_customer[l.converted_customer_id]["revenue"]
+                camp_revenue[cid]["deals"] += revenue_by_customer[l.converted_customer_id]["deals"]
+
+        camp_leads = {}
+        for l in all_leads:
+            cid = l.campaign_id
+            if cid not in camp_leads:
+                camp_leads[cid] = {"total": 0, "converted": 0, "lost": 0}
+            camp_leads[cid]["total"] += 1
+            if l.status == "converted":
+                camp_leads[cid]["converted"] += 1
+            elif l.status == "lost":
+                camp_leads[cid]["lost"] += 1
+
+        by_campaign = []
+        for c in campaigns:
+            cl = camp_leads.get(c.id, {"total": 0, "converted": 0, "lost": 0})
+            if cl["total"] == 0 and not campaign_id:
+                continue
+            cr_val = round(cl["converted"] / cl["total"] * 100, 1) if cl["total"] > 0 else 0.0
+            rev = camp_revenue.get(c.id, {"revenue": 0.0, "deals": 0})
+            by_campaign.append({
+                "campaign_id": c.campaign_id, "name": c.name, "source": c.source or "unknown",
+                "status": c.status, "leads": cl["total"], "converted": cl["converted"],
+                "lost": cl["lost"], "conversion_rate": cr_val,
+                "budget": float(c.budget or 0),
+                "revenue_generated": rev["revenue"], "deals": rev["deals"],
+                "roi": round((rev["revenue"] - float(c.budget or 0)) / float(c.budget or 1) * 100, 1) if c.budget and float(c.budget) > 0 else 0.0
+            })
+
+        # Total revenue attribution
+        total_revenue = sum(c["revenue_generated"] for c in by_campaign)
+        total_budget = sum(c["budget"] for c in by_campaign)
+
+        return {
+            "overall": {
+                "total_leads": total, "converted": converted, "lost": lost,
+                "active": active, "conversion_rate": conversion_rate,
+                "avg_days_to_conversion": avg_days,
+                "total_revenue_attributed": total_revenue,
+                "total_budget": total_budget,
+                "overall_roi": round((total_revenue - total_budget) / total_budget * 100, 1) if total_budget > 0 else 0.0
+            },
+            "funnel": funnel,
+            "by_source": sorted(by_source, key=lambda x: x["leads"], reverse=True),
+            "by_campaign": sorted(by_campaign, key=lambda x: x["leads"], reverse=True)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analytics error: {str(e)}")
+
+
+@app.get("/api/analytics/rep-performance")
+def analytics_rep_performance(
+    campaign_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(["admin", "cco", "manager"]))
+):
+    """Rep-wise performance: lead aging, interactions, conversions, follow-ups."""
+    try:
+        # Build base lead query
+        lead_q = db.query(Lead)
+        if campaign_id:
+            camp = db.query(Campaign).filter(
+                (Campaign.campaign_id == campaign_id) | (Campaign.id == campaign_id)
+            ).first()
+            if camp:
+                lead_q = lead_q.filter(Lead.campaign_id == camp.id)
+
+        all_leads = lead_q.all()
+        today = date.today()
+
+        # Pre-fetch all reps
+        reps = db.query(CompanyRep).filter(CompanyRep.status == "active").all()
+        rep_map = {r.id: r for r in reps}
+
+        # Group leads by assigned_rep_id
+        rep_leads = {}
+        for l in all_leads:
+            rid = l.assigned_rep_id
+            if rid not in rep_leads:
+                rep_leads[rid] = []
+            rep_leads[rid].append(l)
+
+        # Pre-fetch interactions grouped by company_rep_id (single query)
+        interaction_q = db.query(
+            Interaction.company_rep_id,
+            Interaction.interaction_type,
+            func.count(Interaction.id).label("cnt")
+        )
+        if campaign_id and 'camp' in dir() and camp:
+            lead_ids = [l.id for l in all_leads]
+            if lead_ids:
+                interaction_q = interaction_q.filter(Interaction.lead_id.in_(lead_ids))
+        interaction_q = interaction_q.group_by(Interaction.company_rep_id, Interaction.interaction_type)
+        interaction_rows = interaction_q.all()
+
+        int_map = {}
+        for row in interaction_rows:
+            rid = row.company_rep_id
+            if rid not in int_map:
+                int_map[rid] = {"total": 0, "call": 0, "message": 0, "whatsapp": 0}
+            int_map[rid][row.interaction_type] = int_map[rid].get(row.interaction_type, 0) + int(row.cnt)
+            int_map[rid]["total"] += int(row.cnt)
+
+        # Pre-fetch pending followups by rep (single query)
+        followup_q = db.query(
+            Interaction.company_rep_id,
+            func.count(Interaction.id).label("cnt")
+        ).filter(
+            Interaction.next_follow_up <= today,
+            Interaction.next_follow_up.isnot(None)
+        )
+        if campaign_id and 'camp' in dir() and camp:
+            lead_ids = [l.id for l in all_leads]
+            if lead_ids:
+                followup_q = followup_q.filter(Interaction.lead_id.in_(lead_ids))
+        followup_rows = followup_q.group_by(Interaction.company_rep_id).all()
+        followup_map = {row.company_rep_id: int(row.cnt) for row in followup_rows}
+
+        # Build per-rep metrics
+        result_reps = []
+        total_not_attempted = 0
+        total_pending = 0
+        total_converted_all = 0
+        total_assigned_all = 0
+
+        all_rep_ids = set(rep_leads.keys()) | set(r.id for r in reps)
+        for rid in all_rep_ids:
+            rep = rep_map.get(rid)
+            if not rep:
+                continue
+            leads_list = rep_leads.get(rid, [])
+            total_assigned = len(leads_list)
+            if total_assigned == 0 and rid not in rep_leads:
+                continue
+
+            # Not attempted buckets: leads with last_contacted_at IS NULL and status not terminal
+            not_attempted = {"0_7d": 0, "7_14d": 0, "14d_plus": 0, "total": 0}
+            converted_count = 0
+            lost_count = 0
+            response_days = []
+
+            for l in leads_list:
+                if l.status == "converted":
+                    converted_count += 1
+                elif l.status == "lost":
+                    lost_count += 1
+
+                if l.last_contacted_at is None and l.status not in ("converted", "lost"):
+                    days_since = (today - l.created_at.date()).days if l.created_at else 0
+                    not_attempted["total"] += 1
+                    if days_since <= 7:
+                        not_attempted["0_7d"] += 1
+                    elif days_since <= 14:
+                        not_attempted["7_14d"] += 1
+                    else:
+                        not_attempted["14d_plus"] += 1
+
+                # Average response time (days from creation to first contact)
+                if l.last_contacted_at and l.created_at:
+                    rd = (l.last_contacted_at - l.created_at).total_seconds() / 86400
+                    if rd >= 0:
+                        response_days.append(rd)
+
+            interactions = int_map.get(rid, {"total": 0, "call": 0, "message": 0, "whatsapp": 0})
+            pending = followup_map.get(rid, 0)
+            cr = round(converted_count / total_assigned * 100, 1) if total_assigned > 0 else 0.0
+            avg_resp = round(sum(response_days) / len(response_days), 1) if response_days else None
+
+            result_reps.append({
+                "rep_id": rep.rep_id, "name": rep.name,
+                "total_assigned": total_assigned,
+                "not_attempted": not_attempted,
+                "interactions": interactions,
+                "pending_followups": pending,
+                "converted": converted_count, "lost": lost_count,
+                "active": total_assigned - converted_count - lost_count,
+                "conversion_rate": cr,
+                "avg_response_days": avg_resp
+            })
+
+            total_not_attempted += not_attempted["total"]
+            total_pending += pending
+            total_converted_all += converted_count
+            total_assigned_all += total_assigned
+
+        result_reps.sort(key=lambda x: x["total_assigned"], reverse=True)
+
+        return {
+            "reps": result_reps,
+            "totals": {
+                "total_assigned": total_assigned_all,
+                "total_not_attempted": total_not_attempted,
+                "total_pending_followups": total_pending,
+                "total_converted": total_converted_all,
+                "overall_conversion_rate": round(total_converted_all / total_assigned_all * 100, 1) if total_assigned_all > 0 else 0.0
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Rep analytics error: {str(e)}")

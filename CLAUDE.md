@@ -2,6 +2,31 @@
 
 > Full-featured Real Estate CRM with inventory, transactions, buybacks, and vector mapping.
 
+## !!! CRITICAL: Docker Volume Safety — READ BEFORE ANY docker-compose CHANGES !!!
+
+**This has broken data TWICE.** Docker volume names are IMMUTABLE. Changing them silently orphans all data.
+
+**Local Dev `docker-compose.yml` MUST always have:**
+```yaml
+volumes:
+  orbit_dev_postgres:
+    external: true
+    name: radius2_sitara_v3_postgres
+```
+
+**Production `docker-compose.prod.yml` MUST always have:**
+```yaml
+volumes:
+  sitara_postgres_data:
+    external: true
+    name: sitara_postgres_data
+```
+
+**Rules:**
+- NEVER remove `external: true` or change `name:` — this causes silent total data loss
+- BEFORE any `docker compose up`: verify volume config is correct
+- If creating a new compose file or branch: COPY the volume section exactly as above
+
 ## MCP Integration
 
 This project is connected via MCP. Use these tools:

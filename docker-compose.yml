@@ -64,6 +64,8 @@ services:
 
 volumes:
   orbit_dev_postgres:
+    external: true
+    name: radius2_sitara_v3_postgres
 
 networks:
   default:

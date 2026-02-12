@@ -40,7 +40,7 @@ services:
       - "8001:8000"
     environment:
       DATABASE_URL: postgresql://sitara:sitara_secure_2024@postgres:5432/sitara_crm
-      SECRET_KEY: sitara-production-key-change-this-in-real-deployment
+      SECRET_KEY: hXIK6gVJ0fwnTR927Ganat3TUCcfy7Z9evbJteOOA0gQvLo_VYAwvUEVij8f3ILu
       CORS_ORIGINS: http://localhost:8081,http://127.0.0.1:8081
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
@@ -72,6 +72,8 @@ services:
 
 volumes:
   sitara_postgres_data:
+    external: true
+    name: sitara_postgres_data
 
 networks:
   default:
