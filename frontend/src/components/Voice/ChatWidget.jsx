@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ChatMessage from './ChatMessage';
 
 const MAX_MESSAGES = 100;
+const MIN_RECORDING_MS = 800;
 const QUICK_ACTIONS = [
   { label: 'Available plots', query: 'Show me available plots' },
   { label: 'My tasks', query: 'Show my tasks' },
@@ -53,19 +54,42 @@ function SendIcon() {
   );
 }
 
+function MicIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+      <path d="M7 4a3 3 0 016 0v6a3 3 0 11-6 0V4z" />
+      <path d="M5.5 9.643a.75.75 0 00-1.5 0V10c0 3.06 2.29 5.585 5.25 5.954V17.5h-1.5a.75.75 0 000 1.5h4.5a.75.75 0 000-1.5h-1.5v-1.546A6.001 6.001 0 0016 10v-.357a.75.75 0 00-1.5 0V10a4.5 4.5 0 01-9 0v-.357z" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+      <path fillRule="evenodd" d="M2 10a8 8 0 1116 0 8 8 0 01-16 0zm5-2.25A.75.75 0 017.75 7h4.5a.75.75 0 01.75.75v4.5a.75.75 0 01-.75.75h-4.5a.75.75 0 01-.75-.75v-4.5z" clipRule="evenodd" />
+    </svg>
+  );
+}
+
 export default function ChatWidget({ api, user }) {
   const [isOpen, setIsOpen] = useState(false);
   const welcomeMessage = {
     role: 'assistant',
-    content: '**Welcome to ORBIT Assistant!**\n\nI can help you query CRM data, check inventory, review tasks, and more.\n\nTry a quick action below or type your question.',
+    content: '**Welcome to ORBIT Assistant!**\n\nI can help you query CRM data, check inventory, review tasks, and more.\n\nTry a quick action below, type your question, or tap the mic to speak.',
     timestamp: new Date(),
   };
   const [messages, setMessages] = useState([welcomeMessage]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const prevUserRef = useRef(user?.rep_id);
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const timerRef = useRef(null);
+  const recordStartRef = useRef(null);
 
   // F17: Clear chat history on user switch
   useEffect(() => {
@@ -100,6 +124,52 @@ export default function ChatWidget({ api, user }) {
     return () => document.removeEventListener('keydown', handleEsc);
   }, [isOpen]);
 
+  // Cleanup recording on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+    };
+  }, []);
+
+  const handleFeedback = useCallback(async (queryId, feedbackType, comment) => {
+    try {
+      const fd = new FormData();
+      fd.append('query_id', queryId);
+      fd.append('feedback_type', feedbackType);
+      if (comment) fd.append('user_comment', comment);
+      await api.post('/voice/feedback', fd);
+    } catch (err) {
+      console.error('Feedback submission failed:', err);
+    }
+  }, [api]);
+
+  const addAssistantMessage = useCallback((data, isError = false) => {
+    const responseText = isError
+      ? data
+      : (data.response_text ?? 'No response received.');
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'assistant',
+        content: responseText,
+        timestamp: new Date(),
+        queryId: isError ? null : (data.query_id || null),
+      },
+    ].slice(-MAX_MESSAGES));
+  }, []);
+
+  const getErrorMessage = (err) => {
+    const status = err.response?.status;
+    const detail = err.response?.data?.detail;
+    if (status === 401) return 'Session expired. Please log in again.';
+    if (status === 404) return 'Voice query endpoint not found. The voice agent may not be running.';
+    if (detail) return `Error: ${detail}`;
+    return 'Sorry, something went wrong. Please try again.';
+  };
+
   const sendQuery = useCallback(async (queryText) => {
     const trimmed = (queryText ?? '').trim();
     if (!trimmed || isLoading) return;
@@ -117,41 +187,122 @@ export default function ChatWidget({ api, user }) {
       const fd = new FormData();
       fd.append('query', trimmed);
       const res = await api.post('/voice/query', fd);
-      const data = res.data ?? {};
-      const responseText = data.response_text ?? 'No response received.';
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: responseText,
-          timestamp: new Date(),
-        },
-      ].slice(-MAX_MESSAGES));
+      addAssistantMessage(res.data ?? {});
     } catch (err) {
-      const status = err.response?.status;
-      const detail = err.response?.data?.detail;
-      let errorMsg = 'Sorry, something went wrong. Please try again.';
-      if (status === 401) {
-        errorMsg = 'Session expired. Please log in again.';
-      } else if (status === 404) {
-        errorMsg = 'Voice query endpoint not found. The voice agent may not be running.';
-      } else if (detail) {
-        errorMsg = `Error: ${detail}`;
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: errorMsg,
-          timestamp: new Date(),
-        },
-      ].slice(-MAX_MESSAGES));
+      addAssistantMessage(getErrorMessage(err), true);
     } finally {
       setIsLoading(false);
     }
-  }, [api, isLoading]);
+  }, [api, isLoading, addAssistantMessage]);
+
+  const sendAudio = useCallback(async (audioBlob) => {
+    setIsLoading(true);
+    // Add a placeholder user message
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'user',
+        content: 'Transcribing audio...',
+        timestamp: new Date(),
+        transcript: true,
+      },
+    ].slice(-MAX_MESSAGES));
+
+    try {
+      const fd = new FormData();
+      fd.append('file', audioBlob, 'recording.webm');
+      const res = await api.post('/voice/upload', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const data = res.data ?? {};
+
+      // Update the placeholder user message with the actual transcript
+      setMessages((prev) => {
+        const updated = [...prev];
+        // Find the last user message (our placeholder)
+        for (let i = updated.length - 1; i >= 0; i--) {
+          if (updated[i].role === 'user' && updated[i].content === 'Transcribing audio...') {
+            updated[i] = {
+              ...updated[i],
+              content: data.transcript || '(no transcript)',
+              sttConfidence: data.stt_confidence || 0,
+            };
+            break;
+          }
+        }
+        return updated;
+      });
+
+      addAssistantMessage(data);
+    } catch (err) {
+      // Update placeholder to show it was a voice message
+      setMessages((prev) => {
+        const updated = [...prev];
+        for (let i = updated.length - 1; i >= 0; i--) {
+          if (updated[i].role === 'user' && updated[i].content === 'Transcribing audio...') {
+            updated[i] = { ...updated[i], content: '(voice message)' };
+            break;
+          }
+        }
+        return updated;
+      });
+      addAssistantMessage(getErrorMessage(err), true);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [api, addAssistantMessage]);
+
+  const startRecording = useCallback(async () => {
+    if (isRecording || isLoading) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 16000,
+        },
+      });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mediaRecorder;
+      chunksRef.current = [];
+      recordStartRef.current = Date.now();
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const duration = Date.now() - (recordStartRef.current || 0);
+        if (duration < MIN_RECORDING_MS || chunksRef.current.length === 0) {
+          return; // Too short, ignore
+        }
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        sendAudio(blob);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      timerRef.current = setInterval(() => {
+        setRecordingTime((p) => p + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('Microphone access error:', err);
+      addAssistantMessage('Could not access microphone. Please check browser permissions.', true);
+    }
+  }, [isRecording, isLoading, sendAudio, addAssistantMessage]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+  }, [isRecording]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -163,6 +314,7 @@ export default function ChatWidget({ api, user }) {
   };
 
   const handleClose = () => {
+    if (isRecording) stopRecording();
     setIsOpen(false);
   };
 
@@ -171,6 +323,12 @@ export default function ChatWidget({ api, user }) {
       e.preventDefault();
       sendQuery(input);
     }
+  };
+
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
   };
 
   // Floating button (collapsed state)
@@ -230,7 +388,7 @@ export default function ChatWidget({ api, user }) {
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-4 py-3 bg-white">
         {messages.map((msg, i) => (
-          <ChatMessage key={i} message={msg} />
+          <ChatMessage key={i} message={msg} onFeedback={handleFeedback} />
         ))}
         {isLoading && <TypingIndicator />}
         <div ref={messagesEndRef} />
@@ -252,6 +410,22 @@ export default function ChatWidget({ api, user }) {
         </div>
       )}
 
+      {/* Recording indicator */}
+      {isRecording && (
+        <div className="px-3 py-1.5 bg-red-50 border-t border-red-200 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
+            <span className="text-xs text-red-600 font-medium">Recording {formatTime(recordingTime)}</span>
+          </div>
+          <button
+            onClick={stopRecording}
+            className="text-xs text-red-600 hover:text-red-800 font-medium px-2 py-0.5 rounded hover:bg-red-100 transition-colors"
+          >
+            Stop
+          </button>
+        </div>
+      )}
+
       {/* Input area */}
       <form onSubmit={handleSubmit} className="px-3 py-2.5 border-t border-gray-200 bg-gray-50 shrink-0">
         <div className="flex items-center gap-2">
@@ -261,14 +435,30 @@ export default function ChatWidget({ api, user }) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask ORBIT anything..."
-            disabled={isLoading}
+            placeholder={isRecording ? 'Recording...' : 'Ask ORBIT anything...'}
+            disabled={isLoading || isRecording}
             className="flex-1 text-sm px-3 py-2 bg-white border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 placeholder:text-gray-400"
             aria-label="Type your message"
           />
+          {/* Mic button */}
+          <button
+            type="button"
+            onClick={isRecording ? stopRecording : startRecording}
+            disabled={isLoading && !isRecording}
+            className={`p-2 rounded-xl transition-colors shrink-0 ${
+              isRecording
+                ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
+                : 'bg-gray-200 hover:bg-gray-300 text-gray-600 hover:text-gray-800 disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed'
+            }`}
+            aria-label={isRecording ? 'Stop recording' : 'Start voice recording'}
+            title={isRecording ? 'Stop recording' : 'Voice input'}
+          >
+            {isRecording ? <StopIcon /> : <MicIcon />}
+          </button>
+          {/* Send button */}
           <button
             type="submit"
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || isRecording || !input.trim()}
             className="p-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-xl transition-colors disabled:cursor-not-allowed shrink-0"
             aria-label="Send message"
             title="Send"

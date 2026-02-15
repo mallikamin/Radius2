@@ -22,6 +22,7 @@ import csv
 import io
 import time
 import logging
+import httpx
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,8 @@ class CompanyRep(Base):
     email = Column(String(255))
     password_hash = Column(String(255))  # Hashed password
     role = Column(String(50), default="user")  # admin, manager, cco, user, viewer, creator
+    title = Column(String(100))  # CEO, CFO, COO, CCO, Director Land, etc.
+    reports_to = Column(String(20))  # rep_id of manager (org hierarchy)
     status = Column(String(20), default="active")
     created_at = Column(DateTime, server_default=func.now())
 
@@ -8560,11 +8563,12 @@ async def list_tasks(
         tasks = _task_service.get_tasks(db, user_id=assignee_id, role=role,
                                          status=status, priority=priority, department=department,
                                          task_type=task_type, search=search, assignee_only=True,
-                                         limit=limit, offset=skip)
+                                         limit=limit, offset=skip, current_rep_id=current_user.rep_id)
     else:
         tasks = _task_service.get_tasks(db, user_id=user_id, role=role,
                                          status=status, priority=priority, department=department,
-                                         task_type=task_type, search=search, limit=limit, offset=skip)
+                                         task_type=task_type, search=search, limit=limit, offset=skip,
+                                         current_rep_id=current_user.rep_id)
     # Fix #7: Batch-fetch rep names to avoid N+1 queries
     name_cache = _build_rep_name_cache(db, tasks)
     return [_task_to_dict(t, db, name_cache) for t in tasks]
@@ -8583,7 +8587,7 @@ async def task_summary(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    return _task_service.get_task_summary(db, current_user.id, current_user.role)
+    return _task_service.get_task_summary(db, current_user.id, current_user.role, current_rep_id=current_user.rep_id)
 
 @app.get("/api/tasks/departments/config")
 async def departments_config(
@@ -8833,6 +8837,73 @@ async def voice_query(
         raise HTTPException(status_code=400, detail="Query too long (max 1000 chars)")
     user_rep_id = current_user.rep_id
     return _voice_service.process_query(db, query, user_rep_id)
+
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
+
+@app.post("/api/voice/upload")
+async def voice_upload(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Accept audio file, transcribe via Deepgram, then run voice query pipeline."""
+    if not DEEPGRAM_API_KEY:
+        raise HTTPException(status_code=503, detail="Voice transcription not configured (DEEPGRAM_API_KEY missing)")
+    # Rate limit same as text queries
+    user_key = current_user.rep_id or str(current_user.id)
+    if not voice_limiter.check(user_key, VOICE_RATE_LIMIT, VOICE_RATE_WINDOW):
+        raise HTTPException(status_code=429, detail=f"Voice query rate limit exceeded ({VOICE_RATE_LIMIT}/{VOICE_RATE_WINDOW}s). Please wait.")
+    if not _check_daily_limit(user_key, "voice_queries", VOICE_DAILY_LIMIT):
+        raise HTTPException(status_code=429, detail=f"Daily voice query limit reached ({VOICE_DAILY_LIMIT}/day). Contact admin.")
+
+    audio_bytes = await file.read()
+    if len(audio_bytes) < 1000:
+        raise HTTPException(status_code=400, detail="Audio too short. Please record for at least 1 second.")
+    if len(audio_bytes) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Audio too large (max 25MB)")
+
+    # Transcribe via Deepgram
+    content_type = file.content_type or "audio/webm"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                DEEPGRAM_API_URL,
+                content=audio_bytes,
+                headers={
+                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                    "Content-Type": content_type,
+                },
+                params={
+                    "model": "nova-3",
+                    "smart_format": "true",
+                    "punctuate": "true",
+                    "language": "en",
+                },
+            )
+        if resp.status_code != 200:
+            logger.error(f"Deepgram error {resp.status_code}: {resp.text[:200]}")
+            raise HTTPException(status_code=502, detail="Speech transcription failed. Please try again.")
+        dg_data = resp.json()
+        transcript = dg_data.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("transcript", "")
+        confidence = dg_data.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("confidence", 0)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Speech transcription timed out. Please try again.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Deepgram transcription error: {e}")
+        raise HTTPException(status_code=502, detail="Speech transcription failed.")
+
+    if not transcript or not transcript.strip():
+        return {"response_text": "I couldn't understand the audio. Please try again or type your question.", "transcript": "", "confidence": 0}
+
+    _track_daily_usage(user_key, "voice_queries")
+    # Run through existing query pipeline
+    result = _voice_service.process_query(db, transcript.strip(), current_user.rep_id)
+    result["transcript"] = transcript.strip()
+    result["stt_confidence"] = round(confidence, 3)
+    return result
 
 @app.get("/api/voice/history")
 async def voice_history(

@@ -56,8 +56,8 @@ class VoiceQueryService:
             if not sql_query:
                 processing_time = (time.time() - start_time) * 1000
                 response_text = "I couldn't build a query for that request. Try rephrasing, e.g., 'show available plots in Sitara Villas'."
-                self._save_history(db, query_text, intent, None, response_text, False, processing_time, user_rep_id)
-                return self._build_response(response_text, intent, entities, processing_time)
+                qid = self._save_history(db, query_text, intent, None, response_text, False, processing_time, user_rep_id)
+                return self._build_response(response_text, intent, entities, processing_time, query_id=qid)
 
             # Step 5: Execute query
             result = db_executor.execute_query(db, sql_query, params)
@@ -66,9 +66,9 @@ class VoiceQueryService:
             response_text = response_formatter.format_response(intent, entities, result)
 
             processing_time = (time.time() - start_time) * 1000
-            self._save_history(db, query_text, intent, sql_query, response_text, result.success, processing_time, user_rep_id)
+            qid = self._save_history(db, query_text, intent, sql_query, response_text, result.success, processing_time, user_rep_id)
 
-            return self._build_response(response_text, intent, entities, processing_time, result.data)
+            return self._build_response(response_text, intent, entities, processing_time, result.data, query_id=qid)
 
         except Exception as e:
             processing_time = (time.time() - start_time) * 1000
@@ -104,8 +104,8 @@ class VoiceQueryService:
                 response_text += f"- Due: {task.due_date}\n"
 
             processing_time = (time.time() - start_time) * 1000
-            self._save_history(db, query_text, intent, None, response_text, True, processing_time, user_rep_id)
-            return self._build_response(response_text, intent, None, processing_time)
+            qid = self._save_history(db, query_text, intent, None, response_text, True, processing_time, user_rep_id)
+            return self._build_response(response_text, intent, None, processing_time, query_id=qid)
 
         except Exception as e:
             processing_time = (time.time() - start_time) * 1000
@@ -159,11 +159,13 @@ class VoiceQueryService:
         response_text = "Task status updates via voice are coming soon. Please use the Tasks tab to update status."
         return self._build_response(response_text, intent, None, processing_time)
 
-    def _build_response(self, response_text, intent=None, entities=None, processing_time=0, data=None, error=None):
+    def _build_response(self, response_text, intent=None, entities=None, processing_time=0, data=None, error=None, query_id=None):
         result = {
             "response_text": response_text,
             "processing_time_ms": round(processing_time, 2),
         }
+        if query_id:
+            result["query_id"] = str(query_id)
         if intent:
             result["intent"] = intent.to_dict()
         if entities:
@@ -175,7 +177,7 @@ class VoiceQueryService:
         return result
 
     def _save_history(self, db, query_text, intent, sql_query, response_text, success, processing_time, user_rep_id):
-        """Save query to history for learning."""
+        """Save query to history for learning. Returns the history UUID or None."""
         from app.main import QueryHistory
         try:
             history = QueryHistory(
@@ -191,9 +193,12 @@ class VoiceQueryService:
             )
             db.add(history)
             db.commit()
+            db.refresh(history)
+            return history.id
         except Exception as e:
             logger.warning(f"Failed to save query history: {e}")
             db.rollback()
+            return None
 
 
 voice_query_service = VoiceQueryService()

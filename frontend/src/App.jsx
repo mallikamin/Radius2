@@ -40,7 +40,7 @@ function LoginView({ onLogin }) {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-lg p-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">ORBIT</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">Orbit <span className="text-gray-400 font-normal text-2xl">- SBL CRM</span></h1>
         <p className="text-gray-600 mb-8">Sign in to your account</p>
         
         {error && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>}
@@ -294,7 +294,7 @@ export default function App() {
     <div className="min-h-screen bg-[#fafafa]">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-          <h1 className="text-xl font-semibold tracking-tight text-gray-900">ORBIT</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-gray-900">Orbit <span className="text-gray-400 font-normal">-</span> <span className="text-gray-500 font-medium text-base">SBL CRM</span></h1>
           <nav className="flex items-center gap-2">
             <div className="text-sm text-gray-600 mr-2">
               {user.name} <span className="text-gray-400">({user.role})</span>

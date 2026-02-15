@@ -53,14 +53,38 @@ TASK_TYPE_DEPARTMENT = {
 DEFAULT_STATUS = {task_type: statuses[0] for task_type, statuses in STATUS_CONFIG.items()}
 
 # Role keywords for entity extraction
+# Maps job titles to CRM role for fallback assignment
 ROLE_KEYWORDS = {
-    'coo': 'cco', 'chief operating officer': 'cco',
+    'ceo': 'admin', 'chief executive': 'admin',
+    'coo': 'admin', 'chief operating officer': 'admin',
     'cfo': 'admin', 'chief financial officer': 'admin',
-    'finance': 'admin', 'sales manager': 'manager',
-    'manager': 'manager', 'sales rep': 'user',
-    'salesman': 'user', 'sales': 'user',
-    'consultant': 'user', 'accountant': 'admin',
-    'accounts': 'admin', 'admin': 'admin',
+    'cco': 'cco', 'chief commercial officer': 'cco',
+    'finance': 'admin', 'accounts': 'admin', 'accountant': 'admin',
+    'sales manager': 'manager', 'manager': 'manager',
+    'sales rep': 'user', 'salesman': 'user',
+    'sales': 'user', 'consultant': 'user',
+    'admin': 'admin',
+}
+
+# Maps title/name aliases to actual CRM user names for precise assignment
+TITLE_TO_NAME = {
+    'ceo': 'Sarosh Javed',
+    'chief executive': 'Sarosh Javed',
+    'sarosh': 'Sarosh Javed',
+    'cfo': 'Jawad Saleem',
+    'chief financial officer': 'Jawad Saleem',
+    'jawad': 'Jawad Saleem',
+    'coo': 'Hassan Danish',
+    'chief operating officer': 'Hassan Danish',
+    'hassan': 'Hassan Danish',
+    'hd': 'Hassan Danish',
+    'cco': 'Syed Faisal',
+    'chief commercial officer': 'Syed Faisal',
+    'faisal': 'Syed Faisal',
+    'admin': 'Malik Amin',
+    'amin': 'Malik Amin',
+    'malik amin': 'Malik Amin',
+    'malik': 'Malik Amin',
 }
 
 PRIORITY_KEYWORDS = {
@@ -92,26 +116,38 @@ class TaskEntityExtractor:
             'unit_number': None, 'customer_name': None,
         }
 
-        # Extract role/assignee
-        for keyword, role in ROLE_KEYWORDS.items():
+        # Extract role/assignee — check title-to-name mapping first
+        for keyword, name in TITLE_TO_NAME.items():
             if keyword in text_lower:
-                entities['assignee_role'] = role
+                entities['assignee_name'] = name
                 break
 
-        # Extract name
-        name_patterns = [
-            r'assign\s+(?:a\s+)?(?:task\s+)?(?:to|for)\s+(\w+(?:\s+\w+)?)',
-            r'task\s+(?:for|to)\s+(\w+(?:\s+\w+)?)',
-            r'assign\s+(\w+)(?:\s*:)',
-        ]
-        for pattern in name_patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                potential_name = match.group(1).strip()
-                skip_words = {'a', 'the', 'this', 'that', 'task', 'tasks'}
-                if potential_name not in ROLE_KEYWORDS and potential_name not in skip_words:
-                    entities['assignee_name'] = potential_name.title()
+        # If no title match, check role keywords for fallback
+        if not entities['assignee_name']:
+            for keyword, role in ROLE_KEYWORDS.items():
+                if keyword in text_lower:
+                    entities['assignee_role'] = role
                     break
+
+        # Extract name from text (skip if first word is a role/title keyword)
+        if not entities['assignee_name']:
+            name_patterns = [
+                r'assign\s+(?:a\s+)?(?:task\s+)?(?:to|for)\s+(\w+(?:\s+\w+)?)',
+                r'task\s+(?:for|to)\s+(\w+(?:\s+\w+)?)',
+                r'assign\s+(\w+)(?:\s*:)',
+            ]
+            skip_words = {'a', 'the', 'this', 'that', 'task', 'tasks'}
+            all_title_keys = set(ROLE_KEYWORDS.keys()) | set(TITLE_TO_NAME.keys())
+            for pattern in name_patterns:
+                match = re.search(pattern, text_lower)
+                if match:
+                    potential_name = match.group(1).strip()
+                    first_word = potential_name.split()[0] if potential_name else ''
+                    if first_word in all_title_keys or first_word in skip_words:
+                        continue
+                    if potential_name not in skip_words:
+                        entities['assignee_name'] = potential_name.title()
+                        break
 
         # Extract priority
         for keyword, priority in PRIORITY_KEYWORDS.items():
@@ -345,10 +381,58 @@ class TaskService:
         logger.info(f"Created task {task.task_id}: {task.title} (pending={pending_assignment})")
         return task
 
+    # Cross-functional visibility: rep_id can also see tasks from these rep_ids' chains
+    # COO sees CCO's chain (sales team) in addition to own subordinates
+    CROSS_VISIBILITY = {
+        'REP-0003': ['REP-0008'],  # COO also sees CCO's chain (Waqar, etc.)
+    }
+
+    def _get_visible_user_ids(self, db, current_rep_id):
+        """Get all user UUIDs whose tasks the current user can see (hierarchy walk).
+        Returns set of UUIDs (all subordinates + self + cross-visibility).
+        Returns None = see all tasks (CEO, system admin)."""
+        from app.main import CompanyRep
+        current = db.query(CompanyRep).filter(CompanyRep.rep_id == current_rep_id).first()
+        if not current:
+            return set()
+
+        # Top-level admin with no reports_to → sees all (CEO, Malik)
+        if current.role == 'admin' and not current.reports_to:
+            return None
+
+        # Build map of who reports to whom (rep_id → [CompanyRep])
+        all_reps = db.query(CompanyRep).filter(CompanyRep.status == 'active').all()
+        children_map = {}
+        rep_by_id = {}
+        for rep in all_reps:
+            rep_by_id[rep.rep_id] = rep
+            if rep.reports_to:
+                children_map.setdefault(rep.reports_to, []).append(rep)
+
+        def walk_down(start_rep_id, uuids):
+            """Recursively collect all subordinate UUIDs."""
+            for child in children_map.get(start_rep_id, []):
+                uuids.add(child.id)
+                walk_down(child.rep_id, uuids)
+
+        # Start with self
+        visible_uuids = {current.id}
+
+        # Walk own subordinates
+        walk_down(current.rep_id, visible_uuids)
+
+        # Add cross-visibility chains
+        for cross_rep_id in self.CROSS_VISIBILITY.get(current.rep_id, []):
+            if cross_rep_id in rep_by_id:
+                visible_uuids.add(rep_by_id[cross_rep_id].id)
+                walk_down(cross_rep_id, visible_uuids)
+
+        return visible_uuids
+
     def get_tasks(self, db: Session, user_id=None, role=None, status=None,
                   priority=None, department=None, task_type=None, search=None,
-                  assignee_only=False, limit=50, offset=0):
-        """Get tasks with filters."""
+                  assignee_only=False, limit=50, offset=0, current_rep_id=None):
+        """Get tasks with filters. Uses reporting hierarchy for visibility."""
         from app.main import Task
         query = db.query(Task)
 
@@ -356,8 +440,17 @@ class TaskService:
             user_uuid = user_id if isinstance(user_id, uuid_lib.UUID) else uuid_lib.UUID(str(user_id))
             if assignee_only:
                 query = query.filter(Task.assignee_id == user_uuid)
-            elif role in ("admin", "cco"):
-                pass  # Admin/CCO see all
+            elif current_rep_id:
+                visible = self._get_visible_user_ids(db, current_rep_id)
+                if visible is not None:  # None means see all
+                    query = query.filter(
+                        or_(
+                            Task.assignee_id.in_(visible),
+                            Task.created_by.in_(visible),
+                        )
+                    )
+            elif role in ("admin",):
+                pass  # Fallback: admin sees all
             else:
                 query = query.filter(
                     or_(Task.assignee_id == user_uuid, Task.created_by == user_uuid)
@@ -525,14 +618,20 @@ class TaskService:
         return db.query(TaskActivity).filter(TaskActivity.task_id == task.id)\
             .order_by(TaskActivity.created_at.desc()).limit(limit).all()
 
-    def get_task_summary(self, db: Session, user_id=None, role=None):
+    def get_task_summary(self, db: Session, user_id=None, role=None, current_rep_id=None):
         """Get task dashboard summary (flat structure for frontend)."""
         from app.main import Task
 
         query = db.query(Task)
 
-        # Role-based filtering
-        if user_id and role not in ("admin", "cco"):
+        # Hierarchy-based filtering
+        if current_rep_id:
+            visible = self._get_visible_user_ids(db, current_rep_id)
+            if visible is not None:
+                query = query.filter(
+                    or_(Task.assignee_id.in_(visible), Task.created_by.in_(visible))
+                )
+        elif user_id and role not in ("admin",):
             user_uuid = user_id if isinstance(user_id, uuid_lib.UUID) else uuid_lib.UUID(str(user_id))
             query = query.filter(or_(Task.assignee_id == user_uuid, Task.created_by == user_uuid))
 

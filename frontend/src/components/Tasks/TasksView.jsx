@@ -52,7 +52,7 @@ export default function TasksView({ api, user, addToast, setActiveTab }) {
       if (filters.status) params.status = filters.status;
       if (filters.priority) params.priority = filters.priority;
       if (filters.department) params.department = filters.department;
-      if (filters.type) params.type = filters.type;
+      if (filters.type) params.task_type = filters.type;
       if (debouncedSearch) params.search = debouncedSearch;
       const [tasksRes, repsRes] = await Promise.all([
         api.get('/tasks', { params }).catch(() => ({ data: [] })),
