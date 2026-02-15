@@ -715,11 +715,13 @@ def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id
 # ============================================
 # AUTHENTICATION SETUP
 # ============================================
-# SECRET_KEY for JWT tokens - MUST be set in production via environment variable
-# Generate a secure key: python -c "import secrets; print(secrets.token_urlsafe(32))"
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production-min-32-chars")
+# SECRET_KEY for JWT tokens - MUST be set via SECRET_KEY env var in production
+# Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"
+SECRET_KEY = os.getenv("SECRET_KEY", "orbit-local-dev-key")
+if SECRET_KEY in ("your-secret-key-change-in-production-min-32-chars", "changeme", ""):
+    logger.critical("INSECURE SECRET_KEY detected! Set SECRET_KEY env var to a strong random value.")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MINUTES", "480"))  # 8 hours default
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
@@ -1124,9 +1126,16 @@ def require_rate_limit(limiter: RateLimiter, max_req: int, window: int, category
 def root():
     return {"status": "running", "app": "Radius CRM v3"}
 
+login_limiter = RateLimiter()
+LOGIN_RATE_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "5"))       # attempts per window
+LOGIN_RATE_WINDOW = int(os.getenv("LOGIN_RATE_WINDOW", "60"))    # window in seconds
+
 @app.post("/api/auth/login")
 def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     """Login endpoint - returns JWT token"""
+    # Rate limit login attempts per username
+    if not login_limiter.check(username.lower(), LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW):
+        raise HTTPException(status_code=429, detail=f"Too many login attempts. Try again in {LOGIN_RATE_WINDOW} seconds.")
     try:
         # Find user by rep_id, email, or mobile
         user = db.query(CompanyRep).filter(
@@ -8401,16 +8410,37 @@ def analytics_rep_performance(
 from app.services.task_service import task_service as _task_service
 from app.services.voice_query_service import voice_query_service as _voice_service
 
-def _task_to_dict(task, db):
-    """Convert Task model to dict with assignee/creator names."""
-    assignee_name = None
-    creator_name = None
-    if task.assignee_id:
-        assignee = db.query(CompanyRep).filter(CompanyRep.id == task.assignee_id).first()
-        assignee_name = assignee.name if assignee else None
-    if task.created_by:
-        creator = db.query(CompanyRep).filter(CompanyRep.id == task.created_by).first()
-        creator_name = creator.name if creator else None
+VALID_TASK_TYPES = {"general", "follow_up", "documentation", "meeting", "inventory",
+    "transaction", "customer", "report", "approval", "sales", "collection",
+    "site_visit", "legal", "recovery", "reconciliation"}
+VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
+
+def _build_rep_name_cache(db, tasks):
+    """Batch-fetch rep names to avoid N+1 queries in _task_to_dict loops."""
+    ids = set()
+    for t in tasks:
+        if t.assignee_id: ids.add(t.assignee_id)
+        if t.created_by: ids.add(t.created_by)
+    if not ids:
+        return {}
+    reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(ids))).all()
+    return {r.id: r.name for r in reps}
+
+def _task_to_dict(task, db, name_cache=None):
+    """Convert Task model to dict with assignee/creator names.
+    Pass name_cache (from _build_rep_name_cache) to avoid N+1 queries in loops."""
+    if name_cache is not None:
+        assignee_name = name_cache.get(task.assignee_id) if task.assignee_id else None
+        creator_name = name_cache.get(task.created_by) if task.created_by else None
+    else:
+        assignee_name = None
+        creator_name = None
+        if task.assignee_id:
+            assignee = db.query(CompanyRep).filter(CompanyRep.id == task.assignee_id).first()
+            assignee_name = assignee.name if assignee else None
+        if task.created_by:
+            creator = db.query(CompanyRep).filter(CompanyRep.id == task.created_by).first()
+            creator_name = creator.name if creator else None
     return {
         "id": str(task.id),
         "task_id": task.task_id,
@@ -8439,6 +8469,12 @@ def _task_to_dict(task, db):
         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
     }
 
+def _check_task_access(task, current_user):
+    """Verify user has access to a task. Admin/CCO see all, others only their own."""
+    if current_user.role in ("admin", "cco"):
+        return True
+    return task.assignee_id == current_user.id or task.created_by == current_user.id
+
 @app.post("/api/tasks")
 async def create_task(
     title: str = Form(...),
@@ -8455,6 +8491,17 @@ async def create_task(
 ):
     if current_user.role == "viewer":
         raise HTTPException(status_code=403, detail="Viewers cannot create tasks")
+    # Input validation (#13, #14)
+    if len(title) > 500:
+        raise HTTPException(status_code=400, detail="Title too long (max 500 chars)")
+    if description and len(description) > 5000:
+        raise HTTPException(status_code=400, detail="Description too long (max 5000 chars)")
+    task_type_lower = task_type.lower()
+    priority_lower = priority.lower()
+    if task_type_lower not in VALID_TASK_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid task type. Valid: {', '.join(sorted(VALID_TASK_TYPES))}")
+    if priority_lower not in VALID_PRIORITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid priority. Valid: {', '.join(sorted(VALID_PRIORITIES))}")
     try:
         parsed_due = date.fromisoformat(due_date) if due_date else None
         parsed_assignee = uuid.UUID(assignee_id) if assignee_id else None
@@ -8464,7 +8511,7 @@ async def create_task(
         linked_customer_id = crm_entity_id if crm_entity_type in ("customer", "lead") else None
         linked_project_id = crm_entity_id if crm_entity_type == "project" else None
         task = _task_service.create_task(
-            db, current_user.id, title, description, task_type, priority,
+            db, current_user.id, title, description, task_type_lower, priority_lower,
             parsed_assignee, parsed_due, department,
             linked_inventory_id, linked_transaction_id,
             linked_customer_id, linked_project_id
@@ -8508,7 +8555,8 @@ async def list_tasks(
     role = current_user.role
     user_id = current_user.id
 
-    if assignee_id:
+    # Fix #6: Only admin/cco can filter by arbitrary assignee_id
+    if assignee_id and role in ("admin", "cco"):
         tasks = _task_service.get_tasks(db, user_id=assignee_id, role=role,
                                          status=status, priority=priority, department=department,
                                          task_type=task_type, search=search, assignee_only=True,
@@ -8517,7 +8565,9 @@ async def list_tasks(
         tasks = _task_service.get_tasks(db, user_id=user_id, role=role,
                                          status=status, priority=priority, department=department,
                                          task_type=task_type, search=search, limit=limit, offset=skip)
-    return [_task_to_dict(t, db) for t in tasks]
+    # Fix #7: Batch-fetch rep names to avoid N+1 queries
+    name_cache = _build_rep_name_cache(db, tasks)
+    return [_task_to_dict(t, db, name_cache) for t in tasks]
 
 @app.get("/api/tasks/my")
 async def my_tasks(
@@ -8525,7 +8575,8 @@ async def my_tasks(
     current_user = Depends(get_current_user)
 ):
     tasks = _task_service.get_my_tasks(db, current_user.id)
-    return [_task_to_dict(t, db) for t in tasks]
+    name_cache = _build_rep_name_cache(db, tasks)
+    return [_task_to_dict(t, db, name_cache) for t in tasks]
 
 @app.get("/api/tasks/reports/summary")
 async def task_summary(
@@ -8556,26 +8607,40 @@ async def get_task(
     task = _task_service._find_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    # Fix #5: IDOR check
+    if not _check_task_access(task, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
     result = _task_to_dict(task, db)
-    # Include comments and activities
+    # Include comments and activities (Fix #8: batch-fetch names)
     comments = _task_service.get_comments(db, task_id)
     activities = _task_service.get_activities(db, task_id)
+    # Batch-fetch all author/actor names
+    people_ids = set()
+    for c in comments:
+        if c.author_id: people_ids.add(c.author_id)
+    for a in activities:
+        if a.actor_id: people_ids.add(a.actor_id)
+    people_names = {}
+    if people_ids:
+        reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(people_ids))).all()
+        people_names = {r.id: r.name for r in reps}
     result["comments"] = [{
         "id": str(c.id), "content": c.content,
         "author_id": str(c.author_id),
-        "author_name": (db.query(CompanyRep).filter(CompanyRep.id == c.author_id).first() or CompanyRep(name="Unknown")).name,
+        "author_name": people_names.get(c.author_id, "Unknown"),
         "created_at": c.created_at.isoformat() if c.created_at else None,
     } for c in comments]
     result["activities"] = [{
         "id": str(a.id), "action": a.action,
         "old_value": a.old_value, "new_value": a.new_value,
         "actor_id": str(a.actor_id),
-        "actor_name": (db.query(CompanyRep).filter(CompanyRep.id == a.actor_id).first() or CompanyRep(name="Unknown")).name,
+        "actor_name": people_names.get(a.actor_id, "Unknown"),
         "created_at": a.created_at.isoformat() if a.created_at else None,
     } for a in activities]
     # Include subtasks
     subtasks = db.query(Task).filter(Task.parent_task_id == task.id).order_by(Task.created_at).all()
-    result["subtasks"] = [_task_to_dict(s, db) for s in subtasks]
+    sub_cache = _build_rep_name_cache(db, subtasks)
+    result["subtasks"] = [_task_to_dict(s, db, sub_cache) for s in subtasks]
     return result
 
 @app.put("/api/tasks/{task_id}")
@@ -8594,7 +8659,15 @@ async def update_task(
     task = _task_service._find_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-
+    if not _check_task_access(task, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
+    # Input validation
+    if title and len(title) > 500:
+        raise HTTPException(status_code=400, detail="Title too long (max 500 chars)")
+    if description is not None and len(description) > 5000:
+        raise HTTPException(status_code=400, detail="Description too long (max 5000 chars)")
+    if priority and priority.lower() not in VALID_PRIORITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid priority. Valid: {', '.join(sorted(VALID_PRIORITIES))}")
     if title:
         task.title = title
     if description is not None:
@@ -8648,6 +8721,8 @@ async def add_task_comment(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    if len(content) > 5000:
+        raise HTTPException(status_code=400, detail="Comment too long (max 5000 chars)")
     try:
         comment = _task_service.add_comment(db, task_id, current_user.id, content)
         author = db.query(CompanyRep).filter(CompanyRep.id == comment.author_id).first()
@@ -8668,10 +8743,15 @@ async def get_task_comments(
 ):
     try:
         comments = _task_service.get_comments(db, task_id)
+        author_ids = set(c.author_id for c in comments if c.author_id)
+        author_names = {}
+        if author_ids:
+            reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(author_ids))).all()
+            author_names = {r.id: r.name for r in reps}
         return [{
             "id": str(c.id), "content": c.content,
             "author_id": str(c.author_id),
-            "author_name": (db.query(CompanyRep).filter(CompanyRep.id == c.author_id).first() or CompanyRep(name="Unknown")).name,
+            "author_name": author_names.get(c.author_id, "Unknown"),
             "created_at": c.created_at.isoformat() if c.created_at else None,
         } for c in comments]
     except ValueError as e:
@@ -8685,11 +8765,16 @@ async def get_task_activities(
 ):
     try:
         activities = _task_service.get_activities(db, task_id)
+        actor_ids = set(a.actor_id for a in activities if a.actor_id)
+        actor_names = {}
+        if actor_ids:
+            reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(actor_ids))).all()
+            actor_names = {r.id: r.name for r in reps}
         return [{
             "id": str(a.id), "action": a.action,
             "old_value": a.old_value, "new_value": a.new_value,
             "actor_id": str(a.actor_id),
-            "actor_name": (db.query(CompanyRep).filter(CompanyRep.id == a.actor_id).first() or CompanyRep(name="Unknown")).name,
+            "actor_name": actor_names.get(a.actor_id, "Unknown"),
             "created_at": a.created_at.isoformat() if a.created_at else None,
         } for a in activities]
     except ValueError as e:
@@ -8701,7 +8786,7 @@ async def create_subtask(
     title: str = Form(...),
     description: Optional[str] = Form(None),
     assignee_id: Optional[str] = Form(None),
-    priority: str = Form("MEDIUM"),
+    priority: str = Form("medium"),
     due_date: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
@@ -8799,6 +8884,8 @@ async def voice_stats(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    if current_user.role not in ("admin", "cco"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     total = db.query(QueryHistory).count()
     successful = db.query(QueryHistory).filter(QueryHistory.success == True).count()
     from sqlalchemy import func as sqlfunc
