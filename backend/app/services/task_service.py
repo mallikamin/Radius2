@@ -68,23 +68,54 @@ ROLE_KEYWORDS = {
 
 # Maps title/name aliases to actual CRM user names for precise assignment
 TITLE_TO_NAME = {
-    'ceo': 'Sarosh Javed',
-    'chief executive': 'Sarosh Javed',
-    'sarosh': 'Sarosh Javed',
-    'cfo': 'Jawad Saleem',
-    'chief financial officer': 'Jawad Saleem',
-    'jawad': 'Jawad Saleem',
-    'coo': 'Hassan Danish',
-    'chief operating officer': 'Hassan Danish',
-    'hassan': 'Hassan Danish',
-    'hd': 'Hassan Danish',
-    'cco': 'Syed Faisal',
-    'chief commercial officer': 'Syed Faisal',
-    'faisal': 'Syed Faisal',
-    'admin': 'Malik Amin',
-    'amin': 'Malik Amin',
-    'malik amin': 'Malik Amin',
-    'malik': 'Malik Amin',
+    # ── Sarosh Javed (CEO, REP-0009) ──
+    'ceo': 'Sarosh Javed', 'chief executive': 'Sarosh Javed', 'chief executive officer': 'Sarosh Javed',
+    'sarosh': 'Sarosh Javed', 'sarosh javed': 'Sarosh Javed',
+    'sarush': 'Sarosh Javed', 'saroosh': 'Sarosh Javed', 'surosh': 'Sarosh Javed',
+    'saroj': 'Sarosh Javed', 'srosh': 'Sarosh Javed', 'sarish': 'Sarosh Javed',
+    # ── Jawad Saleem (CFO, REP-0010) ──
+    'cfo': 'Jawad Saleem', 'chief financial officer': 'Jawad Saleem',
+    'jawad': 'Jawad Saleem', 'jawad saleem': 'Jawad Saleem',
+    'javad': 'Jawad Saleem', 'javed saleem': 'Jawad Saleem', 'jawwad': 'Jawad Saleem',
+    'jawaid': 'Jawad Saleem', 'javaid': 'Jawad Saleem', 'jawaad': 'Jawad Saleem',
+    'jawed': 'Jawad Saleem', 'javid': 'Jawad Saleem',
+    # ── Hassan Danish (COO, REP-0003) ──
+    'coo': 'Hassan Danish', 'chief operating officer': 'Hassan Danish',
+    'hassan': 'Hassan Danish', 'hassan danish': 'Hassan Danish', 'hd': 'Hassan Danish',
+    'hasan': 'Hassan Danish', 'haasan': 'Hassan Danish', 'hussan': 'Hassan Danish',
+    'hassaan': 'Hassan Danish', 'husan': 'Hassan Danish', 'danish': 'Hassan Danish',
+    # ── Syed Faisal (CCO, REP-0008) ──
+    'cco': 'Syed Faisal', 'chief commercial officer': 'Syed Faisal',
+    'faisal': 'Syed Faisal', 'syed faisal': 'Syed Faisal',
+    'faizel': 'Syed Faisal', 'faisaal': 'Syed Faisal', 'faizal': 'Syed Faisal',
+    'faysal': 'Syed Faisal', 'faisol': 'Syed Faisal', 'fesal': 'Syed Faisal',
+    'phaisal': 'Syed Faisal', 'faisl': 'Syed Faisal',
+    # ── Malik Amin (System Admin, REP-0002) ──
+    'admin': 'Malik Amin', 'system admin': 'Malik Amin',
+    'malik': 'Malik Amin', 'malik amin': 'Malik Amin', 'amin': 'Malik Amin',
+    'malick': 'Malik Amin', 'malek': 'Malik Amin', 'maalik': 'Malik Amin',
+    'ameen': 'Malik Amin', 'amein': 'Malik Amin',
+    # ── Afaaq (Finance, REP-0013) ──
+    'afaaq': 'Afaaq', 'afaq': 'Afaaq', 'afak': 'Afaaq', 'affaq': 'Afaaq',
+    'afaak': 'Afaaq', 'afack': 'Afaaq', 'afaakh': 'Afaaq', 'afaaque': 'Afaaq',
+    'afaque': 'Afaaq', 'afac': 'Afaaq', 'affak': 'Afaaq', 'aafaq': 'Afaaq',
+    # ── Luqman (Consultant, REP-0011) ──
+    'luqman': 'Luqman', 'lukman': 'Luqman', 'luqmaan': 'Luqman',
+    'lookman': 'Luqman', 'luqmon': 'Luqman', 'luckman': 'Luqman',
+    'lukhman': 'Luqman', 'loqman': 'Luqman', 'lukmon': 'Luqman',
+    # ── Mujtaba (Cash, REP-0012) ──
+    'mujtaba': 'Mujtaba', 'mujteba': 'Mujtaba', 'mojtaba': 'Mujtaba',
+    'mujtba': 'Mujtaba', 'mujtabah': 'Mujtaba', 'majtaba': 'Mujtaba',
+    'mushtaba': 'Mujtaba', 'mujtuba': 'Mujtaba', 'mojteba': 'Mujtaba',
+    # ── Waqar (Sales, REP-0001) ──
+    'waqar': 'Waqar', 'wakar': 'Waqar', 'waqas': 'Waqar',
+    'wakaar': 'Waqar', 'vaqar': 'Waqar', 'waqaar': 'Waqar',
+    'waker': 'Waqar', 'vakar': 'Waqar', 'wuqar': 'Waqar',
+    # ── Ahsan Ejaz (Director Land, REP-0004) ──
+    'ahsan': 'Ahsan Ejaz', 'ahsan ejaz': 'Ahsan Ejaz', 'ehsan': 'Ahsan Ejaz',
+    'ahsen': 'Ahsan Ejaz', 'ahsaan': 'Ahsan Ejaz', 'ihsan': 'Ahsan Ejaz',
+    'axan': 'Ahsan Ejaz', 'ejaz': 'Ahsan Ejaz', 'aijaz': 'Ahsan Ejaz',
+    'ehsaan': 'Ahsan Ejaz', 'ahson': 'Ahsan Ejaz',
 }
 
 PRIORITY_KEYWORDS = {
@@ -167,8 +198,8 @@ class TaskEntityExtractor:
         # Extract CRM references
         entities.update(self._extract_crm_references(text))
 
-        # Extract task title
-        entities['task_title'] = self._extract_task_title(text)
+        # Extract task title (pass assignee name so it can be stripped from title)
+        entities['task_title'] = self._extract_task_title(text, assignee_name=entities.get('assignee_name'))
 
         return entities
 
@@ -217,16 +248,25 @@ class TaskEntityExtractor:
             refs['customer_name'] = customer_match.group(1).title()
         return refs
 
-    def _extract_task_title(self, text: str) -> str:
+    def _extract_task_title(self, text: str, assignee_name: str = None) -> str:
         title = text
+        # Strip command verbs + "task to <name>" patterns
         prefixes = [
-            r'^assign\s+(?:to\s+)?(?:\w+\s+)?',
-            r'^task\s+(?:for|to)\s+(?:\w+\s+)?[:\-]?\s*',
-            r'^remind\s+(?:\w+\s+)?(?:to\s+)?',
+            r'^(?:assign|tell|ask|remind)\s+(?:a\s+)?(?:task\s+)?(?:to|for)\s+',
+            r'^(?:assign|tell|ask|remind)\s+',
+            r'^task\s+(?:for|to)\s+',
         ]
         for prefix in prefixes:
             title = re.sub(prefix, '', title, flags=re.IGNORECASE)
-        title = title.strip(' :-')
+        # Strip the resolved assignee name + all known aliases from the start
+        if assignee_name:
+            title = re.sub(r'^' + re.escape(assignee_name) + r'\s*', '', title, flags=re.IGNORECASE)
+            for alias, canonical in TITLE_TO_NAME.items():
+                if canonical.lower() == assignee_name.lower():
+                    title = re.sub(r'^' + re.escape(alias) + r'\s*', '', title, flags=re.IGNORECASE)
+        # Strip leading connector words (may appear after name removal)
+        title = re.sub(r'^(?:to\s+|for\s+|about\s+|the\s+|needs?\s+to\s+)', '', title, flags=re.IGNORECASE)
+        title = title.strip(' :-.')
         if title:
             title = title[0].upper() + title[1:]
         return title if title else "New Task"
@@ -503,19 +543,34 @@ class TaskService:
         user_uuid = user_id if isinstance(user_id, uuid_lib.UUID) else uuid_lib.UUID(str(user_id))
         self._log_activity(db, task.id, user_uuid, "status_changed", old_status, new_status)
 
-        # Notify creator if different user
-        if task.created_by != user_uuid:
-            creator = db.query(CompanyRep).filter(CompanyRep.id == task.created_by).first()
-            if creator:
-                create_notification(
-                    db, creator.rep_id, "task_updated",
-                    f"Task updated: {task.title}",
-                    f"Status changed to {new_status}",
-                    category="task", entity_type="task", entity_id=task.task_id
-                )
+        # Notify ALL stakeholders (creator, assignee, delegator) except the actor
+        self._notify_task_stakeholders(
+            db, task, user_uuid,
+            f"Task updated: {task.title}",
+            f"Status changed from {old_status} to {new_status}"
+        )
 
         db.commit()
         return task
+
+    def _notify_task_stakeholders(self, db, task, actor_uuid, title, message):
+        """Notify all task stakeholders (creator, assignee, delegator) except the person who made the change."""
+        from app.main import CompanyRep, create_notification
+
+        notified = set()
+        stakeholder_ids = [task.created_by, task.assignee_id]
+        if hasattr(task, 'delegated_by') and task.delegated_by:
+            stakeholder_ids.append(task.delegated_by)
+
+        for uid in stakeholder_ids:
+            if uid and uid != actor_uuid and uid not in notified:
+                notified.add(uid)
+                rep = db.query(CompanyRep).filter(CompanyRep.id == uid).first()
+                if rep:
+                    create_notification(
+                        db, rep.rep_id, "task_updated", title, message,
+                        category="task", entity_type="task", entity_id=task.task_id
+                    )
 
     def complete_task(self, db: Session, task_id, user_id, notes: Optional[str] = None):
         """Mark task as complete."""
@@ -555,13 +610,14 @@ class TaskService:
                            str(new_assignee_uuid))
 
         new_assignee = db.query(CompanyRep).filter(CompanyRep.id == new_assignee_uuid).first()
-        if new_assignee:
-            create_notification(
-                db, new_assignee.rep_id, "task_delegated",
-                f"Task delegated: {task.title}",
-                f"Task has been delegated to you",
-                category="task", entity_type="task", entity_id=task.task_id
-            )
+        assignee_name = new_assignee.name if new_assignee else "Unknown"
+
+        # Notify all stakeholders (including new assignee, old assignee, creator)
+        self._notify_task_stakeholders(
+            db, task, delegator_uuid,
+            f"Task delegated: {task.title}",
+            f"Task has been assigned to {assignee_name}"
+        )
 
         db.commit()
         return task
@@ -661,6 +717,165 @@ class TaskService:
             "by_type": by_type,
             "by_status": by_status,
             "by_priority": by_priority,
+        }
+
+    def get_executive_summary(self, db: Session, current_rep_id: str):
+        """Build an organized executive summary grouped by direct reports.
+        CEO sees entire org. CFO sees own chain. Each person grouped with their tasks."""
+        from app.main import CompanyRep, Task, TaskActivity
+
+        current = db.query(CompanyRep).filter(CompanyRep.rep_id == current_rep_id).first()
+        if not current:
+            return {"error": "User not found"}
+
+        all_reps = db.query(CompanyRep).filter(CompanyRep.status == 'active').all()
+        rep_by_id = {r.rep_id: r for r in all_reps}
+        rep_by_uuid = {r.id: r for r in all_reps}
+        children_map = {}
+        for r in all_reps:
+            if r.reports_to:
+                children_map.setdefault(r.reports_to, []).append(r)
+
+        def walk_down_reps(start_rep_id):
+            result = []
+            for child in children_map.get(start_rep_id, []):
+                result.append(child)
+                result.extend(walk_down_reps(child.rep_id))
+            return result
+
+        # Determine if this is a top-level exec (sees all)
+        sees_all = current.role == 'admin' and not current.reports_to
+
+        # Get direct reports for the current user
+        direct_reports = children_map.get(current.rep_id, [])
+
+        # For cross-visibility, include those chains as virtual direct reports
+        for cross_id in self.CROSS_VISIBILITY.get(current.rep_id, []):
+            if cross_id in rep_by_id and rep_by_id[cross_id] not in direct_reports:
+                direct_reports.append(rep_by_id[cross_id])
+
+        # If CEO/admin sees all but has no direct reports in DB, use all top-level C-suite
+        if sees_all and not direct_reports:
+            direct_reports = [r for r in all_reps if r.reports_to == current.rep_id or
+                              (r.id != current.id and not r.reports_to and r.role == 'admin')]
+            # Also add anyone who reports to CEO
+            for r in all_reps:
+                if r.reports_to == current.rep_id and r not in direct_reports:
+                    direct_reports.append(r)
+
+        # Load all tasks (visible scope)
+        all_tasks = db.query(Task).all() if sees_all else None
+        if not sees_all:
+            visible = self._get_visible_user_ids(db, current_rep_id)
+            if visible is None:
+                all_tasks = db.query(Task).all()
+            else:
+                all_tasks = db.query(Task).filter(
+                    or_(Task.assignee_id.in_(visible), Task.created_by.in_(visible))
+                ).all()
+
+        # Load recent activities (last 48 hours)
+        from datetime import datetime, timedelta
+        cutoff = datetime.utcnow() - timedelta(hours=48)
+        recent_activities = db.query(TaskActivity).filter(
+            TaskActivity.created_at >= cutoff
+        ).order_by(TaskActivity.created_at.desc()).all()
+
+        # Build activity lookup: task_uuid → [activities]
+        activity_by_task = {}
+        for a in recent_activities:
+            activity_by_task.setdefault(a.task_id, []).append(a)
+
+        # Task lookup by uuid
+        task_by_uuid = {t.id: t for t in all_tasks}
+        today = date.today()
+
+        def rep_dict(r):
+            return {"rep_id": r.rep_id, "name": r.name, "title": r.title or r.role, "id": str(r.id)}
+
+        def task_dict(t):
+            assignee = rep_by_uuid.get(t.assignee_id)
+            creator = rep_by_uuid.get(t.created_by)
+            return {
+                "id": str(t.id), "task_id": t.task_id, "title": t.title,
+                "status": t.status, "priority": t.priority or "medium",
+                "due_date": str(t.due_date) if t.due_date else None,
+                "assignee_name": assignee.name if assignee else "Unassigned",
+                "creator_name": creator.name if creator else "N/A",
+                "overdue": bool(t.due_date and t.due_date < today and t.status not in TERMINAL_STATUSES),
+                "created_at": str(t.created_at) if t.created_at else None,
+            }
+
+        def activity_dict(a):
+            actor = rep_by_uuid.get(a.actor_id)
+            t = task_by_uuid.get(a.task_id)
+            return {
+                "action": a.action, "actor_name": actor.name if actor else "System",
+                "task_title": t.title if t else "Unknown",
+                "task_id": t.task_id if t else None,
+                "old_value": a.old_value, "new_value": a.new_value,
+                "created_at": str(a.created_at) if a.created_at else None,
+            }
+
+        # Build report for each direct report
+        def build_person_report(person):
+            """Build summary for one person + their entire subordinate chain."""
+            chain_uuids = {person.id}
+            for sub in walk_down_reps(person.rep_id):
+                chain_uuids.add(sub.id)
+
+            # Tasks assigned BY this person (they created)
+            assigned_by = [t for t in all_tasks if t.created_by == person.id and t.assignee_id != person.id]
+            # Tasks assigned TO this person
+            assigned_to = [t for t in all_tasks if t.assignee_id == person.id]
+            # All tasks in this person's chain
+            chain_tasks = [t for t in all_tasks if t.assignee_id in chain_uuids or t.created_by in chain_uuids]
+            # Recent updates in chain
+            chain_activities = []
+            for t in chain_tasks:
+                chain_activities.extend(activity_by_task.get(t.id, []))
+            chain_activities.sort(key=lambda a: a.created_at or datetime.min, reverse=True)
+
+            # Stats
+            active_chain = [t for t in chain_tasks if t.status not in TERMINAL_STATUSES]
+            return {
+                "person": rep_dict(person),
+                "subordinates": [rep_dict(s) for s in children_map.get(person.rep_id, [])],
+                "assigned_by_them": [task_dict(t) for t in assigned_by[:15]],
+                "assigned_to_them": [task_dict(t) for t in assigned_to[:15]],
+                "recent_updates": [activity_dict(a) for a in chain_activities[:20]],
+                "stats": {
+                    "total": len(chain_tasks),
+                    "active": len(active_chain),
+                    "completed": sum(1 for t in chain_tasks if t.status in TERMINAL_STATUSES),
+                    "in_progress": sum(1 for t in chain_tasks if t.status == "in_progress"),
+                    "overdue": sum(1 for t in chain_tasks if t.due_date and t.due_date < today and t.status not in TERMINAL_STATUSES),
+                    "pending": sum(1 for t in chain_tasks if t.status == "pending"),
+                },
+            }
+
+        # Your own tasks
+        my_assigned_to = [t for t in all_tasks if t.assignee_id == current.id]
+        my_created = [t for t in all_tasks if t.created_by == current.id and t.assignee_id != current.id]
+
+        # Org-wide stats
+        active_all = [t for t in all_tasks if t.status not in TERMINAL_STATUSES]
+
+        return {
+            "user": rep_dict(current),
+            "generated_at": str(datetime.utcnow()),
+            "your_tasks": {
+                "assigned_to_you": [task_dict(t) for t in my_assigned_to[:15]],
+                "created_by_you": [task_dict(t) for t in my_created[:20]],
+            },
+            "direct_reports": [build_person_report(dr) for dr in direct_reports],
+            "org_stats": {
+                "total": len(all_tasks),
+                "active": len(active_all),
+                "completed": sum(1 for t in all_tasks if t.status in TERMINAL_STATUSES),
+                "overdue": sum(1 for t in all_tasks if t.due_date and t.due_date < today and t.status not in TERMINAL_STATUSES),
+                "due_today": sum(1 for t in all_tasks if t.due_date and t.due_date == today and t.status not in TERMINAL_STATUSES),
+            },
         }
 
     def get_valid_statuses(self, task_type: str) -> List[str]:

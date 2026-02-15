@@ -130,7 +130,7 @@ export default function TasksView({ api, user, addToast, setActiveTab }) {
       </div>
       {/* Sub-tabs */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
-        {[{ id: 'active', label: 'Active' }, { id: 'my', label: 'My Tasks' }, { id: 'department', label: 'By Department' }, { id: 'dashboard', label: 'Dashboard' }].map(tab => (
+        {[{ id: 'active', label: 'Active' }, { id: 'kanban', label: 'Board' }, { id: 'timeline', label: 'Timeline' }, { id: 'my', label: 'My Tasks' }, { id: 'department', label: 'By Department' }, { id: 'dashboard', label: 'Dashboard' }].map(tab => (
           <button key={tab.id} onClick={() => setSubTab(tab.id)}
             className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${subTab === tab.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
             {tab.label}
@@ -143,18 +143,22 @@ export default function TasksView({ api, user, addToast, setActiveTab }) {
         <TaskTable tasks={filteredTasks} loading={loading} onRowClick={openDetail} onComplete={quickComplete} showComplete={false} />
       </>)}
       {subTab === 'my' && <TaskTable tasks={filteredTasks} loading={loading} onRowClick={openDetail} onComplete={quickComplete} showComplete={true} />}
+      {subTab === 'kanban' && <KanbanBoard tasks={tasks} loading={loading} api={api} addToast={addToast}
+        onCardClick={openDetail} onStatusChange={() => { loadTasks(); loadMyTasks(); }} />}
+      {subTab === 'timeline' && <TimelineView tasks={tasks} loading={loading} onCardClick={openDetail} />}
       {subTab === 'department' && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           {DEPARTMENTS.map(dept => <DepartmentColumn key={dept} name={dept} tasks={tasksByDept[dept] ?? []} onRowClick={openDetail} />)}
         </div>
       )}
-      {subTab === 'dashboard' && <DashboardTab summary={summary} tasks={tasks} deptConfig={deptConfig} />}
+      {subTab === 'dashboard' && <DashboardTab api={api} summary={summary} tasks={tasks} deptConfig={deptConfig} />}
 
       {showCreateModal && <CreateTaskModal api={api} reps={reps} addToast={addToast}
         onClose={() => setShowCreateModal(false)} onCreated={() => { setShowCreateModal(false); loadTasks(); loadMyTasks(); }} />}
       {showDetailModal && <TaskDetailModal api={api} reps={reps} user={user} addToast={addToast}
         taskId={showDetailModal} data={detailData} loading={detailLoading} onClose={closeDetail}
-        onUpdated={() => { openDetail(showDetailModal); loadTasks(); loadMyTasks(); }} />}
+        onUpdated={() => { openDetail(showDetailModal); loadTasks(); loadMyTasks(); }}
+        onDeleted={() => { loadTasks(); loadMyTasks(); }} />}
     </div>
   );
 }
@@ -284,69 +288,406 @@ function DepartmentColumn({ name, tasks, onRowClick }) {
 }
 
 // ============================================
-// DASHBOARD TAB
+// KANBAN BOARD
 // ============================================
-function DashboardTab({ summary, tasks }) {
-  const s = summary ?? {};
-  const deptBreakdown = DEPARTMENTS.map(dept => {
-    const dt = (tasks ?? []).filter(t => (t.department ?? '').toLowerCase() === dept.toLowerCase());
-    return { name: dept, total: dt.length, completed: dt.filter(t => t.status === 'completed').length,
-      inProgress: dt.filter(t => t.status === 'in_progress').length, overdue: dt.filter(t => isOverdue(t)).length };
-  });
+const KANBAN_COLUMNS = [
+  { id: 'pending', label: 'Pending', color: 'border-yellow-400', bg: 'bg-yellow-50', dot: 'bg-yellow-400' },
+  { id: 'in_progress', label: 'In Progress', color: 'border-blue-400', bg: 'bg-blue-50', dot: 'bg-blue-400' },
+  { id: 'on_hold', label: 'On Hold', color: 'border-purple-400', bg: 'bg-purple-50', dot: 'bg-purple-400' },
+  { id: 'completed', label: 'Completed', color: 'border-green-400', bg: 'bg-green-50', dot: 'bg-green-400' },
+  { id: 'cancelled', label: 'Cancelled', color: 'border-gray-300', bg: 'bg-gray-50', dot: 'bg-gray-400' },
+];
+
+function KanbanBoard({ tasks, loading, api, addToast, onCardClick, onStatusChange }) {
+  const [dragId, setDragId] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+  const [updating, setUpdating] = useState(null);
+
+  const moveTask = async (taskDbId, newStatus) => {
+    setUpdating(taskDbId);
+    try {
+      const fd = new FormData(); fd.append('status', newStatus);
+      await api.put(`/tasks/${taskDbId}`, fd);
+      if (addToast) addToast('Success', `Moved to ${newStatus.replace(/_/g, ' ')}`, 'success');
+      onStatusChange();
+    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Failed to move task', 'error'); }
+    finally { setUpdating(null); }
+  };
+
+  const onDragStart = (e, task) => { setDragId(task.id); e.dataTransfer.effectAllowed = 'move'; };
+  const onDragEnd = () => { setDragId(null); setDragOver(null); };
+  const onDragOverCol = (e, colId) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(colId); };
+  const onDragLeaveCol = () => setDragOver(null);
+  const onDropCol = (e, colId) => {
+    e.preventDefault(); setDragOver(null);
+    if (!dragId) return;
+    const task = tasks.find(t => t.id === dragId);
+    if (task && task.status !== colId) moveTask(task.id, colId);
+    setDragId(null);
+  };
+
+  if (loading) return <div className="p-12 text-center text-gray-400">Loading...</div>;
+
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[{ l: 'Total Tasks', v: s.total ?? 0 }, { l: 'In Progress', v: s.in_progress ?? 0 },
-          { l: 'Completed', v: s.completed ?? 0 }, { l: 'Overdue', v: s.overdue ?? 0 }].map(c => (
-          <div key={c.l} className="bg-white rounded-2xl shadow-sm border p-5">
-            <div className="text-xs font-medium text-gray-400 uppercase">{c.l}</div>
-            <div className="mt-2 text-2xl font-semibold text-gray-900">{c.v}</div>
+    <div className="flex gap-4 overflow-x-auto pb-4" style={{ minHeight: '70vh' }}>
+      {KANBAN_COLUMNS.map(col => {
+        const colTasks = tasks.filter(t => t.status === col.id);
+        const isDragTarget = dragOver === col.id && dragId;
+        return (
+          <div key={col.id}
+            className={`flex-shrink-0 w-72 rounded-xl border-t-3 ${col.color} bg-white flex flex-col transition-all ${isDragTarget ? 'ring-2 ring-gray-900/20 shadow-lg scale-[1.01]' : 'shadow-sm'}`}
+            style={{ borderTopWidth: '3px' }}
+            onDragOver={e => onDragOverCol(e, col.id)} onDragLeave={onDragLeaveCol} onDrop={e => onDropCol(e, col.id)}>
+            {/* Column Header */}
+            <div className="px-4 py-3 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${col.dot}`} />
+                <span className="text-sm font-semibold text-gray-800">{col.label}</span>
+              </div>
+              <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">{colTasks.length}</span>
+            </div>
+            {/* Cards */}
+            <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-2">
+              {colTasks.length === 0 && (
+                <div className={`rounded-lg border-2 border-dashed border-gray-200 p-6 text-center text-xs text-gray-400 ${isDragTarget ? 'border-gray-400 bg-gray-50' : ''}`}>
+                  {isDragTarget ? 'Drop here' : 'No tasks'}
+                </div>
+              )}
+              {colTasks.map(t => (
+                <div key={t.id} draggable className={`rounded-lg border bg-white p-3 cursor-grab active:cursor-grabbing hover:shadow-md transition-all ${dragId === t.id ? 'opacity-40 scale-95' : ''} ${updating === t.id ? 'opacity-60 pointer-events-none' : ''}`}
+                  onDragStart={e => onDragStart(e, t)} onDragEnd={onDragEnd}
+                  onClick={() => onCardClick(t.id)}>
+                  <div className="text-sm font-medium text-gray-900 mb-2 line-clamp-2">{t.title ?? 'Untitled'}</div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${PRIORITY_STYLES[t.priority] ?? PRIORITY_STYLES.medium}`}>
+                      {(t.priority ?? 'medium').toUpperCase()}</span>
+                    {t.due_date && (
+                      <span className={`text-[10px] ${isOverdue(t) ? 'text-red-600 font-semibold' : 'text-gray-400'}`}>
+                        {fmtDate(t.due_date)}{isOverdue(t) ? ' !' : ''}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-50">
+                    <span className="text-[10px] text-gray-400 truncate max-w-[120px]">{t.assignee_name ?? t.assigned_to_name ?? 'Unassigned'}</span>
+                    <span className="text-[10px] text-gray-300">{t.task_id ?? ''}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        ))}
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================
+// TIMELINE VIEW — Gantt-style
+// ============================================
+function TimelineView({ tasks, loading, onCardClick }) {
+  const [scope, setScope] = useState('month'); // 'week' | 'month' | 'quarter'
+
+  if (loading) return <div className="p-12 text-center text-gray-400">Loading...</div>;
+
+  const activeTasks = tasks.filter(t => t.status !== 'cancelled');
+  if (!activeTasks.length) return <div className="bg-white rounded-2xl shadow-sm border p-12 text-center text-gray-400">No tasks to display</div>;
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const scopeDays = scope === 'week' ? 14 : scope === 'month' ? 42 : 90;
+
+  // Timeline range: 7 days before today → scopeDays after today
+  const rangeStart = new Date(today); rangeStart.setDate(rangeStart.getDate() - 7);
+  const rangeEnd = new Date(today); rangeEnd.setDate(rangeEnd.getDate() + scopeDays);
+  const totalDays = Math.round((rangeEnd - rangeStart) / 86400000);
+
+  const dayToPercent = (d) => {
+    const diff = Math.round((d - rangeStart) / 86400000);
+    return Math.max(0, Math.min(100, (diff / totalDays) * 100));
+  };
+
+  // Generate day markers
+  const dayMarkers = [];
+  const markerDate = new Date(rangeStart);
+  while (markerDate <= rangeEnd) {
+    const isToday = markerDate.toDateString() === today.toDateString();
+    const isMonday = markerDate.getDay() === 1;
+    const isFirst = markerDate.getDate() === 1;
+    if (isToday || isMonday || isFirst) {
+      dayMarkers.push({ date: new Date(markerDate), pct: dayToPercent(markerDate), isToday, isFirst });
+    }
+    markerDate.setDate(markerDate.getDate() + 1);
+  }
+
+  // Sort tasks: overdue first, then by due date
+  const sorted = [...activeTasks].sort((a, b) => {
+    const aOver = isOverdue(a) ? 0 : 1;
+    const bOver = isOverdue(b) ? 0 : 1;
+    if (aOver !== bOver) return aOver - bOver;
+    const aDate = a.due_date ? new Date(a.due_date) : new Date('2099-12-31');
+    const bDate = b.due_date ? new Date(b.due_date) : new Date('2099-12-31');
+    return aDate - bDate;
+  });
+
+  const BAR_COLORS = {
+    pending: 'bg-yellow-400', in_progress: 'bg-blue-500', on_hold: 'bg-purple-400',
+    completed: 'bg-green-500', cancelled: 'bg-gray-300', overdue: 'bg-red-500',
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Scope Toggle */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg">
+          {[{ id: 'week', label: '2 Weeks' }, { id: 'month', label: '6 Weeks' }, { id: 'quarter', label: '3 Months' }].map(s => (
+            <button key={s.id} onClick={() => setScope(s.id)}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${scope === s.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-3 text-[10px] text-gray-400">
+          {Object.entries(BAR_COLORS).filter(([k]) => k !== 'overdue' && k !== 'cancelled').map(([k, cls]) => (
+            <span key={k} className="flex items-center gap-1">
+              <span className={`w-2.5 h-2.5 rounded-sm ${cls}`} />{k.replace(/_/g, ' ')}
+            </span>
+          ))}
+        </div>
       </div>
-      <div className="bg-white rounded-2xl shadow-sm border p-6">
-        <h3 className="text-sm font-semibold text-gray-900 mb-4">Department Breakdown</h3>
-        <table className="w-full text-sm">
-          <thead><tr className="border-b border-gray-100">
-            <th className="text-left py-3 px-4 text-xs font-medium text-gray-500 uppercase">Department</th>
-            <th className="text-center py-3 px-4 text-xs font-medium text-gray-500 uppercase">Total</th>
-            <th className="text-center py-3 px-4 text-xs font-medium text-gray-500 uppercase">In Progress</th>
-            <th className="text-center py-3 px-4 text-xs font-medium text-gray-500 uppercase">Completed</th>
-            <th className="text-center py-3 px-4 text-xs font-medium text-gray-500 uppercase">Overdue</th>
-            <th className="text-center py-3 px-4 text-xs font-medium text-gray-500 uppercase">Completion %</th>
-          </tr></thead>
-          <tbody className="divide-y divide-gray-50">
-            {deptBreakdown.map(d => {
-              const pct = d.total > 0 ? Math.round((d.completed / d.total) * 100) : 0;
-              return (
-                <tr key={d.name} className="hover:bg-gray-50">
-                  <td className="py-3 px-4 font-medium text-gray-900">{d.name}</td>
-                  <td className="py-3 px-4 text-center text-gray-600">{d.total}</td>
-                  <td className="py-3 px-4 text-center text-blue-600">{d.inProgress}</td>
-                  <td className="py-3 px-4 text-center text-green-600">{d.completed}</td>
-                  <td className="py-3 px-4 text-center text-red-600">{d.overdue}</td>
-                  <td className="py-3 px-4 text-center">
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-green-500 rounded-full" style={{ width: `${pct}%` }} /></div>
-                      <span className="text-xs text-gray-500">{pct}%</span>
-                    </div>
-                  </td>
-                </tr>);
-            })}
-          </tbody>
-        </table>
-      </div>
-      {summary && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {['urgent', 'high', 'medium', 'low'].map(p => (
-            <div key={p} className={`rounded-2xl border p-4 ${PRIORITY_STYLES[p]}`}>
-              <div className="text-xs font-medium uppercase">{p}</div>
-              <div className="mt-1 text-xl font-semibold">{s[`priority_${p}`] ?? (tasks ?? []).filter(t => t.priority === p).length}</div>
+      {/* Timeline Chart */}
+      <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+        {/* Header with date markers */}
+        <div className="relative h-8 border-b bg-gray-50 text-[10px] text-gray-400">
+          {dayMarkers.map((m, i) => (
+            <div key={i} className={`absolute top-0 h-full flex items-center ${m.isToday ? 'text-red-600 font-bold z-10' : m.isFirst ? 'text-gray-600 font-medium' : ''}`}
+              style={{ left: `${m.pct}%`, transform: 'translateX(-50%)' }}>
+              {m.isToday ? 'Today' : m.isFirst
+                ? m.date.toLocaleDateString('en-PK', { month: 'short', day: 'numeric' })
+                : m.date.toLocaleDateString('en-PK', { day: 'numeric', month: 'short' }).split(' ')[0]}
             </div>
           ))}
         </div>
-      )}
+        {/* Task Rows */}
+        <div className="divide-y divide-gray-50">
+          {sorted.map(t => {
+            const created = t.created_at ? new Date(t.created_at) : today;
+            const due = t.due_date ? new Date(t.due_date) : null;
+            const overdue = isOverdue(t);
+            const barStart = due ? dayToPercent(created) : dayToPercent(created);
+            const barEnd = due ? dayToPercent(due) : dayToPercent(created) + 2;
+            const barWidth = Math.max(1.5, barEnd - barStart);
+            const barColor = overdue ? BAR_COLORS.overdue : BAR_COLORS[t.status] ?? BAR_COLORS.pending;
+
+            return (
+              <div key={t.id} className="flex items-center hover:bg-gray-50 cursor-pointer group" onClick={() => onCardClick(t.id)}>
+                {/* Task Label */}
+                <div className="w-56 flex-shrink-0 px-4 py-2.5 border-r border-gray-100">
+                  <div className="text-xs font-medium text-gray-800 truncate group-hover:text-gray-900">{t.title ?? 'Untitled'}</div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className={`px-1 py-0 rounded text-[9px] font-medium border ${PRIORITY_STYLES[t.priority] ?? PRIORITY_STYLES.medium}`}>
+                      {(t.priority ?? 'M')[0].toUpperCase()}</span>
+                    <span className="text-[10px] text-gray-400 truncate">{t.assignee_name ?? t.assigned_to_name ?? ''}</span>
+                  </div>
+                </div>
+                {/* Bar Area */}
+                <div className="flex-1 relative h-10">
+                  {/* Today line */}
+                  <div className="absolute top-0 h-full w-px bg-red-300 z-10" style={{ left: `${dayToPercent(today)}%` }} />
+                  {/* Bar */}
+                  <div className={`absolute top-2 h-6 rounded-md ${barColor} opacity-85 hover:opacity-100 transition-opacity shadow-sm`}
+                    style={{ left: `${barStart}%`, width: `${barWidth}%`, minWidth: '12px' }}
+                    title={`${t.title}\n${fmtDate(t.created_at)} → ${due ? fmtDate(t.due_date) : 'No due date'}${overdue ? ' (OVERDUE)' : ''}`}>
+                    {barWidth > 8 && (
+                      <span className="absolute inset-0 flex items-center px-2 text-[9px] text-white font-medium truncate">
+                        {due ? fmtDate(t.due_date) : ''}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// DASHBOARD TAB — Executive Summary
+// ============================================
+function DashboardTab({ api, summary, tasks }) {
+  const [execData, setExecData] = useState(null);
+  const [execLoading, setExecLoading] = useState(true);
+  const [expandedPerson, setExpandedPerson] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      setExecLoading(true);
+      try {
+        const res = await api.get('/tasks/executive-summary');
+        setExecData(res.data);
+      } catch (e) { console.error('Failed to load executive summary:', e); }
+      finally { setExecLoading(false); }
+    })();
+  }, [api]);
+
+  const s = summary ?? {};
+  const org = execData?.org_stats ?? {};
+
+  return (
+    <div className="space-y-6">
+      {/* Org-wide Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {[{ l: 'Total', v: org.total ?? s.total ?? 0, c: 'text-gray-900' },
+          { l: 'Active', v: org.active ?? s.in_progress ?? 0, c: 'text-blue-600' },
+          { l: 'Completed', v: org.completed ?? s.completed ?? 0, c: 'text-green-600' },
+          { l: 'Overdue', v: org.overdue ?? s.overdue ?? 0, c: 'text-red-600' },
+          { l: 'Due Today', v: org.due_today ?? s.due_today ?? 0, c: 'text-orange-600' }].map(c => (
+          <div key={c.l} className="bg-white rounded-2xl shadow-sm border p-4">
+            <div className="text-[10px] font-medium text-gray-400 uppercase">{c.l}</div>
+            <div className={`mt-1 text-2xl font-semibold ${c.c}`}>{c.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {execLoading ? <div className="p-8 text-center text-gray-400">Loading executive summary...</div> : execData && (<>
+        {/* Your Tasks */}
+        {execData.your_tasks && (
+          <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+            <div className="px-5 py-4 border-b bg-gray-50/50">
+              <h3 className="text-sm font-semibold text-gray-900">Your Tasks</h3>
+              <p className="text-[10px] text-gray-400 mt-0.5">{execData.user?.name} ({execData.user?.title})</p>
+            </div>
+            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Assigned to you */}
+              <div>
+                <div className="text-xs font-medium text-gray-500 mb-2">Assigned to you ({execData.your_tasks.assigned_to_you?.length ?? 0})</div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {(execData.your_tasks.assigned_to_you ?? []).map(t => (
+                    <MiniTaskCard key={t.id} task={t} showCreator />
+                  ))}
+                  {(execData.your_tasks.assigned_to_you?.length ?? 0) === 0 && <div className="text-xs text-gray-400 py-2">None</div>}
+                </div>
+              </div>
+              {/* Created by you (delegated) */}
+              <div>
+                <div className="text-xs font-medium text-gray-500 mb-2">You assigned to others ({execData.your_tasks.created_by_you?.length ?? 0})</div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {(execData.your_tasks.created_by_you ?? []).map(t => (
+                    <MiniTaskCard key={t.id} task={t} showAssignee />
+                  ))}
+                  {(execData.your_tasks.created_by_you?.length ?? 0) === 0 && <div className="text-xs text-gray-400 py-2">None</div>}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Direct Reports */}
+        {(execData.direct_reports ?? []).length > 0 && (
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold text-gray-900">Team Overview</h3>
+            {execData.direct_reports.map(dr => {
+              const p = dr.person;
+              const st = dr.stats ?? {};
+              const isExpanded = expandedPerson === p.rep_id;
+              return (
+                <div key={p.rep_id} className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+                  {/* Person Header — always visible */}
+                  <button className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                    onClick={() => setExpandedPerson(isExpanded ? null : p.rep_id)}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-sm font-semibold text-gray-600">
+                        {(p.name ?? '?')[0]}
+                      </div>
+                      <div className="text-left">
+                        <div className="text-sm font-semibold text-gray-900">{p.name}</div>
+                        <div className="text-[10px] text-gray-400">{p.title}
+                          {dr.subordinates?.length > 0 && ` + ${dr.subordinates.length} report${dr.subordinates.length > 1 ? 's' : ''}`}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      {/* Mini stat badges */}
+                      <div className="flex items-center gap-2 text-[10px]">
+                        <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{st.total ?? 0} total</span>
+                        {(st.in_progress ?? 0) > 0 && <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">{st.in_progress} active</span>}
+                        {(st.overdue ?? 0) > 0 && <span className="bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-medium">{st.overdue} overdue</span>}
+                        {(st.completed ?? 0) > 0 && <span className="bg-green-50 text-green-600 px-2 py-0.5 rounded-full">{st.completed} done</span>}
+                      </div>
+                      <svg className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    </div>
+                  </button>
+                  {/* Expanded Detail */}
+                  {isExpanded && (
+                    <div className="border-t">
+                      <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        {/* Tasks assigned TO this person */}
+                        <div>
+                          <div className="text-xs font-medium text-gray-500 mb-2">
+                            Assigned to {p.name.split(' ')[0]} ({dr.assigned_to_them?.length ?? 0})
+                          </div>
+                          <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                            {(dr.assigned_to_them ?? []).map(t => <MiniTaskCard key={t.id} task={t} showCreator />)}
+                            {(dr.assigned_to_them?.length ?? 0) === 0 && <div className="text-xs text-gray-400 py-2">No tasks assigned</div>}
+                          </div>
+                        </div>
+                        {/* Tasks assigned BY this person */}
+                        <div>
+                          <div className="text-xs font-medium text-gray-500 mb-2">
+                            {p.name.split(' ')[0]} assigned to others ({dr.assigned_by_them?.length ?? 0})
+                          </div>
+                          <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                            {(dr.assigned_by_them ?? []).map(t => <MiniTaskCard key={t.id} task={t} showAssignee />)}
+                            {(dr.assigned_by_them?.length ?? 0) === 0 && <div className="text-xs text-gray-400 py-2">No delegated tasks</div>}
+                          </div>
+                        </div>
+                      </div>
+                      {/* Recent Updates */}
+                      {(dr.recent_updates ?? []).length > 0 && (
+                        <div className="px-5 pb-5">
+                          <div className="text-xs font-medium text-gray-500 mb-2">Recent Updates (48h)</div>
+                          <div className="space-y-1 max-h-40 overflow-y-auto">
+                            {dr.recent_updates.map((u, i) => (
+                              <div key={i} className="flex items-start gap-2 text-[11px] py-1">
+                                <span className="text-gray-400 whitespace-nowrap flex-shrink-0">{fmtDateTime(u.created_at)}</span>
+                                <span className="text-gray-600">
+                                  <span className="font-medium text-gray-700">{u.actor_name}</span>
+                                  {' '}{u.action?.replace(/_/g, ' ')}
+                                  {u.new_value && <> &rarr; <span className="font-medium">{u.new_value.replace(/_/g, ' ')}</span></>}
+                                  {' on '}<span className="text-gray-500">{u.task_title}</span>
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </>)}
+    </div>
+  );
+}
+
+// Mini task card for executive summary
+function MiniTaskCard({ task: t, showAssignee, showCreator }) {
+  return (
+    <div className="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-gray-50 transition-colors">
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+        t.status === 'completed' ? 'bg-green-500' : t.overdue ? 'bg-red-500' :
+        t.status === 'in_progress' ? 'bg-blue-500' : 'bg-yellow-400'}`} />
+      <span className="text-xs text-gray-800 truncate flex-1">{t.title}</span>
+      <span className={`px-1 py-0 rounded text-[9px] font-medium border ${PRIORITY_STYLES[t.priority] ?? PRIORITY_STYLES.medium}`}>
+        {(t.priority ?? 'M')[0].toUpperCase()}</span>
+      {showAssignee && <span className="text-[10px] text-gray-400 truncate max-w-[80px]">{t.assignee_name}</span>}
+      {showCreator && <span className="text-[10px] text-gray-400 truncate max-w-[80px]">by {t.creator_name}</span>}
+      {t.due_date && <span className={`text-[10px] flex-shrink-0 ${t.overdue ? 'text-red-600 font-medium' : 'text-gray-400'}`}>{fmtDate(t.due_date)}</span>}
     </div>
   );
 }
@@ -447,45 +788,54 @@ function CreateTaskModal({ api, reps, addToast, onClose, onCreated }) {
 }
 
 // ============================================
-// TASK DETAIL MODAL
+// TASK DETAIL MODAL — Asana-style inline editing
 // ============================================
-function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onClose, onUpdated }) {
+function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onClose, onUpdated, onDeleted }) {
   const [commentText, setCommentText] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [showDelegate, setShowDelegate] = useState(false);
-  const [delegateTo, setDelegateTo] = useState('');
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [descDraft, setDescDraft] = useState('');
+  const [newSubtask, setNewSubtask] = useState('');
+  const [activeTab, setActiveTab] = useState('comments');
+  const titleRef = useRef(null);
 
-  // F12: Escape key closes modal
   useEffect(() => {
-    const handleEsc = (e) => { if (e.key === 'Escape') onClose(); };
+    const handleEsc = (e) => { if (e.key === 'Escape') { setEditingTitle(false); setEditingDesc(false); onClose(); } };
     document.addEventListener('keydown', handleEsc);
     return () => document.removeEventListener('keydown', handleEsc);
   }, [onClose]);
+
+  useEffect(() => { if (editingTitle && titleRef.current) titleRef.current.focus(); }, [editingTitle]);
 
   const task = data?.task ?? data ?? {};
   const comments = data?.comments ?? [];
   const activities = data?.activities ?? [];
   const subtasks = data?.subtasks ?? [];
 
-  const updateStatus = async (newStatus) => {
+  // Generic field update via PUT
+  const updateField = async (field, value) => {
     setSubmitting(true);
     try {
-      const fd = new FormData(); fd.append('status', newStatus);
+      const fd = new FormData();
+      fd.append(field, value);
       await api.put(`/tasks/${taskId}`, fd);
-      if (addToast) addToast('Success', `Status updated to ${newStatus.replace(/_/g, ' ')}`, 'success');
       onUpdated();
-    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Update failed', 'error'); }
+    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || `Failed to update ${field}`, 'error'); }
     finally { setSubmitting(false); }
   };
-  const completeTask = async () => {
-    setSubmitting(true);
-    try {
-      const fd = new FormData(); fd.append('notes', 'Completed from detail view');
-      await api.post(`/tasks/${taskId}/complete`, fd);
-      if (addToast) addToast('Success', 'Task completed', 'success'); onUpdated();
-    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Failed to complete', 'error'); }
-    finally { setSubmitting(false); }
+
+  const saveTitle = async () => {
+    const v = titleDraft.trim();
+    if (v && v !== task.title) await updateField('title', v);
+    setEditingTitle(false);
   };
+  const saveDescription = async () => {
+    if (descDraft !== (task.description ?? '')) await updateField('description', descDraft);
+    setEditingDesc(false);
+  };
+
   const addComment = async () => {
     if (!commentText.trim()) return; setSubmitting(true);
     try {
@@ -495,118 +845,258 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
     } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Failed to add comment', 'error'); }
     finally { setSubmitting(false); }
   };
-  const handleDelegate = async () => {
-    if (!delegateTo) return; setSubmitting(true);
+
+  const addSubtask = async () => {
+    if (!newSubtask.trim()) return; setSubmitting(true);
     try {
-      const fd = new FormData(); fd.append('new_assignee_id', delegateTo);
-      await api.post(`/tasks/${taskId}/delegate`, fd);
-      if (addToast) addToast('Success', 'Task delegated', 'success');
-      setShowDelegate(false); setDelegateTo(''); onUpdated();
-    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Delegation failed', 'error'); }
+      const fd = new FormData(); fd.append('title', newSubtask.trim());
+      await api.post(`/tasks/${taskId}/subtasks`, fd);
+      setNewSubtask(''); onUpdated();
+    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Failed to create subtask', 'error'); }
     finally { setSubmitting(false); }
   };
 
-  const isActive = task.status !== 'completed' && task.status !== 'cancelled';
+  const toggleSubtask = async (st) => {
+    const newStatus = st.status === 'completed' ? 'pending' : 'completed';
+    setSubmitting(true);
+    try {
+      const fd = new FormData(); fd.append('status', newStatus);
+      await api.put(`/tasks/${st.id}`, fd);
+      onUpdated();
+    } catch (e) { if (addToast) addToast('Error', 'Failed to update subtask', 'error'); }
+    finally { setSubmitting(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm('Delete this task permanently?')) return;
+    setSubmitting(true);
+    try {
+      await api.delete(`/tasks/${taskId}`);
+      if (addToast) addToast('Success', 'Task deleted', 'success');
+      onClose(); if (onDeleted) onDeleted();
+    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Failed to delete', 'error'); }
+    finally { setSubmitting(false); }
+  };
+
+  const canDelete = user?.role === 'admin' || user?.role === 'cco' || task.created_by === user?.id;
+  const completedSubtasks = subtasks.filter(s => s.status === 'completed').length;
+
+  // Dropdown styles
+  const propSelect = "w-full px-2 py-1.5 text-sm border-0 bg-transparent rounded-md hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-gray-900/10 cursor-pointer appearance-none";
 
   return (
     <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl mx-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="p-5 border-b flex justify-between items-center sticky top-0 bg-white rounded-t-2xl z-10">
-          <div>
-            <h3 className="text-lg font-semibold">{loading ? 'Loading...' : (task.title ?? 'Task Detail')}</h3>
-            {!loading && <span className="text-xs text-gray-400">{task.task_id ?? ''}</span>}
+      <div className="bg-white rounded-2xl shadow-xl mx-4 w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-4 border-b flex items-start justify-between flex-shrink-0">
+          <div className="flex-1 min-w-0 mr-4">
+            {!loading && !editingTitle ? (
+              <h3 className="text-lg font-semibold text-gray-900 cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 py-0.5"
+                onClick={() => { setTitleDraft(task.title ?? ''); setEditingTitle(true); }}>
+                {task.title ?? 'Untitled Task'}
+              </h3>
+            ) : editingTitle ? (
+              <input ref={titleRef} value={titleDraft} onChange={e => setTitleDraft(e.target.value)}
+                onBlur={saveTitle} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveTitle(); } }}
+                className="text-lg font-semibold text-gray-900 w-full border-b-2 border-gray-900 outline-none bg-transparent px-1 -mx-1 py-0.5" />
+            ) : <h3 className="text-lg font-semibold text-gray-400">Loading...</h3>}
+            {!loading && <span className="text-xs text-gray-400 ml-1">{task.task_id ?? ''}</span>}
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {canDelete && !loading && (
+              <button onClick={handleDelete} disabled={submitting} title="Delete task"
+                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+              </button>
+            )}
+            <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
         </div>
+
         {loading ? <div className="p-12 text-center text-gray-400">Loading task details...</div> : (
-          <div className="p-5 space-y-5">
-            {/* Info Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <InfoCell label="Status"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLES[task.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                {(task.status ?? 'pending').replace(/_/g, ' ')}</span></InfoCell>
-              <InfoCell label="Priority"><span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${PRIORITY_STYLES[task.priority] ?? PRIORITY_STYLES.medium}`}>
-                {(task.priority ?? 'medium').toUpperCase()}</span></InfoCell>
-              <InfoCell label="Department" value={task.department ?? 'N/A'} />
-              <InfoCell label="Type" value={(task.type ?? task.task_type ?? 'general').replace(/_/g, ' ')} />
-              <InfoCell label="Assignee" value={task.assignee_name ?? task.assigned_to_name ?? 'Unassigned'} />
-              <InfoCell label="Created By" value={task.creator_name ?? task.created_by_name ?? 'N/A'} />
-              <InfoCell label="Due Date" value={fmtDate(task.due_date)} highlight={isOverdue(task)} />
-              <InfoCell label="Created" value={fmtDate(task.created_at)} />
-            </div>
-            {/* Description */}
-            {task.description && (<div>
-              <div className="text-xs font-medium text-gray-500 mb-1">Description</div>
-              <div className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap">{task.description}</div>
-            </div>)}
-            {/* CRM Link */}
-            {task.crm_entity_type && task.crm_entity_id && (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-gray-500">Linked to:</span>
-                <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-medium">{task.crm_entity_type} {task.crm_entity_id}</span>
-              </div>)}
-            {/* Action Buttons */}
-            {isActive && (
-              <div className="flex flex-wrap gap-2 pt-2 border-t">
-                {task.status === 'pending' && <button onClick={() => updateStatus('in_progress')} disabled={submitting}
-                  className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">Start Task</button>}
-                {task.status === 'in_progress' && <button onClick={() => updateStatus('on_hold')} disabled={submitting}
-                  className="px-3 py-1.5 text-xs font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50">Put on Hold</button>}
-                {task.status === 'on_hold' && <button onClick={() => updateStatus('in_progress')} disabled={submitting}
-                  className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">Resume</button>}
-                <button onClick={completeTask} disabled={submitting}
-                  className="px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50">Mark Complete</button>
-                <button onClick={() => setShowDelegate(!showDelegate)} disabled={submitting}
-                  className="px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50">Delegate</button>
-                <button onClick={() => updateStatus('cancelled')} disabled={submitting}
-                  className="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg">Cancel</button>
-              </div>)}
-            {/* Delegate Panel */}
-            {showDelegate && (
-              <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-3">
-                <select value={delegateTo} onChange={e => setDelegateTo(e.target.value)}
-                  className="flex-1 px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10">
-                  <option value="">Select assignee...</option>
-                  {(reps ?? []).map(r => <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>)}
-                </select>
-                <button onClick={handleDelegate} disabled={!delegateTo || submitting}
-                  className="px-3 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">Assign</button>
-              </div>)}
-            {/* Subtasks */}
-            {subtasks.length > 0 && (<div>
-              <div className="text-xs font-medium text-gray-500 mb-2">Subtasks ({subtasks.length})</div>
-              <div className="space-y-1">{subtasks.map((st, i) => (
-                <div key={st.id ?? i} className="flex items-center gap-2 text-sm py-1.5 px-2 rounded hover:bg-gray-50">
-                  <span className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center text-[10px] ${st.status === 'completed' ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>
-                    {st.status === 'completed' ? '\u2713' : ''}</span>
-                  <span className={st.status === 'completed' ? 'line-through text-gray-400' : 'text-gray-700'}>{st.title ?? 'Subtask'}</span>
-                </div>))}</div>
-            </div>)}
-            {/* Activity Timeline */}
-            {activities.length > 0 && (<div>
-              <div className="text-xs font-medium text-gray-500 mb-2">Activity</div>
-              <div className="space-y-2 max-h-40 overflow-y-auto">{activities.map((a, i) => (
-                <div key={a.id ?? i} className="flex gap-2 text-xs">
-                  <span className="text-gray-400 whitespace-nowrap">{fmtDateTime(a.created_at ?? a.timestamp)}</span>
-                  <span className="text-gray-600">{a.description ?? a.action ?? 'Activity'}</span>
-                </div>))}</div>
-            </div>)}
-            {/* Comments */}
-            <div>
-              <div className="text-xs font-medium text-gray-500 mb-2">Comments ({comments.length})</div>
-              {comments.length > 0 && (
-                <div className="space-y-2 max-h-48 overflow-y-auto mb-3">{comments.map((c, i) => (
-                  <div key={c.id ?? i} className="bg-gray-50 rounded-lg p-3">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-xs font-medium text-gray-700">{c.author_name ?? c.rep_name ?? 'User'}</span>
-                      <span className="text-[10px] text-gray-400">{fmtDateTime(c.created_at)}</span></div>
-                    <div className="text-sm text-gray-600">{c.content ?? c.text ?? ''}</div>
-                  </div>))}</div>)}
-              <div className="flex gap-2">
-                <input type="text" placeholder="Add a comment..." value={commentText} onChange={e => setCommentText(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addComment(); } }}
-                  className="flex-1 px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10" />
-                <button onClick={addComment} disabled={!commentText.trim() || submitting}
-                  className="px-3 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">Post</button>
+          <div className="flex-1 overflow-y-auto">
+            <div className="flex flex-col md:flex-row">
+              {/* LEFT — Main Content */}
+              <div className="flex-1 p-6 space-y-5 md:border-r border-gray-100 min-w-0">
+                {/* Description */}
+                <div>
+                  <div className="text-xs font-medium text-gray-400 uppercase mb-1.5">Description</div>
+                  {!editingDesc ? (
+                    <div className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap cursor-pointer hover:bg-gray-100 min-h-[60px] transition-colors"
+                      onClick={() => { setDescDraft(task.description ?? ''); setEditingDesc(true); }}>
+                      {task.description || <span className="text-gray-400 italic">Click to add a description...</span>}
+                    </div>
+                  ) : (
+                    <div>
+                      <textarea value={descDraft} onChange={e => setDescDraft(e.target.value)} rows={4} autoFocus
+                        className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10 resize-none" />
+                      <div className="flex gap-2 mt-1.5">
+                        <button onClick={saveDescription} className="px-3 py-1 text-xs bg-gray-900 text-white rounded-md hover:bg-gray-800">Save</button>
+                        <button onClick={() => setEditingDesc(false)} className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* CRM Link */}
+                {task.crm_entity_type && task.crm_entity_id && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-gray-400 text-xs">Linked:</span>
+                    <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-medium">{task.crm_entity_type} {task.crm_entity_id}</span>
+                  </div>
+                )}
+
+                {/* Subtasks */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs font-medium text-gray-400 uppercase">
+                      Subtasks {subtasks.length > 0 && <span className="text-gray-300 ml-1">{completedSubtasks}/{subtasks.length}</span>}
+                    </div>
+                  </div>
+                  {subtasks.length > 0 && (
+                    <div className="mb-2">
+                      <div className="w-full h-1 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${subtasks.length > 0 ? (completedSubtasks / subtasks.length * 100) : 0}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  <div className="space-y-0.5 mb-2">
+                    {subtasks.map((st, i) => (
+                      <div key={st.id ?? i} className="flex items-center gap-2.5 py-1.5 px-2 rounded-md hover:bg-gray-50 group transition-colors">
+                        <button onClick={() => toggleSubtask(st)} disabled={submitting}
+                          className={`w-[18px] h-[18px] rounded border-2 flex-shrink-0 flex items-center justify-center transition-all ${st.status === 'completed' ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 hover:border-gray-400'}`}>
+                          {st.status === 'completed' && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                        </button>
+                        <span className={`text-sm flex-1 ${st.status === 'completed' ? 'line-through text-gray-400' : 'text-gray-700'}`}>{st.title ?? 'Subtask'}</span>
+                        {st.assignee_name && <span className="text-[10px] text-gray-400 hidden group-hover:inline">{st.assignee_name}</span>}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input type="text" placeholder="Add a subtask..." value={newSubtask} onChange={e => setNewSubtask(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSubtask(); } }}
+                      className="flex-1 px-3 py-1.5 text-sm border border-dashed border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-solid" />
+                    {newSubtask.trim() && (
+                      <button onClick={addSubtask} disabled={submitting}
+                        className="px-3 py-1.5 text-xs bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">Add</button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Tabbed: Comments / Activity */}
+                <div>
+                  <div className="flex gap-1 border-b mb-3">
+                    {[{ id: 'comments', label: `Comments (${comments.length})` }, { id: 'activity', label: 'Activity' }].map(tab => (
+                      <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                        className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${activeTab === tab.id ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                  {activeTab === 'comments' && (
+                    <div>
+                      <div className="flex gap-2 mb-3">
+                        <input type="text" placeholder="Write a comment..." value={commentText} onChange={e => setCommentText(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addComment(); } }}
+                          className="flex-1 px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10" />
+                        <button onClick={addComment} disabled={!commentText.trim() || submitting}
+                          className="px-3 py-2 text-xs font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">Post</button>
+                      </div>
+                      {comments.length > 0 ? (
+                        <div className="space-y-2 max-h-56 overflow-y-auto">
+                          {comments.map((c, i) => (
+                            <div key={c.id ?? i} className="bg-gray-50 rounded-lg p-3">
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="text-xs font-medium text-gray-700">{c.author_name ?? c.rep_name ?? 'User'}</span>
+                                <span className="text-[10px] text-gray-400">{fmtDateTime(c.created_at)}</span>
+                              </div>
+                              <div className="text-sm text-gray-600">{c.content ?? c.text ?? ''}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="text-xs text-gray-400 text-center py-4">No comments yet</div>}
+                    </div>
+                  )}
+                  {activeTab === 'activity' && (
+                    <div className="max-h-56 overflow-y-auto">
+                      {activities.length > 0 ? activities.map((a, i) => (
+                        <div key={a.id ?? i} className="flex gap-3 py-2 text-xs border-b border-gray-50 last:border-0">
+                          <span className="text-gray-400 whitespace-nowrap flex-shrink-0">{fmtDateTime(a.created_at ?? a.timestamp)}</span>
+                          <span className="text-gray-600">{a.description ?? a.action ?? 'Activity'}</span>
+                        </div>
+                      )) : <div className="text-xs text-gray-400 text-center py-4">No activity yet</div>}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* RIGHT — Properties Sidebar */}
+              <div className="md:w-64 flex-shrink-0 p-5 space-y-4 bg-gray-50/50">
+                {/* Status */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Status</div>
+                  <select value={task.status ?? 'pending'} onChange={e => updateField('status', e.target.value)} disabled={submitting}
+                    className={`${propSelect} font-medium ${STATUS_STYLES[task.status] ?? ''}`}>
+                    <option value="pending">Pending</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="on_hold">On Hold</option>
+                    <option value="completed">Completed</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </div>
+                {/* Assignee */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Assignee</div>
+                  <select value={task.assignee_id ?? ''} onChange={e => updateField('assignee_id', e.target.value)} disabled={submitting}
+                    className={propSelect}>
+                    <option value="">Unassigned</option>
+                    {(reps ?? []).map(r => <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>)}
+                  </select>
+                </div>
+                {/* Due Date */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Due Date</div>
+                  <input type="date" value={task.due_date ? task.due_date.substring(0, 10) : ''}
+                    onChange={e => updateField('due_date', e.target.value)} disabled={submitting}
+                    className={`${propSelect} ${isOverdue(task) ? 'text-red-600 font-medium' : ''}`} />
+                </div>
+                {/* Priority */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Priority</div>
+                  <select value={task.priority ?? 'medium'} onChange={e => updateField('priority', e.target.value)} disabled={submitting}
+                    className={propSelect}>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </div>
+                {/* Department */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Department</div>
+                  <select value={task.department ?? ''} onChange={e => updateField('department', e.target.value)} disabled={submitting}
+                    className={propSelect}>
+                    <option value="">None</option>
+                    {DEPARTMENTS.map(d => <option key={d} value={d.toLowerCase()}>{d}</option>)}
+                  </select>
+                </div>
+                {/* Type (read-only) */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Type</div>
+                  <div className="px-2 py-1.5 text-sm text-gray-600 capitalize">{(task.type ?? task.task_type ?? 'general').replace(/_/g, ' ')}</div>
+                </div>
+                {/* Created By (read-only) */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Created By</div>
+                  <div className="px-2 py-1.5 text-sm text-gray-600">{task.creator_name ?? task.created_by_name ?? 'N/A'}</div>
+                </div>
+                {/* Created (read-only) */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Created</div>
+                  <div className="px-2 py-1.5 text-sm text-gray-500">{fmtDate(task.created_at)}</div>
+                </div>
               </div>
             </div>
           </div>

@@ -255,8 +255,11 @@ export default function App() {
     return roleAccess[role]?.includes(tabId) || false;
   };
   
+  // CFO gets a focused header: Tasks, Reports, Analytics only
+  const isCFO = user?.rep_id === 'REP-0010';
+
   // Primary tabs - always visible in header
-  const primaryTabs = [
+  const allPrimaryTabs = [
     { id: 'customers', label: 'Customers & Leads' },
     { id: 'campaigns', label: 'Campaigns' },
     { id: 'tasks', label: 'Tasks' },
@@ -264,17 +267,27 @@ export default function App() {
     { id: 'reports', label: 'Reports' },
     { id: 'vector', label: 'Vector' },
     { id: 'dashboard', label: 'Analytics' }
-  ].filter(tab => canAccess(tab.id));
+  ];
+  const cfoPrimaryIds = ['tasks', 'reports', 'dashboard'];
+  const primaryTabs = (isCFO
+    ? allPrimaryTabs.filter(tab => cfoPrimaryIds.includes(tab.id))
+    : allPrimaryTabs
+  ).filter(tab => canAccess(tab.id));
 
   // More menu items - icon grid
-  const moreTabs = [
+  const defaultMoreTabs = [
     { id: 'projects', label: 'Projects', icon: '\u{1F3D7}' },
     { id: 'inventory', label: 'Inventory', icon: '\u{1F4E6}' },
     { id: 'transactions', label: 'Transactions', icon: '\u{1F4B1}' },
     { id: 'receipts', label: 'Receipts', icon: '\u{1F4C4}' },
     { id: 'payments', label: 'Payments', icon: '\u{1F4B8}' },
     { id: 'media', label: 'Media Library', icon: '\u{1F4F7}' }
-  ].filter(tab => canAccess(tab.id));
+  ];
+  // CFO: demoted tabs go to More menu
+  const cfoExtraTabs = isCFO
+    ? allPrimaryTabs.filter(tab => !cfoPrimaryIds.includes(tab.id)).map(tab => ({ ...tab, icon: { customers: '\u{1F465}', campaigns: '\u{1F4E3}', interactions: '\u{1F4DE}', vector: '\u{1F5FA}' }[tab.id] || '\u{1F4CB}' }))
+    : [];
+  const moreTabs = [...cfoExtraTabs, ...defaultMoreTabs].filter(tab => canAccess(tab.id));
 
   // All tabs for reference
   const allTabs = [...primaryTabs, ...moreTabs];

@@ -8589,6 +8589,14 @@ async def task_summary(
 ):
     return _task_service.get_task_summary(db, current_user.id, current_user.role, current_rep_id=current_user.rep_id)
 
+@app.get("/api/tasks/executive-summary")
+async def executive_summary(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """C-suite executive summary — tasks grouped by direct reports with stats and recent updates."""
+    return _task_service.get_executive_summary(db, current_rep_id=current_user.rep_id)
+
 @app.get("/api/tasks/departments/config")
 async def departments_config(
     current_user = Depends(get_current_user)
@@ -8672,25 +8680,58 @@ async def update_task(
         raise HTTPException(status_code=400, detail="Description too long (max 5000 chars)")
     if priority and priority.lower() not in VALID_PRIORITIES:
         raise HTTPException(status_code=400, detail=f"Invalid priority. Valid: {', '.join(sorted(VALID_PRIORITIES))}")
+    changes = []
     if title:
         task.title = title
+        changes.append(f"title updated")
     if description is not None:
         task.description = description
+        changes.append("description updated")
     if priority:
+        old_pri = task.priority
         task.priority = priority
+        changes.append(f"priority: {old_pri} -> {priority}")
     if department:
         task.department = department
+        changes.append(f"department: {department}")
     if assignee_id:
         task.assignee_id = uuid.UUID(assignee_id)
+        rep = db.query(CompanyRep).filter(CompanyRep.id == uuid.UUID(assignee_id)).first()
+        changes.append(f"assigned to {rep.name if rep else assignee_id}")
     if due_date:
         task.due_date = date.fromisoformat(due_date)
+        changes.append(f"due date: {due_date}")
     if status_val:
         updated = _task_service.update_task_status(db, task_id, status_val, current_user.id)
         return _task_to_dict(updated, db)
 
     task.updated_at = datetime.utcnow()
+    # Log activity and notify stakeholders for field updates
+    if changes:
+        _task_service._log_activity(db, task.id, current_user.id, "updated", "", "; ".join(changes))
+        _task_service._notify_task_stakeholders(
+            db, task, current_user.id,
+            f"Task updated: {task.title}",
+            "; ".join(changes)
+        )
     db.commit()
     return _task_to_dict(task, db)
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Delete a task. Admin/CCO can delete any, others can delete tasks they created."""
+    task = _task_service._find_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if current_user.role not in ("admin", "cco") and task.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the creator or admin can delete tasks")
+    db.delete(task)
+    db.commit()
+    return {"detail": "Task deleted", "task_id": task_id}
 
 @app.post("/api/tasks/{task_id}/complete")
 async def complete_task(
