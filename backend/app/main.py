@@ -20,6 +20,11 @@ import os
 import uuid
 import csv
 import io
+import time
+import logging
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 # ============================================
 # DATABASE SETUP
@@ -494,6 +499,89 @@ class VectorReconciliation(Base):
     updated_at = Column(DateTime, server_default=func.now())
 
 # ============================================
+# TASK & VOICE MODELS
+# ============================================
+class Task(Base):
+    __tablename__ = "tasks"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(String(20), unique=True)
+    title = Column(String(300), nullable=False)
+    description = Column(Text)
+    task_type = Column(String(30), default="GENERAL")
+    department = Column(String(30))
+    priority = Column(String(10), default="MEDIUM")
+    status = Column(String(30), default="TODO")
+    assignee_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"), nullable=False)
+    delegated_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    parent_task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id"))
+    due_date = Column(Date)
+    completed_at = Column(DateTime)
+    completion_notes = Column(Text)
+    pending_assignment = Column(Boolean, default=False)
+    original_assignee_text = Column(String(200))
+    linked_inventory_id = Column(UUID(as_uuid=True), ForeignKey("inventory.id"))
+    linked_transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id"))
+    linked_customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"))
+    linked_project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class TaskComment(Base):
+    __tablename__ = "task_comments"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    author_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+class TaskActivity(Base):
+    __tablename__ = "task_activities"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    actor_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"), nullable=False)
+    action = Column(String(50), nullable=False)
+    old_value = Column(String(200))
+    new_value = Column(String(200))
+    details = Column(JSONB, default=dict)
+    created_at = Column(DateTime, server_default=func.now())
+
+class QueryHistory(Base):
+    __tablename__ = "query_history"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    query_text = Column(Text, nullable=False)
+    intent = Column(String(30))
+    domain = Column(String(30))
+    confidence = Column(Numeric(3, 2), default=0.0)
+    sql_query = Column(Text)
+    response_text = Column(Text)
+    success = Column(Boolean, default=False)
+    usage_count = Column(Integer, default=1)
+    is_learned = Column(Boolean, default=False)
+    feedback_score = Column(Numeric(3, 2), default=0.0)
+    error_message = Column(Text)
+    processing_time_ms = Column(Numeric(10, 2))
+    corrected_intent = Column(String(30))
+    corrected_domain = Column(String(30))
+    corrected_response = Column(Text)
+    is_approved = Column(Boolean, default=False)
+    user_rep_id = Column(String(20))
+    created_at = Column(DateTime, server_default=func.now())
+    last_used_at = Column(DateTime, server_default=func.now())
+
+class QueryFeedback(Base):
+    __tablename__ = "query_feedback"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    query_history_id = Column(UUID(as_uuid=True), ForeignKey("query_history.id"), nullable=False)
+    feedback_type = Column(String(20), nullable=False)
+    rating = Column(Integer)
+    correct_intent = Column(String(30))
+    correct_domain = Column(String(30))
+    correct_response = Column(Text)
+    user_comment = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+
+# ============================================
 # HELPER FUNCTIONS
 # ============================================
 def normalize_mobile(mobile):
@@ -951,6 +1039,86 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================
+# RATE LIMITER & API USAGE TRACKING
+# ============================================
+class RateLimiter:
+    """In-memory sliding window rate limiter per user."""
+    def __init__(self):
+        self._requests = defaultdict(list)  # user_key -> [timestamps]
+
+    def check(self, user_key: str, max_requests: int, window_seconds: int) -> bool:
+        """Returns True if request is allowed, False if rate-limited."""
+        now = time.time()
+        cutoff = now - window_seconds
+        # Prune old entries
+        self._requests[user_key] = [t for t in self._requests[user_key] if t > cutoff]
+        if len(self._requests[user_key]) >= max_requests:
+            return False
+        self._requests[user_key].append(now)
+        return True
+
+    def get_usage(self, user_key: str, window_seconds: int) -> int:
+        """Get number of requests in current window."""
+        now = time.time()
+        cutoff = now - window_seconds
+        self._requests[user_key] = [t for t in self._requests[user_key] if t > cutoff]
+        return len(self._requests[user_key])
+
+    def cleanup(self, max_age_seconds: int = 86400):
+        """Remove entries older than max_age_seconds to prevent memory leak."""
+        now = time.time()
+        cutoff = now - max_age_seconds
+        empty_keys = []
+        for key in self._requests:
+            self._requests[key] = [t for t in self._requests[key] if t > cutoff]
+            if not self._requests[key]:
+                empty_keys.append(key)
+        for key in empty_keys:
+            del self._requests[key]
+
+# Rate limiters for different endpoint categories
+voice_limiter = RateLimiter()   # Voice/AI queries
+task_limiter = RateLimiter()    # Task CRUD operations
+api_limiter = RateLimiter()     # General API catch-all
+
+# Usage limits (configurable via env vars)
+VOICE_RATE_LIMIT = int(os.getenv("VOICE_RATE_LIMIT", "30"))         # queries per window
+VOICE_RATE_WINDOW = int(os.getenv("VOICE_RATE_WINDOW", "60"))       # window in seconds
+VOICE_DAILY_LIMIT = int(os.getenv("VOICE_DAILY_LIMIT", "500"))      # per user per day
+TASK_RATE_LIMIT = int(os.getenv("TASK_RATE_LIMIT", "60"))           # task ops per window
+TASK_RATE_WINDOW = int(os.getenv("TASK_RATE_WINDOW", "60"))         # window in seconds
+
+# API usage counters (daily, in-memory — resets on restart, persisted via query_history)
+_daily_usage = defaultdict(lambda: {"voice_queries": 0, "task_ops": 0, "date": None})
+
+def _track_daily_usage(user_key: str, category: str):
+    """Track daily API usage per user."""
+    today = date.today().isoformat()
+    if _daily_usage[user_key]["date"] != today:
+        _daily_usage[user_key] = {"voice_queries": 0, "task_ops": 0, "date": today}
+    _daily_usage[user_key][category] = _daily_usage[user_key].get(category, 0) + 1
+
+def _check_daily_limit(user_key: str, category: str, limit: int) -> bool:
+    """Returns True if within daily limit."""
+    today = date.today().isoformat()
+    if _daily_usage[user_key]["date"] != today:
+        return True
+    return _daily_usage[user_key].get(category, 0) < limit
+
+def require_rate_limit(limiter: RateLimiter, max_req: int, window: int, category: str = "api"):
+    """Dependency that enforces rate limiting."""
+    def _check(current_user=Depends(get_current_user)):
+        user_key = current_user.rep_id or str(current_user.id)
+        if not limiter.check(user_key, max_req, window):
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Max {max_req} requests per {window}s. Please wait."
+            )
+        _track_daily_usage(user_key, category)
+        return current_user
+    return _check
 
 @app.get("/")
 def root():
@@ -8226,3 +8394,541 @@ def analytics_rep_performance(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Rep analytics error: {str(e)}")
+
+# ============================================
+# TASK MANAGEMENT ENDPOINTS
+# ============================================
+from app.services.task_service import task_service as _task_service
+from app.services.voice_query_service import voice_query_service as _voice_service
+
+def _task_to_dict(task, db):
+    """Convert Task model to dict with assignee/creator names."""
+    assignee_name = None
+    creator_name = None
+    if task.assignee_id:
+        assignee = db.query(CompanyRep).filter(CompanyRep.id == task.assignee_id).first()
+        assignee_name = assignee.name if assignee else None
+    if task.created_by:
+        creator = db.query(CompanyRep).filter(CompanyRep.id == task.created_by).first()
+        creator_name = creator.name if creator else None
+    return {
+        "id": str(task.id),
+        "task_id": task.task_id,
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "department": task.department,
+        "priority": task.priority,
+        "status": task.status,
+        "assignee_id": str(task.assignee_id) if task.assignee_id else None,
+        "assignee_name": assignee_name,
+        "created_by": str(task.created_by) if task.created_by else None,
+        "creator_name": creator_name,
+        "delegated_by": str(task.delegated_by) if task.delegated_by else None,
+        "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
+        "due_date": task.due_date.isoformat() if task.due_date else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "completion_notes": task.completion_notes,
+        "pending_assignment": task.pending_assignment,
+        "original_assignee_text": task.original_assignee_text,
+        "linked_inventory_id": str(task.linked_inventory_id) if task.linked_inventory_id else None,
+        "linked_transaction_id": str(task.linked_transaction_id) if task.linked_transaction_id else None,
+        "linked_customer_id": str(task.linked_customer_id) if task.linked_customer_id else None,
+        "linked_project_id": str(task.linked_project_id) if task.linked_project_id else None,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+
+@app.post("/api/tasks")
+async def create_task(
+    title: str = Form(...),
+    description: Optional[str] = Form(None),
+    task_type: str = Form("general", alias="type"),
+    priority: str = Form("medium"),
+    assignee_id: Optional[str] = Form(None, alias="assigned_to"),
+    due_date: Optional[str] = Form(None),
+    department: Optional[str] = Form(None),
+    crm_entity_type: Optional[str] = Form(None),
+    crm_entity_id: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    if current_user.role == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot create tasks")
+    try:
+        parsed_due = date.fromisoformat(due_date) if due_date else None
+        parsed_assignee = uuid.UUID(assignee_id) if assignee_id else None
+        # Map generic crm_entity_type/crm_entity_id to specific linked fields
+        linked_inventory_id = crm_entity_id if crm_entity_type == "inventory" else None
+        linked_transaction_id = crm_entity_id if crm_entity_type == "transaction" else None
+        linked_customer_id = crm_entity_id if crm_entity_type in ("customer", "lead") else None
+        linked_project_id = crm_entity_id if crm_entity_type == "project" else None
+        task = _task_service.create_task(
+            db, current_user.id, title, description, task_type, priority,
+            parsed_assignee, parsed_due, department,
+            linked_inventory_id, linked_transaction_id,
+            linked_customer_id, linked_project_id
+        )
+        return _task_to_dict(task, db)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/tasks/from-text")
+async def create_task_from_text(
+    text: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    if current_user.role == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot create tasks")
+    if len(text) > 2000:
+        raise HTTPException(status_code=400, detail="Text too long (max 2000 chars)")
+    # Rate limit voice-driven task creation same as voice queries
+    user_key = current_user.rep_id or str(current_user.id)
+    if not voice_limiter.check(user_key, VOICE_RATE_LIMIT, VOICE_RATE_WINDOW):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for voice task creation")
+    try:
+        task = _task_service.create_task_from_text(db, text, current_user.id)
+        return _task_to_dict(task, db)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/tasks")
+async def list_tasks(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    department: Optional[str] = None,
+    task_type: Optional[str] = None,
+    search: Optional[str] = None,
+    assignee_id: Optional[str] = None,
+    skip: int = 0, limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    role = current_user.role
+    user_id = current_user.id
+
+    if assignee_id:
+        tasks = _task_service.get_tasks(db, user_id=assignee_id, role=role,
+                                         status=status, priority=priority, department=department,
+                                         task_type=task_type, search=search, assignee_only=True,
+                                         limit=limit, offset=skip)
+    else:
+        tasks = _task_service.get_tasks(db, user_id=user_id, role=role,
+                                         status=status, priority=priority, department=department,
+                                         task_type=task_type, search=search, limit=limit, offset=skip)
+    return [_task_to_dict(t, db) for t in tasks]
+
+@app.get("/api/tasks/my")
+async def my_tasks(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    tasks = _task_service.get_my_tasks(db, current_user.id)
+    return [_task_to_dict(t, db) for t in tasks]
+
+@app.get("/api/tasks/reports/summary")
+async def task_summary(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    return _task_service.get_task_summary(db, current_user.id, current_user.role)
+
+@app.get("/api/tasks/departments/config")
+async def departments_config(
+    current_user = Depends(get_current_user)
+):
+    return _task_service.get_departments_config()
+
+@app.get("/api/tasks/status-options/{task_type_name}")
+async def status_options(
+    task_type_name: str,
+    current_user = Depends(get_current_user)
+):
+    return {"task_type": task_type_name, "statuses": _task_service.get_valid_statuses(task_type_name)}
+
+@app.get("/api/tasks/{task_id}")
+async def get_task(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    task = _task_service._find_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    result = _task_to_dict(task, db)
+    # Include comments and activities
+    comments = _task_service.get_comments(db, task_id)
+    activities = _task_service.get_activities(db, task_id)
+    result["comments"] = [{
+        "id": str(c.id), "content": c.content,
+        "author_id": str(c.author_id),
+        "author_name": (db.query(CompanyRep).filter(CompanyRep.id == c.author_id).first() or CompanyRep(name="Unknown")).name,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    } for c in comments]
+    result["activities"] = [{
+        "id": str(a.id), "action": a.action,
+        "old_value": a.old_value, "new_value": a.new_value,
+        "actor_id": str(a.actor_id),
+        "actor_name": (db.query(CompanyRep).filter(CompanyRep.id == a.actor_id).first() or CompanyRep(name="Unknown")).name,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+    } for a in activities]
+    # Include subtasks
+    subtasks = db.query(Task).filter(Task.parent_task_id == task.id).order_by(Task.created_at).all()
+    result["subtasks"] = [_task_to_dict(s, db) for s in subtasks]
+    return result
+
+@app.put("/api/tasks/{task_id}")
+async def update_task(
+    task_id: str,
+    title: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    priority: Optional[str] = Form(None),
+    status_val: Optional[str] = Form(None, alias="status"),
+    department: Optional[str] = Form(None),
+    assignee_id: Optional[str] = Form(None),
+    due_date: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    task = _task_service._find_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if title:
+        task.title = title
+    if description is not None:
+        task.description = description
+    if priority:
+        task.priority = priority
+    if department:
+        task.department = department
+    if assignee_id:
+        task.assignee_id = uuid.UUID(assignee_id)
+    if due_date:
+        task.due_date = date.fromisoformat(due_date)
+    if status_val:
+        updated = _task_service.update_task_status(db, task_id, status_val, current_user.id)
+        return _task_to_dict(updated, db)
+
+    task.updated_at = datetime.utcnow()
+    db.commit()
+    return _task_to_dict(task, db)
+
+@app.post("/api/tasks/{task_id}/complete")
+async def complete_task(
+    task_id: str,
+    notes: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    try:
+        task = _task_service.complete_task(db, task_id, current_user.id, notes)
+        return _task_to_dict(task, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/tasks/{task_id}/delegate")
+async def delegate_task(
+    task_id: str,
+    new_assignee_id: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    try:
+        task = _task_service.delegate_task(db, task_id, new_assignee_id, current_user.id)
+        return _task_to_dict(task, db)
+    except (ValueError, PermissionError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/tasks/{task_id}/comments")
+async def add_task_comment(
+    task_id: str,
+    content: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    try:
+        comment = _task_service.add_comment(db, task_id, current_user.id, content)
+        author = db.query(CompanyRep).filter(CompanyRep.id == comment.author_id).first()
+        return {
+            "id": str(comment.id), "content": comment.content,
+            "author_id": str(comment.author_id),
+            "author_name": author.name if author else "Unknown",
+            "created_at": comment.created_at.isoformat() if comment.created_at else None,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/api/tasks/{task_id}/comments")
+async def get_task_comments(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    try:
+        comments = _task_service.get_comments(db, task_id)
+        return [{
+            "id": str(c.id), "content": c.content,
+            "author_id": str(c.author_id),
+            "author_name": (db.query(CompanyRep).filter(CompanyRep.id == c.author_id).first() or CompanyRep(name="Unknown")).name,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        } for c in comments]
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/api/tasks/{task_id}/activities")
+async def get_task_activities(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    try:
+        activities = _task_service.get_activities(db, task_id)
+        return [{
+            "id": str(a.id), "action": a.action,
+            "old_value": a.old_value, "new_value": a.new_value,
+            "actor_id": str(a.actor_id),
+            "actor_name": (db.query(CompanyRep).filter(CompanyRep.id == a.actor_id).first() or CompanyRep(name="Unknown")).name,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        } for a in activities]
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/tasks/{task_id}/subtasks")
+async def create_subtask(
+    task_id: str,
+    title: str = Form(...),
+    description: Optional[str] = Form(None),
+    assignee_id: Optional[str] = Form(None),
+    priority: str = Form("MEDIUM"),
+    due_date: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    parent = _task_service._find_task(db, task_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent task not found")
+    try:
+        parsed_due = date.fromisoformat(due_date) if due_date else None
+        parsed_assignee = uuid.UUID(assignee_id) if assignee_id else None
+        subtask = _task_service.create_task(
+            db, current_user.id, title, description,
+            parent.task_type, priority, parsed_assignee, parsed_due,
+            parent.department, str(parent.linked_inventory_id) if parent.linked_inventory_id else None,
+            str(parent.linked_transaction_id) if parent.linked_transaction_id else None,
+            str(parent.linked_customer_id) if parent.linked_customer_id else None,
+            str(parent.linked_project_id) if parent.linked_project_id else None,
+        )
+        subtask.parent_task_id = parent.id
+        db.commit()
+        return _task_to_dict(subtask, db)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# ============================================
+# VOICE QUERY ENDPOINTS
+# ============================================
+
+@app.post("/api/voice/query")
+async def voice_query(
+    query: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    # Rate limit: voice queries
+    user_key = current_user.rep_id or str(current_user.id)
+    if not voice_limiter.check(user_key, VOICE_RATE_LIMIT, VOICE_RATE_WINDOW):
+        raise HTTPException(status_code=429, detail=f"Voice query rate limit exceeded ({VOICE_RATE_LIMIT}/{VOICE_RATE_WINDOW}s). Please wait.")
+    if not _check_daily_limit(user_key, "voice_queries", VOICE_DAILY_LIMIT):
+        raise HTTPException(status_code=429, detail=f"Daily voice query limit reached ({VOICE_DAILY_LIMIT}/day). Contact admin.")
+    _track_daily_usage(user_key, "voice_queries")
+    # Enforce max query length
+    if len(query) > 1000:
+        raise HTTPException(status_code=400, detail="Query too long (max 1000 chars)")
+    user_rep_id = current_user.rep_id
+    return _voice_service.process_query(db, query, user_rep_id)
+
+@app.get("/api/voice/history")
+async def voice_history(
+    skip: int = 0, limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    user_rep_id = current_user.rep_id
+    query = db.query(QueryHistory)
+    if user_rep_id:
+        query = query.filter(QueryHistory.user_rep_id == user_rep_id)
+    items = query.order_by(QueryHistory.created_at.desc()).offset(skip).limit(limit).all()
+    return [{
+        "id": str(h.id), "query_text": h.query_text,
+        "intent": h.intent, "domain": h.domain,
+        "confidence": float(h.confidence) if h.confidence else 0,
+        "response_text": h.response_text,
+        "success": h.success, "processing_time_ms": float(h.processing_time_ms) if h.processing_time_ms else 0,
+        "created_at": h.created_at.isoformat() if h.created_at else None,
+    } for h in items]
+
+@app.post("/api/voice/feedback")
+async def voice_feedback(
+    query_id: str = Form(...),
+    feedback_type: str = Form(...),
+    rating: Optional[int] = Form(None),
+    correct_intent: Optional[str] = Form(None),
+    correct_domain: Optional[str] = Form(None),
+    correct_response: Optional[str] = Form(None),
+    user_comment: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    feedback = QueryFeedback(
+        query_history_id=uuid.UUID(query_id),
+        feedback_type=feedback_type,
+        rating=rating,
+        correct_intent=correct_intent,
+        correct_domain=correct_domain,
+        correct_response=correct_response,
+        user_comment=user_comment,
+    )
+    db.add(feedback)
+    db.commit()
+    return {"status": "ok", "id": str(feedback.id)}
+
+@app.get("/api/voice/stats")
+async def voice_stats(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    total = db.query(QueryHistory).count()
+    successful = db.query(QueryHistory).filter(QueryHistory.success == True).count()
+    from sqlalchemy import func as sqlfunc
+    intent_dist = dict(db.query(QueryHistory.intent, sqlfunc.count()).group_by(QueryHistory.intent).all())
+    domain_dist = dict(db.query(QueryHistory.domain, sqlfunc.count()).group_by(QueryHistory.domain).all())
+    return {
+        "total_queries": total,
+        "successful_queries": successful,
+        "success_rate": round(successful / total * 100, 1) if total > 0 else 0,
+        "intent_distribution": intent_dist,
+        "domain_distribution": domain_dist,
+    }
+
+# ============================================
+# API USAGE MONITORING & SERVER HEALTH
+# ============================================
+
+@app.get("/api/admin/usage")
+async def get_api_usage(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get API usage stats for all users. Admin/CCO only."""
+    if current_user.role not in ("admin", "cco"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    today = date.today().isoformat()
+    usage_data = []
+    for user_key, data in _daily_usage.items():
+        if data.get("date") == today:
+            usage_data.append({
+                "user": user_key,
+                "voice_queries": data.get("voice_queries", 0),
+                "task_ops": data.get("task_ops", 0),
+                "date": data["date"],
+            })
+
+    # Voice usage from DB (last 24h)
+    from sqlalchemy import func as sqlfunc
+    yesterday = datetime.utcnow() - timedelta(hours=24)
+    db_voice_24h = db.query(QueryHistory).filter(QueryHistory.created_at >= yesterday).count()
+    db_voice_by_user = dict(
+        db.query(QueryHistory.user_rep_id, sqlfunc.count())
+        .filter(QueryHistory.created_at >= yesterday)
+        .group_by(QueryHistory.user_rep_id).all()
+    )
+
+    return {
+        "today": today,
+        "limits": {
+            "voice_per_minute": VOICE_RATE_LIMIT,
+            "voice_daily": VOICE_DAILY_LIMIT,
+            "task_per_minute": TASK_RATE_LIMIT,
+        },
+        "daily_usage": usage_data,
+        "voice_24h_total": db_voice_24h,
+        "voice_24h_by_user": db_voice_by_user,
+    }
+
+@app.get("/api/admin/health")
+async def server_health(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Server health check with resource usage. Admin/CCO only."""
+    if current_user.role not in ("admin", "cco"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    import platform
+    health = {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "platform": platform.system(),
+        "python_version": platform.python_version(),
+    }
+
+    # DB connection check
+    try:
+        db.execute(text("SELECT 1"))
+        health["database"] = "connected"
+    except Exception as e:
+        health["database"] = f"error: {str(e)}"
+        health["status"] = "degraded"
+
+    # DB size
+    try:
+        result = db.execute(text("SELECT pg_database_size(current_database())")).scalar()
+        health["db_size_mb"] = round(result / (1024 * 1024), 1) if result else 0
+    except Exception:
+        health["db_size_mb"] = None
+
+    # Table row counts (key tables only)
+    try:
+        counts = {}
+        for table in ["customers", "brokers", "inventory", "transactions", "tasks", "query_history"]:
+            try:
+                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+                counts[table] = cnt
+            except Exception:
+                counts[table] = -1
+        health["table_counts"] = counts
+    except Exception:
+        pass
+
+    # Memory usage (if psutil available)
+    try:
+        import psutil
+        proc = psutil.Process()
+        mem = proc.memory_info()
+        health["memory"] = {
+            "rss_mb": round(mem.rss / (1024 * 1024), 1),
+            "vms_mb": round(mem.vms / (1024 * 1024), 1),
+        }
+        health["cpu_percent"] = proc.cpu_percent(interval=0.1)
+        disk = psutil.disk_usage("/")
+        health["disk"] = {
+            "total_gb": round(disk.total / (1024**3), 1),
+            "used_gb": round(disk.used / (1024**3), 1),
+            "free_gb": round(disk.free / (1024**3), 1),
+            "percent": disk.percent,
+        }
+    except ImportError:
+        health["memory"] = "psutil not installed"
+
+    # Rate limiter stats
+    voice_limiter.cleanup()
+    task_limiter.cleanup()
+    health["active_rate_limit_users"] = {
+        "voice": len(voice_limiter._requests),
+        "task": len(task_limiter._requests),
+    }
+
+    return health

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import VectorMap from './components/Vector/VectorMap';
 import OrphanTrackingPanel from './components/OrphanTrackingPanel';
+import TasksView from './components/Tasks/TasksView';
+import ChatWidget from './components/Voice/ChatWidget';
 
 const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
@@ -242,12 +244,12 @@ export default function App() {
     
     // Role-based access rules
     const roleAccess = {
-      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector', 'settings'],
-      cco: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector', 'settings'],
-      manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'media', 'vector'],
-      creator: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'media', 'vector'],
-      user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'media', 'vector'],
-      viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'media', 'vector']
+      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
+      cco: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
+      manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'tasks', 'media', 'vector'],
+      creator: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector'],
+      user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'tasks', 'media', 'vector'],
+      viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'tasks', 'media', 'vector']
     };
     
     return roleAccess[role]?.includes(tabId) || false;
@@ -257,6 +259,7 @@ export default function App() {
   const primaryTabs = [
     { id: 'customers', label: 'Customers & Leads' },
     { id: 'campaigns', label: 'Campaigns' },
+    { id: 'tasks', label: 'Tasks' },
     { id: 'interactions', label: 'Interactions' },
     { id: 'reports', label: 'Reports' },
     { id: 'vector', label: 'Vector' },
@@ -394,9 +397,12 @@ export default function App() {
         {activeTab === 'customers' && <CustomersView />}
         {activeTab === 'campaigns' && <CampaignsView />}
         {activeTab === 'media' && <MediaView />}
+        {activeTab === 'tasks' && <TasksView api={api} user={user} addToast={addToast} setActiveTab={setActiveTab} />}
         {activeTab === 'vector' && <VectorView />}
         {activeTab === 'settings' && <SettingsView />}
       </main>
+      {/* Voice Chat Widget */}
+      {user && <ChatWidget api={api} user={user} />}
       {/* Toast Container */}
       <div className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 max-w-sm">
         {toasts.map(t => (
@@ -3982,6 +3988,55 @@ function StaleLeadsCard() {
   );
 }
 
+function TasksDashboardMini() {
+  const [taskSummary, setTaskSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get('/tasks/reports/summary')
+      .then(res => setTaskSummary(res.data))
+      .catch(() => setTaskSummary(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <Loader />;
+  if (!taskSummary) return <div className="text-center py-12 text-gray-400">No task data available</div>;
+
+  const s = taskSummary;
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <SummaryCard label="Total Tasks" value={s.total || 0} />
+        <SummaryCard label="Pending" value={s.by_status?.pending || 0} />
+        <SummaryCard label="In Progress" value={s.by_status?.in_progress || 0} />
+        <SummaryCard label="Completed" value={s.by_status?.completed || 0} />
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <SummaryCard label="Overdue" value={s.overdue || 0} />
+        <SummaryCard label="Due Today" value={s.due_today || 0} />
+        <SummaryCard label="Urgent" value={s.by_priority?.urgent || 0} />
+        <SummaryCard label="High Priority" value={s.by_priority?.high || 0} />
+      </div>
+      {s.by_department && Object.keys(s.by_department).length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Tasks by Department</h3>
+          <div className="space-y-2">
+            {Object.entries(s.by_department).map(([dept, count]) => (
+              <div key={dept} className="flex items-center gap-3">
+                <div className="w-28 text-sm font-medium text-gray-700 text-right">{dept}</div>
+                <div className="flex-1 h-8 bg-gray-100 rounded-lg overflow-hidden relative">
+                  <div className="h-full bg-blue-500 rounded-lg transition-all" style={{ width: `${s.total ? (count / s.total * 100) : 0}%`, minWidth: count > 0 ? '20px' : '0' }} />
+                  <span className="absolute inset-0 flex items-center px-3 text-xs font-semibold">{count}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardView() {
   const [summary, setSummary] = useState(null);
   const [customerStats, setCustomerStats] = useState([]);
@@ -4067,7 +4122,8 @@ function DashboardView() {
     { id: 'sales', label: 'Sales' },
     { id: 'brokers', label: 'Brokers' },
     { id: 'projects', label: 'Projects & Inventory' },
-    { id: 'campaigns', label: 'Campaigns' }
+    { id: 'campaigns', label: 'Campaigns' },
+    { id: 'tasks', label: 'Tasks' }
   ];
 
   // Revenue trends max for scaling
@@ -4451,6 +4507,11 @@ function DashboardView() {
                 <div className="text-center py-12 text-gray-400">No campaign analytics data available</div>
               )}
             </>
+          )}
+
+          {/* ====== TASKS MINI-TAB ====== */}
+          {dashSubTab === 'tasks' && (
+            <TasksDashboardMini />
           )}
         </>
       )}
