@@ -70,6 +70,18 @@ class Customer(Base):
     address = Column(Text)
     cnic = Column(String(20))
     email = Column(String(255))
+    additional_mobiles = Column(JSONB, default=list)
+    source = Column(String(100))
+    source_other = Column(Text)
+    occupation = Column(String(100))
+    occupation_other = Column(Text)
+    interested_project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"))
+    interested_project_other = Column(Text)
+    area = Column(Text)
+    city = Column(Text)
+    country_code = Column(String(5), default="+92")
+    notes = Column(Text)
+    assigned_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -90,6 +102,7 @@ class Broker(Base):
     notes = Column(Text)
     status = Column(String(20), default="active")
     linked_customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"))
+    assigned_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -118,6 +131,7 @@ class CompanyRep(Base):
     email = Column(String(255))
     password_hash = Column(String(255))  # Hashed password
     role = Column(String(50), default="user")  # admin, manager, cco, user, viewer, creator
+    rep_type = Column(String(20))  # direct, indirect, both, or NULL (no isolation)
     title = Column(String(100))  # CEO, CFO, COO, CCO, Director Land, etc.
     reports_to = Column(String(20))  # rep_id of manager (org hierarchy)
     status = Column(String(20), default="active")
@@ -226,6 +240,17 @@ class Lead(Base):
     pipeline_stage = Column(String(100), default="New")
     last_contacted_at = Column(DateTime)
     is_stale = Column(Boolean, default=False)
+    additional_mobiles = Column(JSONB, default=list)
+    source = Column(String(100))
+    source_other = Column(Text)
+    occupation = Column(String(100))
+    occupation_other = Column(Text)
+    interested_project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"))
+    interested_project_other = Column(Text)
+    area = Column(Text)
+    city = Column(Text)
+    country_code = Column(String(5), default="+92")
+    lead_metadata = Column("metadata", JSONB, default=dict)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -374,6 +399,15 @@ class PipelineStage(Base):
     display_order = Column(Integer, nullable=False)
     color = Column(String(20), default="#6B7280")
     is_terminal = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+class LookupValue(Base):
+    __tablename__ = "lookup_values"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    category = Column(String(50), nullable=False)
+    label = Column(String(255), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=99)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
 
 # ============================================
@@ -703,6 +737,52 @@ def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id
                 "assigned_rep": rep.name if rep else None,
                 "assigned_rep_id": rep.rep_id if rep else None
             })
+    # Check customer additional_mobiles via SQL JSONB
+    try:
+        add_mob_cust = db.execute(text("""
+            SELECT c.id, c.customer_id, c.name, c.mobile, am.elem
+            FROM customers c, jsonb_array_elements_text(c.additional_mobiles) AS am(elem)
+            WHERE c.additional_mobiles IS NOT NULL AND c.additional_mobiles != '[]'::jsonb
+              AND regexp_replace(am.elem, '[^0-9]', '', 'g') LIKE :suffix_pattern
+        """), {"suffix_pattern": f"%{suffix}%"})
+        for row in add_mob_cust:
+            if exclude_customer_id and str(row.id) == str(exclude_customer_id):
+                continue
+            if normalize_mobile(row.elem) == normalized:
+                already = any(m["id"] == str(row.id) and m["type"] == "customer" for m in matches)
+                if not already:
+                    matches.append({
+                        "type": "customer", "id": str(row.id), "entity_id": row.customer_id,
+                        "name": row.name, "mobile": row.elem, "primary_mobile": row.mobile
+                    })
+    except Exception:
+        pass  # additional_mobiles column may not exist yet on older DBs
+
+    # Check lead additional_mobiles via SQL JSONB
+    try:
+        add_mob_lead = db.execute(text("""
+            SELECT l.id, l.lead_id, l.name, l.mobile, am.elem, r.name as rep_name, r.rep_id as rep_rep_id
+            FROM leads l
+            LEFT JOIN company_reps r ON l.assigned_rep_id = r.id
+            CROSS JOIN jsonb_array_elements_text(l.additional_mobiles) AS am(elem)
+            WHERE l.status != 'converted'
+              AND l.additional_mobiles IS NOT NULL AND l.additional_mobiles != '[]'::jsonb
+              AND regexp_replace(am.elem, '[^0-9]', '', 'g') LIKE :suffix_pattern
+        """), {"suffix_pattern": f"%{suffix}%"})
+        for row in add_mob_lead:
+            if exclude_lead_id and str(row.id) == str(exclude_lead_id):
+                continue
+            if normalize_mobile(row.elem) == normalized:
+                already = any(m["id"] == str(row.id) and m["type"] == "lead" for m in matches)
+                if not already:
+                    matches.append({
+                        "type": "lead", "id": str(row.id), "entity_id": row.lead_id,
+                        "name": row.name, "mobile": row.elem, "primary_mobile": row.mobile,
+                        "assigned_rep": row.rep_name, "assigned_rep_id": row.rep_rep_id
+                    })
+    except Exception:
+        pass
+
     # Check brokers via SQL
     broker_q = db.query(Broker).filter(Broker.mobile.isnot(None), stripped_broker.like(f"%{suffix}%"))
     if exclude_broker_id:
@@ -714,6 +794,43 @@ def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id
                 "name": b.name, "mobile": b.mobile
             })
     return matches
+
+def get_rep_isolation_filter(current_user, db):
+    """Returns isolation context for the current user. Used by GET list endpoints
+    to filter data by rep ownership based on rep_type.
+
+    Returns dict with:
+        isolated: bool - True if filtering should apply
+        rep_type: str - 'direct', 'indirect', 'both'
+        rep_uuid: UUID - current user's UUID
+        team_rep_uuids: list[UUID] - UUIDs of user + their direct reports (for managers)
+    """
+    role = current_user.role
+    rep_type = getattr(current_user, 'rep_type', None)
+
+    # Admin, CCO: no isolation
+    if role in ("admin", "cco"):
+        return {"isolated": False}
+
+    # rep_type NULL = legacy user, no isolation (backward compat)
+    if not rep_type:
+        return {"isolated": False}
+
+    # Build team: self + direct reports for managers
+    team = [current_user.id]
+    if role == "manager":
+        direct_reports = db.query(CompanyRep).filter(
+            CompanyRep.reports_to == current_user.rep_id,
+            CompanyRep.status == "active"
+        ).all()
+        team.extend([r.id for r in direct_reports])
+
+    return {
+        "isolated": True,
+        "rep_type": rep_type,
+        "rep_uuid": current_user.id,
+        "team_rep_uuids": team,
+    }
 
 # ============================================
 # AUTHENTICATION SETUP
@@ -1182,7 +1299,8 @@ def login(username: str = Form(...), password: str = Form(...), db: Session = De
                     "rep_id": user.rep_id,
                     "name": user.name,
                     "email": user.email if hasattr(user, 'email') else None,
-                    "role": user.role if hasattr(user, 'role') else 'user'
+                    "role": user.role if hasattr(user, 'role') else 'user',
+                    "rep_type": user.rep_type if hasattr(user, 'rep_type') else None
                 }
             }
         except Exception as e:
@@ -1208,6 +1326,7 @@ def get_current_user_info(current_user: CompanyRep = Depends(get_current_user)):
             "name": current_user.name,
             "email": current_user.email if hasattr(current_user, 'email') else None,
             "role": current_user.role if hasattr(current_user, 'role') else 'user',
+            "rep_type": current_user.rep_type if hasattr(current_user, 'rep_type') else None,
             "mobile": current_user.mobile if hasattr(current_user, 'mobile') else None
         }
     except Exception as e:
@@ -1278,16 +1397,35 @@ def health_check(db: Session = Depends(get_db)):
 # CUSTOMERS API
 # ============================================
 @app.get("/api/customers")
-def list_customers(db: Session = Depends(get_db)):
-    customers = db.query(Customer).order_by(Customer.created_at.desc()).all()
+def list_customers(db: Session = Depends(get_db),
+                   current_user: CompanyRep = Depends(get_current_user)):
+    iso = get_rep_isolation_filter(current_user, db)
+    q = db.query(Customer).order_by(Customer.created_at.desc())
+    if iso["isolated"]:
+        rt = iso["rep_type"]
+        if rt == "indirect":
+            return []  # indirect reps don't see customers
+        q = q.filter(Customer.assigned_rep_id.in_(iso["team_rep_uuids"]))
+    customers = q.all()
     return [{
         "id": str(c.id), "customer_id": c.customer_id, "name": c.name,
         "mobile": c.mobile, "address": c.address, "cnic": c.cnic,
-        "email": c.email, "created_at": str(c.created_at)
+        "email": c.email,
+        "additional_mobiles": c.additional_mobiles or [],
+        "source": c.source, "source_other": c.source_other,
+        "occupation": c.occupation, "occupation_other": c.occupation_other,
+        "interested_project_id": str(c.interested_project_id) if c.interested_project_id else None,
+        "interested_project_other": c.interested_project_other,
+        "area": c.area, "city": c.city,
+        "country_code": c.country_code or "+92",
+        "notes": c.notes,
+        "assigned_rep_id": str(c.assigned_rep_id) if c.assigned_rep_id else None,
+        "created_at": str(c.created_at)
     } for c in customers]
 
 @app.get("/api/customers/{cid}")
-def get_customer(cid: str, db: Session = Depends(get_db)):
+def get_customer(cid: str, db: Session = Depends(get_db),
+                 current_user: CompanyRep = Depends(get_current_user)):
     c = db.query(Customer).filter(
         (Customer.id == cid) | (Customer.customer_id == cid) | (Customer.mobile == cid)
     ).first()
@@ -1297,23 +1435,58 @@ def get_customer(cid: str, db: Session = Depends(get_db)):
     return {
         "id": str(c.id), "customer_id": c.customer_id, "name": c.name,
         "mobile": c.mobile, "address": c.address, "cnic": c.cnic,
-        "email": c.email, "created_at": str(c.created_at),
+        "email": c.email,
+        "additional_mobiles": c.additional_mobiles or [],
+        "source": c.source, "source_other": c.source_other,
+        "occupation": c.occupation, "occupation_other": c.occupation_other,
+        "interested_project_id": str(c.interested_project_id) if c.interested_project_id else None,
+        "interested_project_other": c.interested_project_other,
+        "area": c.area, "city": c.city,
+        "country_code": c.country_code or "+92",
+        "notes": c.notes,
+        "assigned_rep_id": str(c.assigned_rep_id) if c.assigned_rep_id else None,
+        "created_at": str(c.created_at),
         "is_also_broker": broker is not None,
         "broker_id": broker.broker_id if broker else None
     }
 
 @app.post("/api/customers")
-def create_customer(data: dict, db: Session = Depends(get_db)):
+def create_customer(data: dict, db: Session = Depends(get_db),
+                    current_user: CompanyRep = Depends(get_current_user)):
     if db.query(Customer).filter(Customer.mobile == data["mobile"]).first():
         raise HTTPException(400, f"Customer with mobile {data['mobile']} already exists")
-    # Check for duplicate mobile in leads
+    # Check for duplicate mobile in leads + additional mobiles
     warnings = []
     dupes = check_duplicate_mobile(db, data.get("mobile"))
     for d in dupes:
         if d["type"] == "lead":
             warnings.append(f"Lead {d['entity_id']} ({d['name']}) has same mobile — assigned to {d.get('assigned_rep', 'unassigned')}")
-    c = Customer(name=data["name"], mobile=data["mobile"], address=data.get("address"),
-                 cnic=data.get("cnic"), email=data.get("email"))
+    # Check additional mobiles for duplicates
+    additional = [m for m in (data.get("additional_mobiles") or []) if m and m.strip()]
+    for am in additional:
+        am_dupes = check_duplicate_mobile(db, am)
+        for d in am_dupes:
+            warnings.append(f"Additional mobile {am} matches {d['type']} {d['entity_id']} ({d['name']})")
+    # Resolve interested_project_id
+    interested_project_id = None
+    if data.get("interested_project_id") and data["interested_project_id"] != "other":
+        p = db.query(Project).filter(
+            (Project.id == data["interested_project_id"]) | (Project.project_id == data["interested_project_id"])
+        ).first()
+        interested_project_id = p.id if p else None
+    c = Customer(
+        name=data["name"], mobile=data["mobile"], address=data.get("address"),
+        cnic=data.get("cnic"), email=data.get("email"),
+        additional_mobiles=additional if additional else [],
+        source=data.get("source"), source_other=data.get("source_other"),
+        occupation=data.get("occupation"), occupation_other=data.get("occupation_other"),
+        interested_project_id=interested_project_id,
+        interested_project_other=data.get("interested_project_other"),
+        area=data.get("area"), city=data.get("city"),
+        country_code=data.get("country_code", "+92"),
+        notes=data.get("notes"),
+        assigned_rep_id=current_user.id
+    )
     db.add(c); db.commit(); db.refresh(c)
     result = {"message": "Customer created", "id": str(c.id), "customer_id": c.customer_id}
     if warnings:
@@ -1321,11 +1494,26 @@ def create_customer(data: dict, db: Session = Depends(get_db)):
     return result
 
 @app.put("/api/customers/{cid}")
-def update_customer(cid: str, data: dict, db: Session = Depends(get_db)):
+def update_customer(cid: str, data: dict, db: Session = Depends(get_db),
+                    current_user: CompanyRep = Depends(get_current_user)):
     c = db.query(Customer).filter((Customer.id == cid) | (Customer.customer_id == cid)).first()
     if not c: raise HTTPException(404, "Customer not found")
-    for k in ["name", "mobile", "address", "cnic", "email"]:
-        if k in data and data[k] is not None: setattr(c, k, data[k])
+    for k in ["name", "mobile", "address", "cnic", "email",
+              "additional_mobiles", "source", "source_other", "occupation", "occupation_other",
+              "interested_project_other", "area", "city", "country_code", "notes"]:
+        if k in data: setattr(c, k, data[k])
+    # Handle interested_project_id separately (FK resolution)
+    if "interested_project_id" in data:
+        if data["interested_project_id"] and data["interested_project_id"] != "other":
+            p = db.query(Project).filter(
+                (Project.id == data["interested_project_id"]) | (Project.project_id == data["interested_project_id"])
+            ).first()
+            c.interested_project_id = p.id if p else None
+        else:
+            c.interested_project_id = None
+    # Filter empty strings from additional_mobiles
+    if c.additional_mobiles:
+        c.additional_mobiles = [m for m in c.additional_mobiles if m and m.strip()]
     db.commit()
     return {"message": "Customer updated"}
 
@@ -1352,14 +1540,15 @@ def delete_customer(cid: str, db: Session = Depends(get_db), current_user: Compa
 def download_customer_template():
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['name*', 'mobile*', 'address', 'cnic', 'email'])
-    writer.writerow(['Ahmed Khan', '0300-1234567', 'DHA Phase 5', '35201-1234567-1', 'ahmed@email.com'])
+    writer.writerow(['name*', 'mobile*', 'address', 'cnic', 'email', 'source', 'occupation', 'area', 'city', 'notes'])
+    writer.writerow(['Ahmed Khan', '0300-1234567', 'DHA Phase 5', '35201-1234567-1', 'ahmed@email.com', 'Walk-in', 'Businessman', 'DHA Phase 5', 'Karachi', 'Interested in plots'])
     output.seek(0)
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=customers_template.csv"})
 
 @app.post("/api/customers/bulk-import")
-async def bulk_import_customers(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def bulk_import_customers(file: UploadFile = File(...), db: Session = Depends(get_db),
+                                current_user: CompanyRep = Depends(get_current_user)):
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode('utf-8-sig')))
     results = {"success": 0, "errors": [], "created": []}
@@ -1372,7 +1561,10 @@ async def bulk_import_customers(file: UploadFile = File(...), db: Session = Depe
                 dup = dupes[0]
                 results["errors"].append(f"Row {i}: Mobile exists in {dup['type']} {dup['entity_id']} ({dup['name']})")
                 continue
-            c = Customer(name=name, mobile=mobile, address=row.get('address'), cnic=row.get('cnic'), email=row.get('email'))
+            c = Customer(name=name, mobile=mobile, address=row.get('address'), cnic=row.get('cnic'), email=row.get('email'),
+                         source=row.get('source'), occupation=row.get('occupation'),
+                         area=row.get('area'), city=row.get('city'), notes=row.get('notes'),
+                         assigned_rep_id=current_user.id)
             db.add(c); db.flush()
             results["success"] += 1
             results["created"].append({"customer_id": c.customer_id, "name": name})
@@ -1384,8 +1576,16 @@ async def bulk_import_customers(file: UploadFile = File(...), db: Session = Depe
 # BROKERS API
 # ============================================
 @app.get("/api/brokers")
-def list_brokers(db: Session = Depends(get_db)):
-    brokers = db.query(Broker).order_by(Broker.created_at.desc()).all()
+def list_brokers(db: Session = Depends(get_db),
+                 current_user: CompanyRep = Depends(get_current_user)):
+    iso = get_rep_isolation_filter(current_user, db)
+    q = db.query(Broker).order_by(Broker.created_at.desc())
+    if iso["isolated"]:
+        rt = iso["rep_type"]
+        if rt == "direct":
+            return []  # direct reps don't see brokers
+        q = q.filter(Broker.assigned_rep_id.in_(iso["team_rep_uuids"]))
+    brokers = q.all()
     result = []
     for b in brokers:
         customer = db.query(Customer).filter(Customer.mobile == b.mobile).first()
@@ -1642,7 +1842,8 @@ def delete_project(pid: str, db: Session = Depends(get_db), current_user: Compan
 def list_reps(db: Session = Depends(get_db)):
     reps = db.query(CompanyRep).order_by(CompanyRep.created_at.desc()).all()
     return [{"id": str(r.id), "rep_id": r.rep_id, "name": r.name, "mobile": r.mobile,
-             "email": r.email, "status": r.status, "role": r.role} for r in reps]
+             "email": r.email, "status": r.status, "role": r.role,
+             "rep_type": r.rep_type, "title": r.title, "reports_to": r.reports_to} for r in reps]
 
 @app.post("/api/company-reps")
 def create_rep(data: dict, db: Session = Depends(get_db), current_user: CompanyRep = Depends(require_role(["admin"]))):
@@ -1651,14 +1852,17 @@ def create_rep(data: dict, db: Session = Depends(get_db), current_user: CompanyR
     role = data.get("role", "user")  # Default to "user" role
     
     r = CompanyRep(
-        name=data["name"], 
-        mobile=data.get("mobile"), 
+        name=data["name"],
+        mobile=data.get("mobile"),
         email=data.get("email"),
         password_hash=password_hash,
-        role=role
+        role=role,
+        rep_type=data.get("rep_type"),
+        title=data.get("title"),
+        reports_to=data.get("reports_to")
     )
     db.add(r); db.commit(); db.refresh(r)
-    return {"message": "Rep created", "id": str(r.id), "rep_id": r.rep_id, "role": r.role}
+    return {"message": "Rep created", "id": str(r.id), "rep_id": r.rep_id, "role": r.role, "rep_type": r.rep_type}
 
 @app.put("/api/company-reps/{rid}")
 def update_rep(rid: str, data: dict, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
@@ -1672,8 +1876,8 @@ def update_rep(rid: str, data: dict, db: Session = Depends(get_db), current_user
     if str(r.id) != str(current_user.id) and current_user.role not in ["admin", "cco"]:
         raise HTTPException(403, "Can only update your own profile")
     
-    for k in ["name", "mobile", "email", "status", "role"]:
-        if k in data and data[k] is not None: setattr(r, k, data[k])
+    for k in ["name", "mobile", "email", "status", "role", "rep_type", "title", "reports_to"]:
+        if k in data: setattr(r, k, data[k])
     
     if "password" in data and data["password"]:
         r.password_hash = get_password_hash(data["password"])
@@ -1856,9 +2060,25 @@ async def bulk_import_inventory(file: UploadFile = File(...), db: Session = Depe
 # TRANSACTIONS API
 # ============================================
 @app.get("/api/transactions")
-def list_transactions(db: Session = Depends(get_db)):
+def list_transactions(db: Session = Depends(get_db),
+                      current_user: CompanyRep = Depends(get_current_user)):
     try:
-        txns = db.query(Transaction).order_by(Transaction.created_at.desc()).all()
+        q = db.query(Transaction).order_by(Transaction.created_at.desc())
+        iso = get_rep_isolation_filter(current_user, db)
+        if iso["isolated"]:
+            rt = iso["rep_type"]
+            if rt == "direct":
+                q = q.filter(Transaction.company_rep_id.in_(iso["team_rep_uuids"]))
+            elif rt == "indirect":
+                broker_ids = [b.id for b in db.query(Broker.id).filter(Broker.assigned_rep_id.in_(iso["team_rep_uuids"])).all()]
+                q = q.filter(Transaction.broker_id.in_(broker_ids)) if broker_ids else q.filter(literal(False))
+            else:  # both
+                broker_ids = [b.id for b in db.query(Broker.id).filter(Broker.assigned_rep_id.in_(iso["team_rep_uuids"])).all()]
+                q = q.filter(or_(
+                    Transaction.company_rep_id.in_(iso["team_rep_uuids"]),
+                    Transaction.broker_id.in_(broker_ids) if broker_ids else literal(False)
+                ))
+        txns = q.all()
         result = []
         for t in txns:
             c = db.query(Customer).filter(Customer.id == t.customer_id).first()
@@ -2079,8 +2299,12 @@ def update_installment(iid: str, data: dict, db: Session = Depends(get_db)):
 # ============================================
 @app.get("/api/interactions")
 def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: str = None,
-                      lead_id: str = None, limit: int = 100, db: Session = Depends(get_db)):
+                      lead_id: str = None, limit: int = 100, db: Session = Depends(get_db),
+                      current_user: CompanyRep = Depends(get_current_user)):
     q = db.query(Interaction)
+    iso = get_rep_isolation_filter(current_user, db)
+    if iso["isolated"]:
+        q = q.filter(Interaction.company_rep_id.in_(iso["team_rep_uuids"]))
     if rep_id:
         r = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
         if r: q = q.filter(Interaction.company_rep_id == r.id)
@@ -2344,10 +2568,15 @@ def delete_campaign(cid: str, db: Session = Depends(get_db), current_user: Compa
 # LEADS API
 # ============================================
 @app.get("/api/leads")
-def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None, 
-               limit: int = 100, db: Session = Depends(get_db)):
+def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None,
+               limit: int = 100, db: Session = Depends(get_db),
+               current_user: CompanyRep = Depends(get_current_user)):
     try:
         q = db.query(Lead)
+        # Data isolation
+        iso = get_rep_isolation_filter(current_user, db)
+        if iso["isolated"]:
+            q = q.filter(Lead.assigned_rep_id.in_(iso["team_rep_uuids"]))
         if campaign_id and campaign_id.strip():
             c = db.query(Campaign).filter((Campaign.id == campaign_id) | (Campaign.campaign_id == campaign_id)).first()
             if c: q = q.filter(Lead.campaign_id == c.id)
@@ -2355,7 +2584,7 @@ def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None,
             r = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
             if r: q = q.filter(Lead.assigned_rep_id == r.id)
         if status and status.strip(): q = q.filter(Lead.status == status)
-        
+
         leads = q.order_by(Lead.created_at.desc()).limit(limit).all()
         # Pre-fetch related entities to avoid N+1
         camp_ids = set(l.campaign_id for l in leads if l.campaign_id)
@@ -2376,6 +2605,14 @@ def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None,
                 "pipeline_stage": l.pipeline_stage or "New",
                 "converted_customer_id": str(l.converted_customer_id) if l.converted_customer_id else None,
                 "converted_broker_id": str(l.converted_broker_id) if l.converted_broker_id else None,
+                "additional_mobiles": l.additional_mobiles or [],
+                "source": l.source, "source_other": l.source_other,
+                "occupation": l.occupation, "occupation_other": l.occupation_other,
+                "interested_project_id": str(l.interested_project_id) if l.interested_project_id else None,
+                "interested_project_other": l.interested_project_other,
+                "area": l.area, "city": l.city,
+                "country_code": l.country_code or "+92",
+                "source_details": l.source_details,
                 "created_at": str(l.created_at)
             })
         return result
@@ -2420,13 +2657,29 @@ def create_lead(data: dict, db: Session = Depends(get_db),
                     }
                 )
 
+        # Resolve interested_project_id
+        interested_project_id = None
+        if data.get("interested_project_id") and data["interested_project_id"] != "other":
+            p = db.query(Project).filter(
+                (Project.id == data["interested_project_id"]) | (Project.project_id == data["interested_project_id"])
+            ).first()
+            interested_project_id = p.id if p else None
+        # Filter additional mobiles
+        additional = [m for m in (data.get("additional_mobiles") or []) if m and m.strip()]
         l = Lead(
             campaign_id=campaign.id if campaign else None,
-            assigned_rep_id=rep.id if rep else None,
+            assigned_rep_id=rep.id if rep else current_user.id,
             name=data["name"], mobile=mobile or None, email=data.get("email"),
             source_details=data.get("source_details"), status=data.get("status", "new"),
             lead_type=data.get("lead_type", "prospect"), notes=data.get("notes"),
-            pipeline_stage=data.get("pipeline_stage", "New")
+            pipeline_stage=data.get("pipeline_stage", "New"),
+            additional_mobiles=additional if additional else [],
+            source=data.get("source"), source_other=data.get("source_other"),
+            occupation=data.get("occupation"), occupation_other=data.get("occupation_other"),
+            interested_project_id=interested_project_id,
+            interested_project_other=data.get("interested_project_other"),
+            area=data.get("area"), city=data.get("city"),
+            country_code=data.get("country_code", "+92")
         )
         db.add(l); db.commit(); db.refresh(l)
         return {"message": "Lead created", "id": str(l.id), "lead_id": l.lead_id}
@@ -2443,8 +2696,8 @@ def create_lead(data: dict, db: Session = Depends(get_db),
 def download_leads_template():
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['name*', 'mobile', 'email', 'assigned_rep', 'lead_type', 'source_details', 'notes'])
-    writer.writerow(['John Doe', '0300-1234567', 'john@email.com', 'REP-0001', 'prospect', 'Facebook form', 'Interested in Phase 2'])
+    writer.writerow(['name*', 'mobile', 'email', 'assigned_rep', 'assigned_broker', 'pre_assigned_customer', 'lead_type', 'source_details', 'source', 'occupation', 'area', 'city', 'notes'])
+    writer.writerow(['John Doe', '0300-1234567', 'john@email.com', 'REP-0001', 'BRK-0001', 'CUST-0001', 'prospect', 'Facebook form', 'Social Media', 'Businessman', 'DHA Phase 5', 'Karachi', 'Interested in Phase 2'])
     output.seek(0)
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=leads_template.csv"})
@@ -2460,11 +2713,11 @@ async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = Non
 
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode('utf-8-sig')))
-    results = {"success": 0, "errors": [], "duplicates": []}
+    results = {"success": 0, "errors": [], "duplicates": [], "warnings": []}
     all_dup_records = []  # For notification at end
     for i, row in enumerate(reader, 2):
         try:
-            name = row.get('name', '').strip()
+            name = row.get('name', row.get('name*', '')).strip()
             if not name: results["errors"].append(f"Row {i}: Name required"); continue
 
             mobile = (row.get('mobile') or '').strip()
@@ -2480,6 +2733,28 @@ async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = Non
                             "system_assigned_rep": dup.get("assigned_rep") or "N/A"
                         })
                         all_dup_records.append(dup)
+                        # Auto-create follow-up task for the owner rep
+                        owner_rep_id = dup.get("assigned_rep_id")
+                        if owner_rep_id:
+                            owner_rep = db.query(CompanyRep).filter(CompanyRep.rep_id == owner_rep_id).first()
+                            if owner_rep:
+                                task = Task(
+                                    title=f"Follow up with {dup['name']} — showed interest in {campaign_name or 'campaign'}",
+                                    description=f"Duplicate detected during bulk import. {name} (mobile: {mobile}) matches existing {dup['type']} {dup['entity_id']}. Campaign: {campaign_name or 'N/A'}.",
+                                    task_type="FOLLOW_UP",
+                                    priority="HIGH",
+                                    status="TODO",
+                                    assignee_id=owner_rep.id,
+                                    created_by=current_user.id,
+                                    due_date=date.today() + timedelta(days=2)
+                                )
+                                db.add(task)
+                                create_notification(
+                                    db, owner_rep_id, "follow_up",
+                                    f"New interest: {dup['name']}",
+                                    f"{name} showed interest in {campaign_name or 'campaign'}. A follow-up task has been auto-created.",
+                                    category="lead", entity_type="lead", entity_id=dup["entity_id"]
+                                )
                     continue  # Skip this row
 
             rep = None
@@ -2487,18 +2762,46 @@ async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = Non
                 rep = db.query(CompanyRep).filter(
                     (CompanyRep.rep_id == row['assigned_rep']) | (CompanyRep.name == row['assigned_rep'])
                 ).first()
+                if not rep:
+                    results["warnings"].append(f"Row {i}: assigned_rep '{row['assigned_rep']}' not found, skipping assignment")
+
+            # Lookup assigned_broker (optional)
+            broker = None
+            if row.get('assigned_broker'):
+                broker = db.query(Broker).filter(
+                    (Broker.broker_id == row['assigned_broker']) | (Broker.name == row['assigned_broker'])
+                ).first()
+                if not broker:
+                    results["warnings"].append(f"Row {i}: assigned_broker '{row['assigned_broker']}' not found, skipping assignment")
+
+            # Lookup pre_assigned_customer (optional)
+            pre_customer = None
+            if row.get('pre_assigned_customer'):
+                pre_customer = db.query(Customer).filter(
+                    (Customer.customer_id == row['pre_assigned_customer']) | (Customer.mobile == row['pre_assigned_customer'])
+                ).first()
+                if not pre_customer:
+                    results["warnings"].append(f"Row {i}: pre_assigned_customer '{row['pre_assigned_customer']}' not found, skipping")
 
             l = Lead(
                 campaign_id=campaign.id if campaign else None,
                 assigned_rep_id=rep.id if rep else None,
                 name=name, mobile=mobile or None, email=row.get('email'),
-                source_details=row.get('source_details'), notes=row.get('notes')
+                source_details=row.get('source_details'), notes=row.get('notes'),
+                source=row.get('source'), occupation=row.get('occupation'),
+                area=row.get('area'), city=row.get('city'),
+                metadata={
+                    "assigned_broker_id": str(broker.id) if broker else None,
+                    "assigned_broker_name": broker.name if broker else None,
+                    "pre_assigned_customer_id": str(pre_customer.id) if pre_customer else None,
+                    "pre_assigned_customer_name": pre_customer.name if pre_customer else None,
+                }
             )
             db.add(l); db.flush()
             results["success"] += 1
         except Exception as e: results["errors"].append(f"Row {i}: {e}")
     db.commit()
-    # Notify admin/CCO about duplicates (not individual reps)
+    # Notify admin/CCO about duplicates (not individual reps — individual already notified above)
     if all_dup_records:
         notify_duplicate_attempt(db, all_dup_records, current_user, "bulk", campaign_name)
         db.commit()
@@ -2509,8 +2812,18 @@ def update_lead(lid: str, data: dict, db: Session = Depends(get_db),
                 current_user: CompanyRep = Depends(get_current_user)):
     l = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
     if not l: raise HTTPException(404, "Lead not found")
-    for k in ["name", "mobile", "email", "source_details", "status", "lead_type", "notes", "pipeline_stage"]:
-        if k in data and data[k] is not None: setattr(l, k, data[k])
+    for k in ["name", "mobile", "email", "source_details", "status", "lead_type", "notes", "pipeline_stage",
+              "additional_mobiles", "source", "source_other", "occupation", "occupation_other",
+              "interested_project_other", "area", "city", "country_code"]:
+        if k in data: setattr(l, k, data[k])
+    if "interested_project_id" in data:
+        if data["interested_project_id"] and data["interested_project_id"] != "other":
+            p = db.query(Project).filter(
+                (Project.id == data["interested_project_id"]) | (Project.project_id == data["interested_project_id"])
+            ).first()
+            l.interested_project_id = p.id if p else None
+        else:
+            l.interested_project_id = None
     if "assigned_rep_id" in data:
         rep = None
         if data["assigned_rep_id"]:
@@ -2613,9 +2926,19 @@ def delete_lead(lid: str, db: Session = Depends(get_db), current_user: CompanyRe
 # RECEIPTS API
 # ============================================
 @app.get("/api/receipts")
-def list_receipts(customer_id: str = None, transaction_id: str = None, limit: int = 100, db: Session = Depends(get_db)):
+def list_receipts(customer_id: str = None, transaction_id: str = None, limit: int = 100,
+                  db: Session = Depends(get_db),
+                  current_user: CompanyRep = Depends(get_current_user)):
     try:
         q = db.query(Receipt)
+        # Data isolation: direct/both reps see receipts for their customers only
+        iso = get_rep_isolation_filter(current_user, db)
+        if iso["isolated"]:
+            rt = iso["rep_type"]
+            if rt == "indirect":
+                return []  # indirect reps don't see receipts
+            own_cust_ids = [c.id for c in db.query(Customer.id).filter(Customer.assigned_rep_id.in_(iso["team_rep_uuids"])).all()]
+            q = q.filter(Receipt.customer_id.in_(own_cust_ids)) if own_cust_ids else q.filter(literal(False))
         if customer_id and customer_id.strip():
             c = db.query(Customer).filter((Customer.id == customer_id) | (Customer.customer_id == customer_id)).first()
             if c: q = q.filter(Receipt.customer_id == c.id)
@@ -2888,9 +3211,18 @@ def delete_creditor(cid: str, db: Session = Depends(get_db), current_user: Compa
 def list_payments(
     broker_id: str = None, rep_id: str = None, creditor_id: str = None,
     payment_type: str = None, status: str = None, start_date: str = None,
-    end_date: str = None, limit: int = 100, db: Session = Depends(get_db)
+    end_date: str = None, limit: int = 100, db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
 ):
     q = db.query(Payment)
+    # Data isolation: indirect/both reps see payments for their brokers only
+    iso = get_rep_isolation_filter(current_user, db)
+    if iso["isolated"]:
+        rt = iso["rep_type"]
+        if rt == "direct":
+            return []  # direct reps don't see payments
+        own_broker_ids = [b.id for b in db.query(Broker.id).filter(Broker.assigned_rep_id.in_(iso["team_rep_uuids"])).all()]
+        q = q.filter(Payment.broker_id.in_(own_broker_ids)) if own_broker_ids else q.filter(literal(False))
     if broker_id:
         b = db.query(Broker).filter((Broker.id == broker_id) | (Broker.broker_id == broker_id)).first()
         if b: q = q.filter(Payment.broker_id == b.id)
@@ -3702,6 +4034,14 @@ def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
             "address": customer.address,
             "cnic": customer.cnic,
             "notes": customer.notes,
+            "additional_mobiles": customer.additional_mobiles or [],
+            "source": customer.source, "source_other": customer.source_other,
+            "occupation": customer.occupation, "occupation_other": customer.occupation_other,
+            "interested_project_id": str(customer.interested_project_id) if customer.interested_project_id else None,
+            "interested_project_other": customer.interested_project_other,
+            "area": customer.area, "city": customer.city,
+            "country_code": customer.country_code or "+92",
+            "assigned_rep_id": str(customer.assigned_rep_id) if customer.assigned_rep_id else None,
             "created_at": str(customer.created_at) if customer.created_at else None
         },
         "financials": {
@@ -7728,6 +8068,57 @@ def delete_pipeline_stage(sid: str, data: dict = {}, db: Session = Depends(get_d
         raise HTTPException(400, f"Cannot delete stage with {count} leads. Move leads first.")
     db.delete(s); db.commit()
     return {"message": "Stage deleted"}
+
+# ============================================
+# LOOKUP VALUES API (admin-managed dropdowns)
+# ============================================
+@app.get("/api/lookup-values")
+def list_lookup_values(category: str = None, db: Session = Depends(get_db),
+                       current_user: CompanyRep = Depends(get_current_user)):
+    q = db.query(LookupValue).filter(LookupValue.is_active == True)
+    if category:
+        q = q.filter(LookupValue.category == category)
+    values = q.order_by(LookupValue.category, LookupValue.sort_order).all()
+    return [{
+        "id": str(v.id), "category": v.category, "label": v.label,
+        "sort_order": v.sort_order, "is_active": v.is_active,
+        "created_at": str(v.created_at)
+    } for v in values]
+
+@app.post("/api/lookup-values")
+def create_lookup_value(data: dict, db: Session = Depends(get_db),
+                        current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    existing = db.query(LookupValue).filter(
+        LookupValue.category == data["category"],
+        LookupValue.label == data["label"]
+    ).first()
+    if existing:
+        raise HTTPException(400, f"Value '{data['label']}' already exists in '{data['category']}'")
+    v = LookupValue(
+        category=data["category"],
+        label=data["label"],
+        sort_order=data.get("sort_order", 99)
+    )
+    db.add(v); db.commit(); db.refresh(v)
+    return {"message": "Value created", "id": str(v.id)}
+
+@app.put("/api/lookup-values/{vid}")
+def update_lookup_value(vid: str, data: dict, db: Session = Depends(get_db),
+                        current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    v = db.query(LookupValue).filter(LookupValue.id == vid).first()
+    if not v: raise HTTPException(404, "Value not found")
+    for k in ["label", "sort_order", "is_active"]:
+        if k in data: setattr(v, k, data[k])
+    db.commit()
+    return {"message": "Value updated"}
+
+@app.delete("/api/lookup-values/{vid}")
+def delete_lookup_value(vid: str, db: Session = Depends(get_db),
+                        current_user: CompanyRep = Depends(require_role(["admin", "cco"]))):
+    v = db.query(LookupValue).filter(LookupValue.id == vid).first()
+    if not v: raise HTTPException(404, "Value not found")
+    db.delete(v); db.commit()
+    return {"message": "Value deleted"}
 
 # ============================================
 # LEAD PIPELINE API
