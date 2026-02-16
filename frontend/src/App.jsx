@@ -4,9 +4,17 @@ import VectorMap from './components/Vector/VectorMap';
 import OrphanTrackingPanel from './components/OrphanTrackingPanel';
 import TasksView from './components/Tasks/TasksView';
 import ChatWidget from './components/Voice/ChatWidget';
+import PhoneInput from './components/PhoneInput';
+import { fetchLookupValues, LOOKUP_KEYS } from './utils/lookupValues';
 
 const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
+const emptyEnhancedLead = {
+  name: '', mobile: '', email: '', assigned_rep_id: '', lead_type: 'prospect', notes: '',
+  source: '', source_other: '', occupation: '', occupation_other: '',
+  interested_project_id: '', interested_project_other: '', area: '', city: '',
+  additional_mobiles: ['', '', '', ''], country_code: '+92'
+};
 
 // ============================================
 // AUTHENTICATION - LOGIN VIEW
@@ -27,9 +35,19 @@ function LoginView({ onLogin }) {
       formData.append('password', password);
       const res = await api.post('/auth/login', formData);
       localStorage.setItem('token', res.data.access_token);
-      localStorage.setItem('user', JSON.stringify(res.data.user));
       api.defaults.headers.common['Authorization'] = `Bearer ${res.data.access_token}`;
-      onLogin(res.data.user);
+      let userPayload = res.data.user;
+      // Ensure rep_type is populated even if login response is partial.
+      if (!Object.prototype.hasOwnProperty.call(userPayload || {}, 'rep_type')) {
+        try {
+          const meRes = await api.get('/auth/me');
+          userPayload = meRes.data;
+        } catch (e2) {
+          // Fallback to login payload.
+        }
+      }
+      localStorage.setItem('user', JSON.stringify(userPayload));
+      onLogin(userPayload);
     } catch (e) {
       setError(e.response?.data?.detail || 'Login failed');
     } finally {
@@ -238,6 +256,7 @@ export default function App() {
   const canAccess = (tabId) => {
     if (!user) return false;
     const role = user.role || 'user';
+    const repType = user.rep_type || null;
     
     // Admin can access everything
     if (role === 'admin') return true;
@@ -252,7 +271,19 @@ export default function App() {
       viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'tasks', 'media', 'vector']
     };
     
-    return roleAccess[role]?.includes(tabId) || false;
+    const allowedByRole = roleAccess[role]?.includes(tabId) || false;
+    if (!allowedByRole) return false;
+
+    // Rep-type specific visibility overlay.
+    if (repType === 'direct_rep') {
+      const blocked = ['payments'];
+      return !blocked.includes(tabId);
+    }
+    if (repType === 'indirect_rep') {
+      const blocked = ['receipts'];
+      return !blocked.includes(tabId);
+    }
+    return true;
   };
   
   // CFO gets a focused header: Tasks, Reports, Analytics only
@@ -1582,6 +1613,11 @@ function CustomersView() {
 function PipelineView() {
   const [pipelineData, setPipelineData] = useState(null);
   const [stages, setStages] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [lookupValues, setLookupValues] = useState({
+    [LOOKUP_KEYS.CUSTOMER_SOURCE]: [],
+    [LOOKUP_KEYS.CUSTOMER_OCCUPATION]: []
+  });
   const [activeStage, setActiveStage] = useState('all');
   const [loading, setLoading] = useState(true);
   const [repFilter, setRepFilter] = useState('');
@@ -1589,10 +1625,12 @@ function PipelineView() {
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [assignRepId, setAssignRepId] = useState('');
   const [showLeadDetail, setShowLeadDetail] = useState(null);
+  const [showAddLeadModal, setShowAddLeadModal] = useState(false);
+  const [newLeadForm, setNewLeadForm] = useState(emptyEnhancedLead);
   const role = getUserRole();
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
 
-  useEffect(() => { loadPipeline(); loadReps(); }, [repFilter]);
+  useEffect(() => { loadPipeline(); loadReps(); loadLeadMeta(); }, [repFilter]);
   const loadPipeline = async () => {
     try {
       const params = new URLSearchParams();
@@ -1604,6 +1642,20 @@ function PipelineView() {
   };
   const loadReps = async () => {
     try { const res = await api.get('/company-reps'); setReps(res.data); } catch (e) { /* silent */ }
+  };
+  const loadLeadMeta = async () => {
+    try {
+      const [projRes, stgRes, lookupRes] = await Promise.all([
+        api.get('/projects').catch(() => ({ data: [] })),
+        api.get('/pipeline-stages').catch(() => ({ data: [] })),
+        fetchLookupValues(api, [LOOKUP_KEYS.CUSTOMER_SOURCE, LOOKUP_KEYS.CUSTOMER_OCCUPATION])
+      ]);
+      setProjects(projRes.data || []);
+      setStages(stgRes.data || []);
+      setLookupValues(lookupRes);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const handleBulkAssign = async () => {
@@ -1625,6 +1677,27 @@ function PipelineView() {
       loadPipeline();
     } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
   };
+  const handleAddLead = async (e) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        ...newLeadForm,
+        additional_mobiles: (newLeadForm.additional_mobiles || []).map(v => String(v || '').trim()).filter(Boolean)
+      };
+      await api.post('/leads', payload);
+      setShowAddLeadModal(false);
+      setNewLeadForm(emptyEnhancedLead);
+      loadPipeline();
+      if (window.showToast) window.showToast('Lead Created', 'Lead added to pipeline', 'success');
+    } catch (e2) {
+      if (window.showToast) window.showToast('Error', e2.response?.data?.detail || 'Failed to create lead', 'error');
+    }
+  };
+  const updateMobile = (index, value) => {
+    const mobiles = [...(newLeadForm.additional_mobiles || ['', '', '', ''])];
+    mobiles[index] = value;
+    setNewLeadForm({...newLeadForm, additional_mobiles: mobiles});
+  };
 
   const allStages = pipelineData?.pipeline || [];
   const allLeads = allStages.flatMap(s => s.leads);
@@ -1634,6 +1707,7 @@ function PipelineView() {
     <div className="space-y-4">
       {/* Filters row */}
       <div className="flex items-center gap-3 flex-wrap">
+        <button onClick={() => setShowAddLeadModal(true)} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800">+ Add Lead</button>
         {isAdminLike && (
           <select value={repFilter} onChange={e => { setRepFilter(e.target.value); setLoading(true); }}
             className="px-3 py-2 text-sm border rounded-lg bg-white">
@@ -1722,6 +1796,68 @@ function PipelineView() {
       {/* Lead Detail Modal */}
       {showLeadDetail && <LeadDetailModal lead={showLeadDetail} onClose={() => { setShowLeadDetail(null); loadPipeline(); }}
         stages={allStages} reps={reps} />}
+      {showAddLeadModal && (
+        <Modal title="Add Lead" onClose={() => setShowAddLeadModal(false)}>
+          <form onSubmit={handleAddLead} className="space-y-4">
+            <Input label="Name" required value={newLeadForm.name} onChange={e => setNewLeadForm({...newLeadForm, name: e.target.value})} />
+            <div className="grid grid-cols-2 gap-4">
+              <PhoneInput label="Mobile" value={newLeadForm.mobile} onChange={value => setNewLeadForm({...newLeadForm, mobile: value})} />
+              <Input label="Email" type="email" value={newLeadForm.email} onChange={e => setNewLeadForm({...newLeadForm, email: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Additional Mobile 1" value={newLeadForm.additional_mobiles[0] || ''} onChange={e => updateMobile(0, e.target.value)} />
+              <Input label="Additional Mobile 2" value={newLeadForm.additional_mobiles[1] || ''} onChange={e => updateMobile(1, e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Additional Mobile 3" value={newLeadForm.additional_mobiles[2] || ''} onChange={e => updateMobile(2, e.target.value)} />
+              <Input label="Additional Mobile 4" value={newLeadForm.additional_mobiles[3] || ''} onChange={e => updateMobile(3, e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
+                <select value={newLeadForm.source} onChange={e => setNewLeadForm({...newLeadForm, source: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select source</option>
+                  {(lookupValues[LOOKUP_KEYS.CUSTOMER_SOURCE] || []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Occupation</label>
+                <select value={newLeadForm.occupation} onChange={e => setNewLeadForm({...newLeadForm, occupation: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select occupation</option>
+                  {(lookupValues[LOOKUP_KEYS.CUSTOMER_OCCUPATION] || []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </div>
+            </div>
+            {newLeadForm.source === 'Other' && <Input label="Source (Other)" value={newLeadForm.source_other} onChange={e => setNewLeadForm({...newLeadForm, source_other: e.target.value})} />}
+            {newLeadForm.occupation === 'Other' && <Input label="Occupation (Other)" value={newLeadForm.occupation_other} onChange={e => setNewLeadForm({...newLeadForm, occupation_other: e.target.value})} />}
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Area" value={newLeadForm.area} onChange={e => setNewLeadForm({...newLeadForm, area: e.target.value})} />
+              <Input label="City" value={newLeadForm.city} onChange={e => setNewLeadForm({...newLeadForm, city: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Interested Project</label>
+                <select value={newLeadForm.interested_project_id} onChange={e => setNewLeadForm({...newLeadForm, interested_project_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select project</option>
+                  <option value="other">Other</option>
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Assign to Rep</label>
+                <select value={newLeadForm.assigned_rep_id} onChange={e => setNewLeadForm({...newLeadForm, assigned_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Unassigned</option>
+                  {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              </div>
+            </div>
+            {newLeadForm.interested_project_id === 'other' && (
+              <Input label="Interested Project (Other)" value={newLeadForm.interested_project_other} onChange={e => setNewLeadForm({...newLeadForm, interested_project_other: e.target.value})} />
+            )}
+            <Input label="Notes" value={newLeadForm.notes} onChange={e => setNewLeadForm({...newLeadForm, notes: e.target.value})} />
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={() => setShowAddLeadModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Create</button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1911,18 +2047,38 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
 // CUSTOMER TABLE VIEW (sub-tab of Customers & Leads)
 // ============================================
 function CustomerTableView() {
+  const emptyCustomerForm = {
+    name: '', mobile: '', address: '', cnic: '', email: '',
+    source: '', source_other: '', occupation: '', occupation_other: '',
+    interested_project_id: '', interested_project_other: '', area: '', city: '',
+    country_code: '+92', notes: '', additional_mobiles: ['', '', '', '']
+  };
   const [customers, setCustomers] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [lookupValues, setLookupValues] = useState({
+    [LOOKUP_KEYS.CUSTOMER_SOURCE]: [],
+    [LOOKUP_KEYS.CUSTOMER_OCCUPATION]: []
+  });
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: '', mobile: '', address: '', cnic: '', email: '' });
+  const [form, setForm] = useState(emptyCustomerForm);
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
   const [showDetail, setShowDetail] = useState(null);
 
   useEffect(() => { loadCustomers(); }, []);
   const loadCustomers = async () => {
-    try { const res = await api.get('/customers'); setCustomers(res.data); }
+    try {
+      const [custRes, projRes, lookupRes] = await Promise.all([
+        api.get('/customers'),
+        api.get('/projects').catch(() => ({ data: [] })),
+        fetchLookupValues(api, [LOOKUP_KEYS.CUSTOMER_SOURCE, LOOKUP_KEYS.CUSTOMER_OCCUPATION])
+      ]);
+      setCustomers(custRes.data || []);
+      setProjects(projRes.data || []);
+      setLookupValues(lookupRes);
+    }
     catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -1930,11 +2086,15 @@ function CustomerTableView() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = editing ? await api.put(`/customers/${editing.id}`, form) : await api.post('/customers', form);
+      const payload = {
+        ...form,
+        additional_mobiles: (form.additional_mobiles || []).map(v => String(v || '').trim()).filter(Boolean)
+      };
+      const res = editing ? await api.put(`/customers/${editing.id}`, payload) : await api.post('/customers', payload);
       if (res.data?.warnings?.length) {
         if (window.showToast) res.data.warnings.forEach(w => window.showToast('Duplicate Warning', w, 'warning'));
       }
-      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); loadCustomers();
+      setShowModal(false); setEditing(null); setForm(emptyCustomerForm); loadCustomers();
     } catch (e) {
       if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Error', 'error');
       else alert(e.response?.data?.detail || 'Error');
@@ -1960,7 +2120,29 @@ function CustomerTableView() {
     }
   };
 
-  const openEdit = (c) => { setEditing(c); setForm({ name: c.name, mobile: c.mobile, address: c.address || '', cnic: c.cnic || '', email: c.email || '' }); setShowModal(true); };
+  const openEdit = (c) => {
+    const additionalMobiles = [...(c.additional_mobiles || []), '', '', '', ''].slice(0, 4);
+    setEditing(c);
+    setForm({
+      name: c.name || '',
+      mobile: c.mobile || '',
+      address: c.address || '',
+      cnic: c.cnic || '',
+      email: c.email || '',
+      source: c.source || '',
+      source_other: c.source_other || '',
+      occupation: c.occupation || '',
+      occupation_other: c.occupation_other || '',
+      interested_project_id: c.interested_project_id || '',
+      interested_project_other: c.interested_project_other || '',
+      area: c.area || '',
+      city: c.city || '',
+      country_code: c.country_code || '+92',
+      notes: c.notes || '',
+      additional_mobiles: additionalMobiles
+    });
+    setShowModal(true);
+  };
 
   const handleImport = async () => {
     if (!importFile) return;
@@ -1973,12 +2155,17 @@ function CustomerTableView() {
     try { const res = await api.get(`/customers/${c.id}/details`); setShowDetail(res.data); }
     catch (e) { console.error(e); }
   };
+  const updateMobile = (index, value) => {
+    const mobiles = [...(form.additional_mobiles || ['', '', '', ''])];
+    mobiles[index] = value;
+    setForm({...form, additional_mobiles: mobiles});
+  };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">{customers.length} customers</p>
-        <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', address: '', cnic: '', email: '' }); setShowModal(true); }}
+        <button onClick={() => { setEditing(null); setForm(emptyCustomerForm); setShowModal(true); }}
           className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Customer</button>
       </div>
 
@@ -1989,6 +2176,8 @@ function CustomerTableView() {
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">ID</th>
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Name</th>
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Mobile</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Source</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">City</th>
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">CNIC</th>
               <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Actions</th>
             </tr></thead>
@@ -2001,6 +2190,8 @@ function CustomerTableView() {
                     {c.email && <div className="text-xs text-gray-400">{c.email}</div>}
                   </td>
                   <td className="px-6 py-4 text-sm">{c.mobile}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{c.source || '-'}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{c.city || '-'}</td>
                   <td className="px-6 py-4 text-sm text-gray-500">{c.cnic || '-'}</td>
                   <td className="px-6 py-4 text-right">
                     <button onClick={() => openEdit(c)} className="text-gray-400 hover:text-gray-600 mr-3">Edit</button>
@@ -2021,10 +2212,51 @@ function CustomerTableView() {
         <Modal title={editing ? 'Edit Customer' : 'Add Customer'} onClose={() => setShowModal(false)}>
           <form onSubmit={handleSubmit} className="space-y-4">
             <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
-            <Input label="Mobile" required value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} placeholder="0300-1234567" />
+            <PhoneInput label="Mobile" required value={form.mobile} onChange={value => setForm({...form, mobile: value})} />
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Additional Mobile 1" value={form.additional_mobiles[0] || ''} onChange={e => updateMobile(0, e.target.value)} />
+              <Input label="Additional Mobile 2" value={form.additional_mobiles[1] || ''} onChange={e => updateMobile(1, e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Additional Mobile 3" value={form.additional_mobiles[2] || ''} onChange={e => updateMobile(2, e.target.value)} />
+              <Input label="Additional Mobile 4" value={form.additional_mobiles[3] || ''} onChange={e => updateMobile(3, e.target.value)} />
+            </div>
             <Input label="CNIC" value={form.cnic} onChange={e => setForm({...form, cnic: e.target.value})} />
             <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
+                <select value={form.source} onChange={e => setForm({...form, source: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select source</option>
+                  {(lookupValues[LOOKUP_KEYS.CUSTOMER_SOURCE] || []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Occupation</label>
+                <select value={form.occupation} onChange={e => setForm({...form, occupation: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select occupation</option>
+                  {(lookupValues[LOOKUP_KEYS.CUSTOMER_OCCUPATION] || []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </div>
+            </div>
+            {form.source === 'Other' && <Input label="Source (Other)" value={form.source_other} onChange={e => setForm({...form, source_other: e.target.value})} />}
+            {form.occupation === 'Other' && <Input label="Occupation (Other)" value={form.occupation_other} onChange={e => setForm({...form, occupation_other: e.target.value})} />}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Interested Project</label>
+                <select value={form.interested_project_id} onChange={e => setForm({...form, interested_project_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select project</option>
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <Input label="Interested Project (Other)" value={form.interested_project_other} onChange={e => setForm({...form, interested_project_other: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Area" value={form.area} onChange={e => setForm({...form, area: e.target.value})} />
+              <Input label="City" value={form.city} onChange={e => setForm({...form, city: e.target.value})} />
+            </div>
             <Input label="Address" value={form.address} onChange={e => setForm({...form, address: e.target.value})} />
+            <Input label="Notes" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} />
             <div className="flex justify-end gap-3 pt-4">
               <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
               <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">{editing ? 'Update' : 'Create'}</button>
@@ -2847,6 +3079,11 @@ function InteractionsView() {
 function CampaignsView() {
   const [campaigns, setCampaigns] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [lookupValues, setLookupValues] = useState({
+    [LOOKUP_KEYS.CUSTOMER_SOURCE]: [],
+    [LOOKUP_KEYS.CUSTOMER_OCCUPATION]: []
+  });
   const [summary, setSummary] = useState(null);
   const [reps, setReps] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2854,7 +3091,7 @@ function CampaignsView() {
   const [showLeadModal, setShowLeadModal] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
   const [campaignForm, setCampaignForm] = useState({ name: '', source: 'facebook', start_date: '', budget: '', notes: '' });
-  const [leadForm, setLeadForm] = useState({ name: '', mobile: '', email: '', assigned_rep_id: '', lead_type: 'prospect', notes: '' });
+  const [leadForm, setLeadForm] = useState(emptyEnhancedLead);
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
   const [stages, setStages] = useState([]);
@@ -2863,16 +3100,20 @@ function CampaignsView() {
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
     try {
-      const [cmpRes, sumRes, repRes, stgRes] = await Promise.all([
+      const [cmpRes, sumRes, repRes, stgRes, projRes, lookupRes] = await Promise.all([
         api.get('/campaigns').catch(() => ({ data: [] })),
         api.get('/campaigns/summary').catch(() => ({ data: { total_campaigns: 0, active_campaigns: 0, total_leads: 0, converted_leads: 0, total_budget: 0, conversion_rate: 0 } })),
         api.get('/company-reps').catch(() => ({ data: [] })),
-        api.get('/pipeline-stages').catch(() => ({ data: [] }))
+        api.get('/pipeline-stages').catch(() => ({ data: [] })),
+        api.get('/projects').catch(() => ({ data: [] })),
+        fetchLookupValues(api, [LOOKUP_KEYS.CUSTOMER_SOURCE, LOOKUP_KEYS.CUSTOMER_OCCUPATION])
       ]);
       setCampaigns(cmpRes.data || []);
       setSummary(sumRes.data);
       setReps(repRes.data || []);
       setStages(stgRes.data || []);
+      setProjects(projRes.data || []);
+      setLookupValues(lookupRes);
     } catch (e) { console.error(e); setSummary({ total_campaigns: 0, active_campaigns: 0, total_leads: 0, converted_leads: 0, total_budget: 0, conversion_rate: 0 }); }
     finally { setLoading(false); }
   };
@@ -2898,9 +3139,14 @@ function CampaignsView() {
   const handleLeadSubmit = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/leads', { ...leadForm, campaign_id: selectedCampaign?.id });
+      const payload = {
+        ...leadForm,
+        campaign_id: selectedCampaign?.id,
+        additional_mobiles: (leadForm.additional_mobiles || []).map(v => String(v || '').trim()).filter(Boolean)
+      };
+      await api.post('/leads', payload);
       setShowLeadModal(false);
-      setLeadForm({ name: '', mobile: '', email: '', assigned_rep_id: '', notes: '' });
+      setLeadForm(emptyEnhancedLead);
       if (selectedCampaign) loadLeads(selectedCampaign);
       loadData();
       if (window.showToast) window.showToast('Success', 'Lead created successfully', 'success');
@@ -2954,6 +3200,11 @@ function CampaignsView() {
         : `New ${convertTo} created (${res.data.entity_id})`;
       if (window.showToast) window.showToast('Synced', msg, 'success');
     } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Sync failed', 'error'); }
+  };
+  const updateMobile = (index, value) => {
+    const mobiles = [...(leadForm.additional_mobiles || ['', '', '', ''])];
+    mobiles[index] = value;
+    setLeadForm({...leadForm, additional_mobiles: mobiles});
   };
 
   return (
@@ -3090,6 +3341,8 @@ function CampaignsView() {
                     <th className="text-left py-2 px-2 text-xs text-gray-500">Contact</th>
                     <th className="text-left py-2 px-2 text-xs text-gray-500">Rep</th>
                     <th className="text-left py-2 px-2 text-xs text-gray-500">Type</th>
+                    <th className="text-left py-2 px-2 text-xs text-gray-500">Source</th>
+                    <th className="text-left py-2 px-2 text-xs text-gray-500">City</th>
                     <th className="text-left py-2 px-2 text-xs text-gray-500">Stage</th>
                     <th className="text-right py-2 px-2 text-xs text-gray-500">Sync</th>
                   </tr></thead>
@@ -3113,6 +3366,8 @@ function CampaignsView() {
                             l.lead_type === 'broker' ? 'bg-purple-50 text-purple-700' : 'bg-gray-100'
                           }`}>{l.lead_type || 'prospect'}</span>
                         </td>
+                        <td className="py-2 px-2 text-gray-600">{l.source || '-'}</td>
+                        <td className="py-2 px-2 text-gray-600">{l.city || '-'}</td>
                         <td className="py-2 px-2">
                           <select value={l.pipeline_stage || 'New'} onChange={e => updateLeadStage(l, e.target.value)}
                             className="text-xs rounded px-2 py-1 border"
@@ -3175,8 +3430,16 @@ function CampaignsView() {
           <form onSubmit={handleLeadSubmit} className="space-y-4">
             <Input label="Name" required value={leadForm.name} onChange={e => setLeadForm({...leadForm, name: e.target.value})} />
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Mobile" value={leadForm.mobile} onChange={e => setLeadForm({...leadForm, mobile: e.target.value})} />
+              <PhoneInput label="Mobile" value={leadForm.mobile} onChange={value => setLeadForm({...leadForm, mobile: value})} />
               <Input label="Email" type="email" value={leadForm.email} onChange={e => setLeadForm({...leadForm, email: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Additional Mobile 1" value={leadForm.additional_mobiles[0] || ''} onChange={e => updateMobile(0, e.target.value)} />
+              <Input label="Additional Mobile 2" value={leadForm.additional_mobiles[1] || ''} onChange={e => updateMobile(1, e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Additional Mobile 3" value={leadForm.additional_mobiles[2] || ''} onChange={e => updateMobile(2, e.target.value)} />
+              <Input label="Additional Mobile 4" value={leadForm.additional_mobiles[3] || ''} onChange={e => updateMobile(3, e.target.value)} />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Lead Type</label>
@@ -3192,6 +3455,41 @@ function CampaignsView() {
                   {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
               </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
+                <select value={leadForm.source} onChange={e => setLeadForm({...leadForm, source: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select source</option>
+                  {(lookupValues[LOOKUP_KEYS.CUSTOMER_SOURCE] || []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Occupation</label>
+                <select value={leadForm.occupation} onChange={e => setLeadForm({...leadForm, occupation: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select occupation</option>
+                  {(lookupValues[LOOKUP_KEYS.CUSTOMER_OCCUPATION] || []).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </div>
+            </div>
+            {leadForm.source === 'Other' && <Input label="Source (Other)" value={leadForm.source_other} onChange={e => setLeadForm({...leadForm, source_other: e.target.value})} />}
+            {leadForm.occupation === 'Other' && <Input label="Occupation (Other)" value={leadForm.occupation_other} onChange={e => setLeadForm({...leadForm, occupation_other: e.target.value})} />}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Interested Project</label>
+                <select value={leadForm.interested_project_id} onChange={e => setLeadForm({...leadForm, interested_project_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select project</option>
+                  <option value="other">Other</option>
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              {leadForm.interested_project_id === 'other' ? (
+                <Input label="Interested Project (Other)" value={leadForm.interested_project_other} onChange={e => setLeadForm({...leadForm, interested_project_other: e.target.value})} />
+              ) : <div />}
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Area" value={leadForm.area} onChange={e => setLeadForm({...leadForm, area: e.target.value})} />
+              <Input label="City" value={leadForm.city} onChange={e => setLeadForm({...leadForm, city: e.target.value})} />
             </div>
             <Input label="Notes" value={leadForm.notes} onChange={e => setLeadForm({...leadForm, notes: e.target.value})} />
             <div className="flex justify-end gap-3 pt-4">
@@ -5530,7 +5828,7 @@ function SettingsView() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: '', mobile: '', email: '', role: 'user', password: '' });
+  const [form, setForm] = useState({ name: '', mobile: '', email: '', role: 'user', rep_type: 'direct_rep', title: '', reports_to: '', password: '' });
   const [settingsTab, setSettingsTab] = useState('reps');
   const [deletionRequests, setDeletionRequests] = useState([]);
   const [pendingCount, setPendingCount] = useState(0);
@@ -5584,7 +5882,7 @@ function SettingsView() {
     try {
       if (editing) { await api.put(`/company-reps/${editing.id}`, form); }
       else { await api.post('/company-reps', form); }
-      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', password: '' }); loadReps();
+      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', rep_type: 'direct_rep', title: '', reports_to: '', password: '' }); loadReps();
     } catch (e) { alert(e.response?.data?.detail || 'Error'); }
   };
 
@@ -5607,7 +5905,7 @@ function SettingsView() {
     }
   };
 
-  const openEdit = (r) => { setEditing(r); setForm({ name: r.name, mobile: r.mobile || '', email: r.email || '', role: r.role || 'user', password: '' }); setShowModal(true); };
+  const openEdit = (r) => { setEditing(r); setForm({ name: r.name, mobile: r.mobile || '', email: r.email || '', role: r.role || 'user', rep_type: r.rep_type || 'direct_rep', title: r.title || '', reports_to: r.reports_to || '', password: '' }); setShowModal(true); };
 
   return (
     <div className="space-y-6">
@@ -5653,6 +5951,10 @@ function SettingsView() {
             <button onClick={() => setSettingsTab('search-audit')}
               className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'search-audit' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
               Search Audit
+            </button>
+            <button onClick={() => setSettingsTab('lookup-values')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'lookup-values' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              Lookup Values
             </button>
           </>
         )}
@@ -5746,6 +6048,7 @@ function SettingsView() {
       {settingsTab === 'pipeline-stages' && <PipelineStagesSettings />}
       {settingsTab === 'lead-assignments' && <LeadAssignmentsSettings />}
       {settingsTab === 'search-audit' && <SearchAuditSettings />}
+      {settingsTab === 'lookup-values' && <LookupValuesSettings />}
 
       {settingsTab === 'reps' && (
       <div className="bg-white rounded-2xl shadow-sm border p-6">
@@ -5754,7 +6057,7 @@ function SettingsView() {
             <h3 className="text-lg font-semibold text-gray-900">Company Representatives</h3>
             <p className="text-sm text-gray-500">Sales reps that handle transactions</p>
           </div>
-          <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', password: '' }); setShowModal(true); }}
+          <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', rep_type: 'direct_rep', title: '', reports_to: '', password: '' }); setShowModal(true); }}
             className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Rep</button>
         </div>
 
@@ -5769,9 +6072,10 @@ function SettingsView() {
                     <span className="text-xs font-mono text-gray-400">{r.rep_id}</span>
                     <span className={`px-2 py-0.5 rounded-full text-xs ${r.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.status}</span>
                     <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700">{r.role || 'user'}</span>
+                    <span className="px-2 py-0.5 rounded-full text-xs bg-indigo-50 text-indigo-700">{r.rep_type || 'direct_rep'}</span>
                   </div>
                   <div className="font-medium text-gray-900">{r.name}</div>
-                  <div className="text-sm text-gray-500">{r.mobile} {r.email && `• ${r.email}`}</div>
+                  <div className="text-sm text-gray-500">{r.mobile} {r.email && `• ${r.email}`} {r.title && `• ${r.title}`}</div>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => openEdit(r)} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">Edit</button>
@@ -5790,6 +6094,26 @@ function SettingsView() {
               <Input label="Name" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
               <Input label="Mobile" value={form.mobile} onChange={e => setForm({...form, mobile: e.target.value})} />
               <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Rep Type</label>
+                  <select value={form.rep_type || 'direct_rep'} onChange={e => setForm({...form, rep_type: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-1 focus:ring-gray-900">
+                    <option value="direct_rep">Direct</option>
+                    <option value="indirect_rep">Indirect</option>
+                    <option value="both">Both</option>
+                  </select>
+                </div>
+                <Input label="Title" value={form.title || ''} onChange={e => setForm({...form, title: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reports To</label>
+                <select value={form.reports_to || ''} onChange={e => setForm({...form, reports_to: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-1 focus:ring-gray-900">
+                  <option value="">None</option>
+                  {reps.filter(r => !editing || r.id !== editing.id).map(r => <option key={r.id} value={r.rep_id || r.id}>{r.name}</option>)}
+                </select>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
                 <select value={form.role || 'user'} onChange={e => setForm({...form, role: e.target.value})}
@@ -6380,6 +6704,104 @@ function SearchAuditSettings() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// SETTINGS: LOOKUP VALUES
+// ============================================
+function LookupValuesSettings() {
+  const [category, setCategory] = useState(LOOKUP_KEYS.CUSTOMER_SOURCE);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [value, setValue] = useState('');
+  const [editingId, setEditingId] = useState(null);
+
+  useEffect(() => { loadValues(); }, [category]);
+  const loadValues = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/lookup-values?category=${encodeURIComponent(category)}`);
+      const rows = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+      setItems(rows);
+    } catch (e) {
+      console.error(e);
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!value.trim()) return;
+    try {
+      if (editingId) {
+        await api.put(`/lookup-values/${editingId}`, { label: value.trim() });
+      } else {
+        await api.post('/lookup-values', { category, label: value.trim() });
+      }
+      setValue('');
+      setEditingId(null);
+      loadValues();
+    } catch (e2) {
+      alert(e2.response?.data?.detail || 'Failed to save lookup value');
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this lookup value?')) return;
+    try {
+      await api.delete(`/lookup-values/${id}`);
+      loadValues();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Failed to delete lookup value');
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border p-6 space-y-4">
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900">Lookup Values</h3>
+        <p className="text-sm text-gray-500">Manage admin-controlled dropdown options for customer and lead forms.</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+          <select value={category} onChange={e => setCategory(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+            <option value={LOOKUP_KEYS.CUSTOMER_SOURCE}>Customer Source</option>
+            <option value={LOOKUP_KEYS.CUSTOMER_OCCUPATION}>Customer Occupation</option>
+          </select>
+        </div>
+        <div className="md:col-span-2">
+          <form onSubmit={handleSubmit} className="flex gap-2">
+            <input
+              value={value}
+              onChange={e => setValue(e.target.value)}
+              placeholder="Add new value"
+              className="flex-1 border rounded-lg px-3 py-2 text-sm"
+            />
+            <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">{editingId ? 'Update' : 'Add'}</button>
+            {editingId && <button type="button" onClick={() => { setEditingId(null); setValue(''); }} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>}
+          </form>
+        </div>
+      </div>
+      {loading ? <Loader /> : (
+        <div className="divide-y rounded-lg border bg-white">
+          {items.length === 0 ? (
+            <div className="p-4 text-sm text-gray-400">No values configured.</div>
+          ) : items.map((row) => (
+            <div key={row.id || row.label} className="p-3 flex items-center justify-between">
+              <span className="text-sm">{row.label}</span>
+              <div className="flex gap-2">
+                <button onClick={() => { setEditingId(row.id); setValue(row.label || ''); }} className="text-sm px-2 py-1 border rounded">Edit</button>
+                <button onClick={() => handleDelete(row.id)} className="text-sm px-2 py-1 border rounded text-red-600">Delete</button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
