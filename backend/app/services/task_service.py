@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
 logger = logging.getLogger(__name__)
+_task_type_normalization_done = False
 
 # ============== Status Configuration per Task Type ==============
 STATUS_CONFIG = {
@@ -387,6 +388,22 @@ class TaskService:
     def __init__(self):
         self.entity_extractor = TaskEntityExtractor()
 
+    def _normalize_task_types_once(self, db: Session):
+        """One-time lowercase normalization for legacy task_type values."""
+        global _task_type_normalization_done
+        if _task_type_normalization_done:
+            return
+        from app.main import Task
+        try:
+            db.query(Task).filter(Task.task_type.isnot(None), Task.task_type != func.lower(Task.task_type)).update(
+                {Task.task_type: func.lower(Task.task_type)},
+                synchronize_session=False
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        _task_type_normalization_done = True
+
     def create_task(self, db: Session, creator_id, title, description=None,
                     task_type="general", priority="medium", assignee_id=None,
                     due_date=None, department=None,
@@ -395,6 +412,8 @@ class TaskService:
         """Create a task via direct API."""
         from app.main import Task, CompanyRep, create_notification
 
+        task_type = (task_type or "general").lower()
+        priority = (priority or "medium").lower()
         resolved_department = department or TASK_TYPE_DEPARTMENT.get(task_type)
 
         task = Task(
@@ -486,7 +505,7 @@ class TaskService:
             if cust:
                 linked_customer_id = cust.id
 
-        task_type = entities['task_type']
+        task_type = (entities['task_type'] or "general").lower()
         department = TASK_TYPE_DEPARTMENT.get(task_type)
 
         task = Task(
@@ -588,6 +607,7 @@ class TaskService:
                   assignee_only=False, limit=50, offset=0, current_rep_id=None):
         """Get tasks with filters. Uses reporting hierarchy for visibility."""
         from app.main import Task
+        self._normalize_task_types_once(db)
         query = db.query(Task)
 
         if user_id:
@@ -617,7 +637,7 @@ class TaskService:
         if department:
             query = query.filter(Task.department == department)
         if task_type:
-            query = query.filter(Task.task_type == task_type)
+            query = query.filter(func.lower(Task.task_type) == task_type.lower())
         if search:
             search_term = f"%{search}%"
             query = query.filter(
@@ -629,6 +649,7 @@ class TaskService:
     def get_my_tasks(self, db: Session, user_id):
         """Get tasks assigned to current user."""
         from app.main import Task
+        self._normalize_task_types_once(db)
         user_uuid = user_id if isinstance(user_id, uuid_lib.UUID) else uuid_lib.UUID(str(user_id))
         return db.query(Task).filter(Task.assignee_id == user_uuid).order_by(Task.created_at.desc()).all()
 
@@ -641,7 +662,7 @@ class TaskService:
         if not task:
             raise ValueError("Task not found")
 
-        valid_statuses = STATUS_CONFIG.get(task.task_type, STATUS_CONFIG["general"])
+        valid_statuses = STATUS_CONFIG.get((task.task_type or "").lower(), STATUS_CONFIG["general"])
         if new_status not in valid_statuses:
             raise ValueError(f"Invalid status '{new_status}' for task type '{task.task_type}'. Valid: {', '.join(valid_statuses)}")
 
@@ -693,7 +714,7 @@ class TaskService:
             raise ValueError("Task not found")
 
         terminal = "completed"
-        valid_statuses = STATUS_CONFIG.get(task.task_type, STATUS_CONFIG["general"])
+        valid_statuses = STATUS_CONFIG.get((task.task_type or "").lower(), STATUS_CONFIG["general"])
         for s in TERMINAL_STATUSES:
             if s in valid_statuses:
                 terminal = s
@@ -791,6 +812,7 @@ class TaskService:
     def get_task_summary(self, db: Session, user_id=None, role=None, current_rep_id=None):
         """Get task dashboard summary (flat structure for frontend)."""
         from app.main import Task
+        self._normalize_task_types_once(db)
 
         query = db.query(Task)
 
@@ -837,6 +859,7 @@ class TaskService:
         """Build an organized executive summary grouped by direct reports.
         CEO sees entire org. CFO sees own chain. Each person grouped with their tasks."""
         from app.main import CompanyRep, Task, TaskActivity
+        self._normalize_task_types_once(db)
 
         current = db.query(CompanyRep).filter(CompanyRep.rep_id == current_rep_id).first()
         if not current:

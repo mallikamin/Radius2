@@ -3004,8 +3004,8 @@ function InteractionsView() {
       const payload = {
         company_rep_id: form.company_rep_id,
         interaction_type: form.interaction_type,
-        status: form.status,
-        notes: form.notes,
+        status: form.status || null,
+        notes: form.notes || null,
         next_follow_up: form.next_follow_up || null
       };
       if (selectedEntityType === 'customer') payload.customer_id = selectedEntity.id;
@@ -3013,6 +3013,7 @@ function InteractionsView() {
       else if (selectedEntityType === 'lead') payload.lead_id = selectedEntity.id;
 
       await api.post('/interactions', payload);
+      if (window.showToast) window.showToast('Interaction Logged', `${form.interaction_type} with ${selectedEntity.name} recorded`, 'success');
       setShowModal(false);
       setForm({ company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '' });
       setSelectedEntity(null);
@@ -3074,7 +3075,7 @@ function InteractionsView() {
               <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Type</th>
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Follow-up</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Date</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Date & Time</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {interactions.map(i => (
@@ -3093,7 +3094,7 @@ function InteractionsView() {
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">{i.status || '-'}</td>
                   <td className="px-6 py-4 text-sm">{i.next_follow_up || '-'}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{new Date(i.created_at).toLocaleDateString()}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{new Date(i.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
                 </tr>
               ))}
             </tbody>
@@ -5227,7 +5228,7 @@ function ReportsView() {
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 border-b">
                         <tr>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date & Time</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Type</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Rep</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
@@ -5238,7 +5239,7 @@ function ReportsView() {
                       <tbody className="divide-y">
                         {customerReport.interactions.history.map((interaction, idx) => (
                           <tr key={idx} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 text-xs">{new Date(interaction.date).toLocaleDateString()}</td>
+                            <td className="px-4 py-3 text-xs">{new Date(interaction.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
                             <td className="px-4 py-3">{interaction.type}</td>
                             <td className="px-4 py-3">{interaction.rep_name || '-'}</td>
                             <td className="px-4 py-3">
@@ -5867,7 +5868,7 @@ function ReportsView() {
                       <table className="w-full text-sm">
                         <thead className="bg-gray-50 border-b">
                           <tr>
-                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date</th>
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date & Time</th>
                             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Type</th>
                             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Rep</th>
                             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Status</th>
@@ -5878,7 +5879,7 @@ function ReportsView() {
                         <tbody className="divide-y">
                           {brokerReport.interactions.history.map((interaction, idx) => (
                             <tr key={idx} className="hover:bg-gray-50">
-                              <td className="px-4 py-3 text-xs">{new Date(interaction.date).toLocaleDateString()}</td>
+                              <td className="px-4 py-3 text-xs">{new Date(interaction.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
                               <td className="px-4 py-3">{interaction.type}</td>
                               <td className="px-4 py-3">{interaction.rep_name || '-'}</td>
                               <td className="px-4 py-3">
@@ -7469,6 +7470,7 @@ function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
       else if (entity.entity_type === 'lead') payload.lead_id = entity.id;
 
       await api.post('/interactions', payload);
+      if (window.showToast) window.showToast('Interaction Logged', `${form.interaction_type} with ${entity.name} recorded`, 'success');
       if (onSuccess) onSuccess();
     } catch (e) {
       alert(e.response?.data?.detail || 'Error logging interaction');

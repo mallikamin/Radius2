@@ -545,10 +545,10 @@ class Task(Base):
     task_id = Column(String(20), unique=True)
     title = Column(String(300), nullable=False)
     description = Column(Text)
-    task_type = Column(String(30), default="GENERAL")
+    task_type = Column(String(30), default="general")
     department = Column(String(30))
-    priority = Column(String(10), default="MEDIUM")
-    status = Column(String(30), default="TODO")
+    priority = Column(String(10), default="medium")
+    status = Column(String(30), default="pending")
     assignee_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"), nullable=False)
     delegated_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
@@ -2930,8 +2930,8 @@ async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = Non
                     task = Task(
                         title=f"Follow up with {primary_dup['name']} — showed interest in {campaign_name or 'campaign'}",
                         description=f"Duplicate detected during bulk import. {name} (mobile: {mobile}) matches: {dup_summary}. Campaign: {campaign_name or 'N/A'}.",
-                        task_type="FOLLOW_UP",
-                        priority="HIGH",
+                        task_type="follow_up",
+                        priority="high",
                         status="pending",
                         assignee_id=assignee.id,
                         created_by=current_user.id,
