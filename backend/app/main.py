@@ -622,15 +622,31 @@ class QueryFeedback(Base):
 # HELPER FUNCTIONS
 # ============================================
 def normalize_mobile(mobile):
-    """Normalize Pakistan mobile number for duplicate detection"""
+    """Normalize Pakistan mobile number for duplicate detection.
+    All variants collapse to canonical 03XXXXXXXXX form:
+      03001239856 → 03001239856
+      3001239856  → 03001239856
+      +923001239856 → 03001239856
+      923001239856  → 03001239856
+      +92 300-123-9856 → 03001239856
+    """
     if not mobile:
         return None
-    m = mobile.strip().replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
-    if m.startswith("+92"):
-        m = "0" + m[3:]
+    # Strip everything except digits and leading +
+    m = mobile.strip()
+    has_plus = m.startswith("+")
+    m = "".join(c for c in m if c.isdigit())
+    if not m:
+        return None
+    # +92... or 92... prefix → strip to local
+    if has_plus and m.startswith("92"):
+        m = m[2:]
     elif m.startswith("92") and len(m) > 10:
-        m = "0" + m[2:]
-    return m if m else None
+        m = m[2:]
+    # Ensure leading 0 for Pakistani mobiles (3xx → 03xx)
+    if len(m) == 10 and m[0] == "3":
+        m = "0" + m
+    return m
 
 def create_notification(db, user_rep_id, notif_type, title, message, category=None, entity_type=None, entity_id=None, data=None):
     """Helper to create a notification record"""
@@ -699,7 +715,7 @@ def notify_duplicate_attempt(db, duplicates, attempted_by_user, action_type, cam
                       "duplicate_count": len(duplicates), "campaign": campaign_name}
             )
 
-def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id=None, exclude_broker_id=None):
+def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id=None, exclude_broker_id=None, include_converted=False):
     """Check if mobile exists in customers, leads, or brokers tables. Returns list of matches."""
     if not mobile:
         return []
@@ -714,19 +730,25 @@ def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id
     stripped_broker = func.regexp_replace(Broker.mobile, '[^0-9]', '', 'g')
     matches = []
     # Check customers via SQL
-    cust_q = db.query(Customer).filter(Customer.mobile.isnot(None), stripped_cust.like(f"%{suffix}%"))
+    cust_q = db.query(Customer, CompanyRep).outerjoin(
+        CompanyRep, Customer.assigned_rep_id == CompanyRep.id
+    ).filter(Customer.mobile.isnot(None), stripped_cust.like(f"%{suffix}%"))
     if exclude_customer_id:
         cust_q = cust_q.filter(Customer.id != exclude_customer_id)
-    for c in cust_q.all():
+    for c, rep in cust_q.all():
         if normalize_mobile(c.mobile) == normalized:
             matches.append({
                 "type": "customer", "id": str(c.id), "entity_id": c.customer_id,
-                "name": c.name, "mobile": c.mobile
+                "name": c.name, "mobile": c.mobile,
+                "assigned_rep": rep.name if rep else None,
+                "assigned_rep_id": rep.rep_id if rep else None
             })
     # Check leads via SQL
     lead_q = db.query(Lead, CompanyRep).outerjoin(
         CompanyRep, Lead.assigned_rep_id == CompanyRep.id
-    ).filter(Lead.status != "converted", Lead.mobile.isnot(None), stripped_lead.like(f"%{suffix}%"))
+    ).filter(Lead.mobile.isnot(None), stripped_lead.like(f"%{suffix}%"))
+    if not include_converted:
+        lead_q = lead_q.filter(Lead.status != "converted")
     if exclude_lead_id:
         lead_q = lead_q.filter(Lead.id != exclude_lead_id)
     for l, rep in lead_q.all():
@@ -784,14 +806,18 @@ def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id
         pass
 
     # Check brokers via SQL
-    broker_q = db.query(Broker).filter(Broker.mobile.isnot(None), stripped_broker.like(f"%{suffix}%"))
+    broker_q = db.query(Broker, CompanyRep).outerjoin(
+        CompanyRep, Broker.assigned_rep_id == CompanyRep.id
+    ).filter(Broker.mobile.isnot(None), stripped_broker.like(f"%{suffix}%"))
     if exclude_broker_id:
         broker_q = broker_q.filter(Broker.id != exclude_broker_id)
-    for b in broker_q.all():
+    for b, rep in broker_q.all():
         if normalize_mobile(b.mobile) == normalized:
             matches.append({
                 "type": "broker", "id": str(b.id), "entity_id": b.broker_id,
-                "name": b.name, "mobile": b.mobile
+                "name": b.name, "mobile": b.mobile,
+                "assigned_rep": rep.name if rep else None,
+                "assigned_rep_id": rep.rep_id if rep else None
             })
     return matches
 
@@ -812,8 +838,8 @@ def get_rep_isolation_filter(current_user, db):
     if role in ("admin", "cco"):
         return {"isolated": False}
 
-    # rep_type NULL = legacy user, no isolation (backward compat)
-    if not rep_type:
+    # rep_type NULL or 'none' = non-sales / legacy user, no isolation
+    if not rep_type or rep_type == "none":
         return {"isolated": False}
 
     # Build team: self + direct reports for managers
@@ -1453,6 +1479,9 @@ def get_customer(cid: str, db: Session = Depends(get_db),
 @app.post("/api/customers")
 def create_customer(data: dict, db: Session = Depends(get_db),
                     current_user: CompanyRep = Depends(get_current_user)):
+    # Normalize primary mobile
+    if data.get("mobile"):
+        data["mobile"] = normalize_mobile(data["mobile"]) or data["mobile"]
     if db.query(Customer).filter(Customer.mobile == data["mobile"]).first():
         raise HTTPException(400, f"Customer with mobile {data['mobile']} already exists")
     # Check for duplicate mobile in leads + additional mobiles
@@ -2634,7 +2663,8 @@ def create_lead(data: dict, db: Session = Depends(get_db),
             rep = db.query(CompanyRep).filter((CompanyRep.id == data["assigned_rep_id"]) | (CompanyRep.rep_id == data["assigned_rep_id"])).first()
 
         # Check for duplicates — block creation if mobile matches existing record
-        mobile = data.get("mobile", "").strip() if data.get("mobile") else ""
+        raw_mobile = data.get("mobile", "").strip() if data.get("mobile") else ""
+        mobile = normalize_mobile(raw_mobile) or raw_mobile
         if mobile:
             dupes = check_duplicate_mobile(db, mobile)
             if dupes:
@@ -2720,10 +2750,10 @@ async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = Non
             name = row.get('name', row.get('name*', '')).strip()
             if not name: results["errors"].append(f"Row {i}: Name required"); continue
 
-            mobile = (row.get('mobile') or '').strip()
-            # Check for duplicates if mobile provided
+            mobile = normalize_mobile((row.get('mobile') or '').strip()) or (row.get('mobile') or '').strip()
+            # Check for duplicates if mobile provided (include converted leads to find best owner)
             if mobile:
-                dupes = check_duplicate_mobile(db, mobile)
+                dupes = check_duplicate_mobile(db, mobile, include_converted=True)
                 if dupes:
                     for dup in dupes:
                         results["duplicates"].append({
@@ -2733,28 +2763,35 @@ async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = Non
                             "system_assigned_rep": dup.get("assigned_rep") or "N/A"
                         })
                         all_dup_records.append(dup)
-                        # Auto-create follow-up task for the owner rep
-                        owner_rep_id = dup.get("assigned_rep_id")
-                        if owner_rep_id:
-                            owner_rep = db.query(CompanyRep).filter(CompanyRep.rep_id == owner_rep_id).first()
-                            if owner_rep:
-                                task = Task(
-                                    title=f"Follow up with {dup['name']} — showed interest in {campaign_name or 'campaign'}",
-                                    description=f"Duplicate detected during bulk import. {name} (mobile: {mobile}) matches existing {dup['type']} {dup['entity_id']}. Campaign: {campaign_name or 'N/A'}.",
-                                    task_type="FOLLOW_UP",
-                                    priority="HIGH",
-                                    status="TODO",
-                                    assignee_id=owner_rep.id,
-                                    created_by=current_user.id,
-                                    due_date=date.today() + timedelta(days=2)
-                                )
-                                db.add(task)
-                                create_notification(
-                                    db, owner_rep_id, "follow_up",
-                                    f"New interest: {dup['name']}",
-                                    f"{name} showed interest in {campaign_name or 'campaign'}. A follow-up task has been auto-created.",
-                                    category="lead", entity_type="lead", entity_id=dup["entity_id"]
-                                )
+                    # Create ONE task per duplicate row — find best assignee across all matches
+                    best_rep = None
+                    for dup in dupes:
+                        rid = dup.get("assigned_rep_id")
+                        if rid:
+                            best_rep = db.query(CompanyRep).filter(CompanyRep.rep_id == rid).first()
+                            if best_rep:
+                                break
+                    assignee = best_rep or current_user
+                    primary_dup = dupes[0]
+                    dup_summary = ", ".join(f"{d['type']} {d['entity_id']}" for d in dupes)
+                    task = Task(
+                        title=f"Follow up with {primary_dup['name']} — showed interest in {campaign_name or 'campaign'}",
+                        description=f"Duplicate detected during bulk import. {name} (mobile: {mobile}) matches: {dup_summary}. Campaign: {campaign_name or 'N/A'}.",
+                        task_type="FOLLOW_UP",
+                        priority="HIGH",
+                        status="pending",
+                        assignee_id=assignee.id,
+                        created_by=current_user.id,
+                        due_date=date.today() + timedelta(days=2)
+                    )
+                    db.add(task)
+                    notify_rep_id = best_rep.rep_id if best_rep else current_user.rep_id
+                    create_notification(
+                        db, notify_rep_id, "follow_up",
+                        f"New interest: {primary_dup['name']}",
+                        f"{name} showed interest in {campaign_name or 'campaign'}. A follow-up task has been auto-created.",
+                        category="lead", entity_type="lead", entity_id=primary_dup["entity_id"]
+                    )
                     continue  # Skip this row
 
             rep = None

@@ -114,6 +114,19 @@ function getUserRole() {
   return 'user';
 }
 
+function downloadCSV(data, filename) {
+  if (!data || !data.length) return;
+  const headers = Object.keys(data[0]);
+  const csvRows = [headers.join(',')];
+  for (const row of data) {
+    csvRows.push(headers.map(h => `"${String(row[h] ?? '').replace(/"/g, '""')}"`).join(','));
+  }
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  window.URL.revokeObjectURL(url);
+}
+
 // ============================================
 // MAIN APP
 // ============================================
@@ -170,19 +183,6 @@ export default function App() {
   };
 
   // CSV download helper for duplicate reports
-  const downloadCSV = (data, filename) => {
-    if (!data || !data.length) return;
-    const headers = Object.keys(data[0]);
-    const csvRows = [headers.join(',')];
-    for (const row of data) {
-      csvRows.push(headers.map(h => `"${String(row[h] ?? '').replace(/"/g, '""')}"`).join(','));
-    }
-    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-    window.URL.revokeObjectURL(url);
-  };
-
   // Toast system
   const addToast = (title, message, type = 'info') => {
     const id = Date.now();
@@ -1785,6 +1785,12 @@ function PipelineView() {
                       style={{ borderColor: stageInfo?.color || '#d1d5db' }}>
                       {allStages.map(s => <option key={s.stage} value={s.stage}>{s.stage}</option>)}
                     </select>
+                    {role === 'admin' && (
+                      <button onClick={() => { if (confirm(`Delete lead "${lead.name}"?`)) api.delete(`/leads/${lead.id}`).then(() => loadPipeline()).catch(e => window.showToast?.('Error', e.response?.data?.detail || 'Delete failed', 'error')); }}
+                        className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete lead">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3206,6 +3212,15 @@ function CampaignsView() {
     mobiles[index] = value;
     setLeadForm({...leadForm, additional_mobiles: mobiles});
   };
+  const role = getUserRole();
+  const deleteLead = async (lead) => {
+    if (!confirm(`Delete lead "${lead.name}" (${lead.lead_id})? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/leads/${lead.id}`);
+      if (selectedCampaign) loadLeads(selectedCampaign);
+      if (window.showToast) window.showToast('Deleted', `Lead ${lead.lead_id} deleted`, 'success');
+    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Delete failed', 'error'); }
+  };
 
   return (
     <div className="space-y-6">
@@ -3345,6 +3360,7 @@ function CampaignsView() {
                     <th className="text-left py-2 px-2 text-xs text-gray-500">City</th>
                     <th className="text-left py-2 px-2 text-xs text-gray-500">Stage</th>
                     <th className="text-right py-2 px-2 text-xs text-gray-500">Sync</th>
+                    {role === 'admin' && <th className="text-right py-2 px-2 text-xs text-gray-500"></th>}
                   </tr></thead>
                   <tbody>
                     {leads.map(l => (
@@ -3387,6 +3403,11 @@ function CampaignsView() {
                             </div>
                           )}
                         </td>
+                        {role === 'admin' && (
+                          <td className="py-2 px-2 text-right">
+                            <button onClick={() => deleteLead(l)} className="text-xs px-2 py-1 text-red-600 hover:bg-red-50 rounded" title="Delete lead">Delete</button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -5828,7 +5849,7 @@ function SettingsView() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name: '', mobile: '', email: '', role: 'user', rep_type: 'direct_rep', title: '', reports_to: '', password: '' });
+  const [form, setForm] = useState({ name: '', mobile: '', email: '', role: 'user', rep_type: '', title: '', reports_to: '', password: '' });
   const [settingsTab, setSettingsTab] = useState('reps');
   const [deletionRequests, setDeletionRequests] = useState([]);
   const [pendingCount, setPendingCount] = useState(0);
@@ -5882,7 +5903,7 @@ function SettingsView() {
     try {
       if (editing) { await api.put(`/company-reps/${editing.id}`, form); }
       else { await api.post('/company-reps', form); }
-      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', rep_type: 'direct_rep', title: '', reports_to: '', password: '' }); loadReps();
+      setShowModal(false); setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', rep_type: '', title: '', reports_to: '', password: '' }); loadReps();
     } catch (e) { alert(e.response?.data?.detail || 'Error'); }
   };
 
@@ -5905,7 +5926,7 @@ function SettingsView() {
     }
   };
 
-  const openEdit = (r) => { setEditing(r); setForm({ name: r.name, mobile: r.mobile || '', email: r.email || '', role: r.role || 'user', rep_type: r.rep_type || 'direct_rep', title: r.title || '', reports_to: r.reports_to || '', password: '' }); setShowModal(true); };
+  const openEdit = (r) => { setEditing(r); setForm({ name: r.name, mobile: r.mobile || '', email: r.email || '', role: r.role || 'user', rep_type: r.rep_type || '', title: r.title || '', reports_to: r.reports_to || '', password: '' }); setShowModal(true); };
 
   return (
     <div className="space-y-6">
@@ -6057,7 +6078,7 @@ function SettingsView() {
             <h3 className="text-lg font-semibold text-gray-900">Company Representatives</h3>
             <p className="text-sm text-gray-500">Sales reps that handle transactions</p>
           </div>
-          <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', rep_type: 'direct_rep', title: '', reports_to: '', password: '' }); setShowModal(true); }}
+          <button onClick={() => { setEditing(null); setForm({ name: '', mobile: '', email: '', role: 'user', rep_type: '', title: '', reports_to: '', password: '' }); setShowModal(true); }}
             className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Rep</button>
         </div>
 
@@ -6072,7 +6093,7 @@ function SettingsView() {
                     <span className="text-xs font-mono text-gray-400">{r.rep_id}</span>
                     <span className={`px-2 py-0.5 rounded-full text-xs ${r.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.status}</span>
                     <span className="px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700">{r.role || 'user'}</span>
-                    <span className="px-2 py-0.5 rounded-full text-xs bg-indigo-50 text-indigo-700">{r.rep_type || 'direct_rep'}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs ${r.rep_type ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>{r.rep_type || 'non-sales'}</span>
                   </div>
                   <div className="font-medium text-gray-900">{r.name}</div>
                   <div className="text-sm text-gray-500">{r.mobile} {r.email && `• ${r.email}`} {r.title && `• ${r.title}`}</div>
@@ -6097,8 +6118,9 @@ function SettingsView() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Rep Type</label>
-                  <select value={form.rep_type || 'direct_rep'} onChange={e => setForm({...form, rep_type: e.target.value})}
+                  <select value={form.rep_type || ''} onChange={e => setForm({...form, rep_type: e.target.value})}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-1 focus:ring-gray-900">
+                    <option value="">None (Non-sales)</option>
                     <option value="direct_rep">Direct</option>
                     <option value="indirect_rep">Indirect</option>
                     <option value="both">Both</option>
