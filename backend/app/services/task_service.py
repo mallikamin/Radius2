@@ -116,6 +116,54 @@ TITLE_TO_NAME = {
     'ahsen': 'Ahsan Ejaz', 'ahsaan': 'Ahsan Ejaz', 'ihsan': 'Ahsan Ejaz',
     'axan': 'Ahsan Ejaz', 'ejaz': 'Ahsan Ejaz', 'aijaz': 'Ahsan Ejaz',
     'ehsaan': 'Ahsan Ejaz', 'ahson': 'Ahsan Ejaz',
+    # ── Iram Riaz (Director Project Sales, REP-0014) ──
+    'iram riaz': 'Iram Riaz', 'irum riaz': 'Iram Riaz', 'airam riaz': 'Iram Riaz',
+    'eram riaz': 'Iram Riaz', 'riaz': 'Iram Riaz',
+    'director iram': 'Iram Riaz', 'director project sales': 'Iram Riaz',
+    # ── Imran Younas (Director Project Sales, REP-0015) ──
+    'imran': 'Imran Younas', 'imran younas': 'Imran Younas', 'imraan': 'Imran Younas',
+    'emran': 'Imran Younas', 'imren': 'Imran Younas', 'umran': 'Imran Younas',
+    'younas': 'Imran Younas', 'yunas': 'Imran Younas', 'younus': 'Imran Younas',
+    # ── Samia Rashid (Sr. Manager, REP-0016) ──
+    'samia': 'Samia Rashid', 'samia rashid': 'Samia Rashid', 'saamia': 'Samia Rashid',
+    'samiya': 'Samia Rashid', 'sumia': 'Samia Rashid', 'samea': 'Samia Rashid',
+    'rashid': 'Samia Rashid', 'rasheed': 'Samia Rashid',
+    # ── Syed Naeem Abbass Zaidi (Sr. Manager, REP-0017) ──
+    'naeem': 'Syed Naeem Abbass Zaidi', 'syed naeem': 'Syed Naeem Abbass Zaidi',
+    'naeem zaidi': 'Syed Naeem Abbass Zaidi', 'nayeem': 'Syed Naeem Abbass Zaidi',
+    'naim': 'Syed Naeem Abbass Zaidi', 'neem': 'Syed Naeem Abbass Zaidi',
+    'naeem abbas': 'Syed Naeem Abbass Zaidi', 'naeem abbass': 'Syed Naeem Abbass Zaidi',
+    # ── Syed Ali Zaib Zaidi (Sr. Manager, REP-0018) ──
+    'ali zaib': 'Syed Ali Zaib Zaidi', 'syed ali zaib': 'Syed Ali Zaib Zaidi',
+    'ali zaidi': 'Syed Ali Zaib Zaidi', 'ali zeb': 'Syed Ali Zaib Zaidi',
+    'alizaib': 'Syed Ali Zaib Zaidi', 'ali zab': 'Syed Ali Zaib Zaidi',
+    'ali zaib zaidi': 'Syed Ali Zaib Zaidi',
+    # ── Iram Aslam (Sr. Manager, REP-0019) ──
+    'iram aslam': 'Iram Aslam', 'irum aslam': 'Iram Aslam', 'airam aslam': 'Iram Aslam',
+    'eram aslam': 'Iram Aslam', 'aslam': 'Iram Aslam',
+    'manager iram': 'Iram Aslam',
+}
+
+# Ambiguous first-name variants that need context-aware resolution
+# Maps variant → list of possible full names
+AMBIGUOUS_NAMES = {
+    'iram': ['Iram Riaz', 'Iram Aslam'],
+    'irum': ['Iram Riaz', 'Iram Aslam'],
+    'airam': ['Iram Riaz', 'Iram Aslam'],
+    'eram': ['Iram Riaz', 'Iram Aslam'],
+}
+
+# Org hierarchy for disambiguation: rep_name → { reports_to, role_level }
+# role_level: higher number = more senior (used for CCO/Director→Manager routing)
+REP_HIERARCHY = {
+    'Syed Faisal':       {'reports_to': None,          'role_level': 4, 'title': 'CCO'},
+    'Iram Riaz':         {'reports_to': 'Syed Faisal', 'role_level': 3, 'title': 'Director'},
+    'Imran Younas':      {'reports_to': 'Syed Faisal', 'role_level': 3, 'title': 'Director'},
+    'Waqar':             {'reports_to': 'Iram Riaz',   'role_level': 2, 'title': 'Sales'},
+    'Samia Rashid':      {'reports_to': 'Iram Riaz',   'role_level': 2, 'title': 'Manager'},
+    'Syed Naeem Abbass Zaidi': {'reports_to': 'Iram Riaz', 'role_level': 2, 'title': 'Manager'},
+    'Syed Ali Zaib Zaidi':     {'reports_to': 'Imran Younas', 'role_level': 2, 'title': 'Manager'},
+    'Iram Aslam':        {'reports_to': 'Imran Younas', 'role_level': 2, 'title': 'Manager'},
 }
 
 PRIORITY_KEYWORDS = {
@@ -134,10 +182,60 @@ TASK_TYPE_KEYWORDS = {
 }
 
 
+def _disambiguate_name(variant: str, candidates: list, text_lower: str, creator_name: str = None) -> str:
+    """
+    Resolve ambiguous first names (e.g., 'iram') using contextual rules:
+    1. Self-exclusion: can't assign to yourself
+    2. Direct reports: manager assigns to their own subordinate
+    3. Hierarchy level: senior assigns to next-level-down peer with that name
+    4. Title hints in text: "director iram" vs "manager iram"
+    """
+    if len(candidates) < 2:
+        return candidates[0] if candidates else variant.title()
+
+    # Rule 0: Check for title hints in the text itself
+    for candidate in candidates:
+        info = REP_HIERARCHY.get(candidate, {})
+        title = info.get('title', '').lower()
+        if title and title in text_lower:
+            return candidate
+
+    # Rule 1: Self-exclusion — if creator is one of the candidates, pick the other
+    if creator_name:
+        non_self = [c for c in candidates if c != creator_name]
+        if len(non_self) == 1:
+            return non_self[0]
+
+        # Rule 2: Direct report — if creator is the manager of exactly one candidate
+        direct_reports = [c for c in candidates if REP_HIERARCHY.get(c, {}).get('reports_to') == creator_name]
+        if len(direct_reports) == 1:
+            return direct_reports[0]
+
+        # Rule 3: Hierarchy level — senior person assigns down, not laterally
+        creator_info = REP_HIERARCHY.get(creator_name, {})
+        creator_level = creator_info.get('role_level', 0)
+        if creator_level > 0:
+            # From higher level, pick the candidate closest below
+            below = [(c, REP_HIERARCHY.get(c, {}).get('role_level', 0)) for c in candidates]
+            below_sorted = sorted([b for b in below if b[1] < creator_level], key=lambda x: x[1], reverse=True)
+            if len(below_sorted) == 1:
+                return below_sorted[0][0]
+            # If multiple at same level, pick the one in creator's reporting chain
+            if below_sorted:
+                for cand, _ in below_sorted:
+                    if REP_HIERARCHY.get(cand, {}).get('reports_to') == creator_name:
+                        return cand
+                return below_sorted[0][0]
+
+    # Fallback: return the more senior candidate (higher role_level)
+    ranked = sorted(candidates, key=lambda c: REP_HIERARCHY.get(c, {}).get('role_level', 0), reverse=True)
+    return ranked[0]
+
+
 class TaskEntityExtractor:
     """Extract task-related entities from voice/text commands."""
 
-    def extract(self, text: str) -> Dict[str, Any]:
+    def extract(self, text: str, creator_name: str = None) -> Dict[str, Any]:
         text_lower = text.lower()
         entities = {
             'assignee_name': None, 'assignee_role': None,
@@ -148,10 +246,21 @@ class TaskEntityExtractor:
         }
 
         # Extract role/assignee — check title-to-name mapping first
-        for keyword, name in TITLE_TO_NAME.items():
+        # Use longest-match-first to prefer "director iram" over "iram"
+        sorted_keywords = sorted(TITLE_TO_NAME.keys(), key=len, reverse=True)
+        for keyword in sorted_keywords:
             if keyword in text_lower:
-                entities['assignee_name'] = name
+                entities['assignee_name'] = TITLE_TO_NAME[keyword]
                 break
+
+        # If no exact match, check ambiguous first names with context disambiguation
+        if not entities['assignee_name']:
+            for variant, candidates in AMBIGUOUS_NAMES.items():
+                if variant in text_lower:
+                    entities['assignee_name'] = _disambiguate_name(
+                        variant, candidates, text_lower, creator_name
+                    )
+                    break
 
         # If no title match, check role keywords for fallback
         if not entities['assignee_name']:
@@ -330,7 +439,12 @@ class TaskService:
         """Create a task from voice/text command."""
         from app.main import Task, CompanyRep, Customer, Project, Inventory, create_notification
 
-        entities = self.entity_extractor.extract(text)
+        # Resolve creator name for disambiguation context
+        creator_uuid = creator_id if isinstance(creator_id, uuid_lib.UUID) else uuid_lib.UUID(str(creator_id))
+        creator_rep = db.query(CompanyRep).filter(CompanyRep.id == creator_uuid).first()
+        creator_name = creator_rep.name if creator_rep else None
+
+        entities = self.entity_extractor.extract(text, creator_name=creator_name)
 
         # Find assignee
         assignee = None

@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Query, Fo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, Boolean, text, or_, and_, case, literal
+from sqlalchemy import create_engine, Column, String, Text, DateTime, Numeric, ForeignKey, Integer, Date, Boolean, text, or_, and_, case, literal, union_all
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from sqlalchemy.sql import func
@@ -26,6 +26,7 @@ import httpx
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+_interaction_target_indexes_ready = False
 
 # ============================================
 # DATABASE SETUP
@@ -2326,6 +2327,158 @@ def update_installment(iid: str, data: dict, db: Session = Depends(get_db)):
 # ============================================
 # INTERACTIONS API
 # ============================================
+def ensure_interaction_target_search_indexes(db: Session):
+    global _interaction_target_indexes_ready
+    if _interaction_target_indexes_ready:
+        return
+    statements = [
+        "CREATE INDEX IF NOT EXISTS idx_customers_mobile ON customers(mobile)",
+        "CREATE INDEX IF NOT EXISTS idx_brokers_mobile ON brokers(mobile)",
+        "CREATE INDEX IF NOT EXISTS idx_leads_mobile ON leads(mobile)",
+        "CREATE INDEX IF NOT EXISTS idx_leads_name ON leads(LOWER(name))",
+    ]
+    for stmt in statements:
+        try:
+            db.execute(text(stmt))
+            db.commit()
+        except Exception:
+            db.rollback()
+    _interaction_target_indexes_ready = True
+
+
+@app.get("/api/interactions/targets/search")
+def search_interaction_targets(
+    entity_type: str = Query(...),
+    q: str = Query(...),
+    limit: int = 15,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user),
+):
+    et = (entity_type or "").strip().lower()
+    if et not in {"customer", "broker", "lead"}:
+        raise HTTPException(400, "entity_type must be customer, broker, or lead")
+
+    query_text = (q or "").strip()
+    if len(query_text) < 2:
+        raise HTTPException(400, "q must be at least 2 characters")
+
+    limit = max(1, min(int(limit), 50))
+    offset = max(0, int(offset))
+
+    ensure_interaction_target_search_indexes(db)
+
+    iso = get_rep_isolation_filter(current_user, db)
+    q_lower = query_text.lower()
+    q_digits = "".join(ch for ch in query_text if ch.isdigit())
+
+    if et == "customer":
+        base = db.query(
+            Customer.id.label("id"),
+            Customer.customer_id.label("entity_id"),
+            literal("customer").label("entity_type"),
+            Customer.name.label("name"),
+            Customer.mobile.label("mobile"),
+            Customer.city.label("city"),
+            literal(None).cast(String).label("source"),
+            literal(None).cast(String).label("company"),
+            literal(None).cast(String).label("assigned_rep"),
+        )
+        if iso["isolated"]:
+            rt = iso["rep_type"]
+            if rt == "indirect":
+                return []
+            base = base.filter(Customer.assigned_rep_id.in_(iso["team_rep_uuids"]))
+        id_col = Customer.customer_id
+        mobile_col = Customer.mobile
+        name_col = Customer.name
+    elif et == "broker":
+        base = db.query(
+            Broker.id.label("id"),
+            Broker.broker_id.label("entity_id"),
+            literal("broker").label("entity_type"),
+            Broker.name.label("name"),
+            Broker.mobile.label("mobile"),
+            literal(None).cast(String).label("city"),
+            literal(None).cast(String).label("source"),
+            Broker.company.label("company"),
+            literal(None).cast(String).label("assigned_rep"),
+        )
+        if iso["isolated"]:
+            rt = iso["rep_type"]
+            if rt == "direct":
+                return []
+            base = base.filter(Broker.assigned_rep_id.in_(iso["team_rep_uuids"]))
+        id_col = Broker.broker_id
+        mobile_col = Broker.mobile
+        name_col = Broker.name
+    else:
+        base = db.query(
+            Lead.id.label("id"),
+            Lead.lead_id.label("entity_id"),
+            literal("lead").label("entity_type"),
+            Lead.name.label("name"),
+            Lead.mobile.label("mobile"),
+            Lead.city.label("city"),
+            Lead.source.label("source"),
+            literal(None).cast(String).label("company"),
+            CompanyRep.name.label("assigned_rep"),
+        ).outerjoin(CompanyRep, Lead.assigned_rep_id == CompanyRep.id)
+        # Hide converted leads — once a lead becomes a customer, interactions go on the customer record
+        base = base.filter(or_(Lead.converted_customer_id.is_(None), Lead.status != "converted"))
+        if iso["isolated"]:
+            base = base.filter(Lead.assigned_rep_id.in_(iso["team_rep_uuids"]))
+        id_col = Lead.lead_id
+        mobile_col = Lead.mobile
+        name_col = Lead.name
+
+    mobile_digits_col = func.regexp_replace(func.coalesce(mobile_col, ""), "[^0-9]", "", "g")
+    if q_digits:
+        exact_mobile_cond = or_(mobile_col == query_text, mobile_digits_col == q_digits)
+        prefix_mobile_cond = or_(mobile_col.ilike(f"{query_text}%"), mobile_digits_col.like(f"{q_digits}%"))
+    else:
+        exact_mobile_cond = mobile_col == query_text
+        prefix_mobile_cond = mobile_col.ilike(f"{query_text}%")
+
+    name_partial_cond = func.lower(func.coalesce(name_col, "")).like(f"%{q_lower}%")
+    id_partial_cond = func.lower(func.coalesce(id_col, "")).like(f"%{q_lower}%")
+
+    exact_q = base.filter(exact_mobile_cond).add_columns(literal(1).label("priority"))
+    prefix_q = base.filter(prefix_mobile_cond, ~exact_mobile_cond).add_columns(literal(2).label("priority"))
+    name_q = base.filter(name_partial_cond, ~exact_mobile_cond, ~prefix_mobile_cond).add_columns(literal(3).label("priority"))
+    id_q = base.filter(id_partial_cond, ~exact_mobile_cond, ~prefix_mobile_cond, ~name_partial_cond).add_columns(literal(4).label("priority"))
+
+    ranked = union_all(
+        exact_q.statement,
+        prefix_q.statement,
+        name_q.statement,
+        id_q.statement,
+    ).alias("ranked_targets")
+
+    rows = (
+        db.query(ranked)
+        .order_by(ranked.c.priority.asc(), ranked.c.name.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "id": str(r.id),
+            "entity_id": r.entity_id,
+            "entity_type": r.entity_type,
+            "name": r.name,
+            "mobile": r.mobile,
+            "city": r.city,
+            "source": r.source,
+            "company": r.company,
+            "assigned_rep": r.assigned_rep,
+        }
+        for r in rows
+    ]
+
+
 @app.get("/api/interactions")
 def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: str = None,
                       lead_id: str = None, limit: int = 100, db: Session = Depends(get_db),
@@ -8222,6 +8375,7 @@ def get_leads_pipeline(rep_id: str = None, campaign_id: str = None,
             "is_stale": bool(l.is_stale),
             "converted_customer_id": str(l.converted_customer_id) if l.converted_customer_id else None,
             "converted_broker_id": str(l.converted_broker_id) if l.converted_broker_id else None,
+            "source": l.source, "source_details": l.source_details,
             "notes": l.notes, "created_at": str(l.created_at)
         }
 

@@ -1625,6 +1625,7 @@ function PipelineView() {
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [assignRepId, setAssignRepId] = useState('');
   const [showLeadDetail, setShowLeadDetail] = useState(null);
+  const [logTarget, setLogTarget] = useState(null);
   const [showAddLeadModal, setShowAddLeadModal] = useState(false);
   const [newLeadForm, setNewLeadForm] = useState(emptyEnhancedLead);
   const role = getUserRole();
@@ -1771,15 +1772,32 @@ function PipelineView() {
                         {lead.converted_customer_id && lead.status !== 'converted' && <span className="px-1.5 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">Customer</span>}
                         {lead.converted_broker_id && lead.status !== 'converted' && <span className="px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded-full">Broker</span>}
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                      <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 flex-wrap">
                         {lead.mobile && <span>{lead.mobile}</span>}
-                        {lead.campaign_name && <span>via {lead.campaign_name}</span>}
+                        {(lead.source || lead.campaign_name) && (
+                          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded font-medium">
+                            {lead.source || lead.campaign_name}{lead.source_details ? ` — ${lead.source_details}` : lead.campaign_source ? ` (${lead.campaign_source})` : ''}
+                          </span>
+                        )}
                         {lead.assigned_rep && <span>Rep: {lead.assigned_rep}</span>}
                         {lead.days_since_contact !== null && <span>{lead.days_since_contact}d ago</span>}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setLogTarget({
+                        id: lead.id,
+                        entity_type: 'lead',
+                        name: lead.name,
+                        mobile: lead.mobile,
+                        defaultRepId: lead.assigned_rep_id || ''
+                      })}
+                      className="py-1 px-2 text-xs border rounded-lg hover:bg-blue-50 text-blue-600"
+                      title="Log Interaction"
+                    >
+                      Log
+                    </button>
                     <select value={lead.pipeline_stage} onChange={e => handleStageChange(lead.id, e.target.value)}
                       className="px-2 py-1 text-xs border rounded-lg bg-white"
                       style={{ borderColor: stageInfo?.color || '#d1d5db' }}>
@@ -1800,6 +1818,18 @@ function PipelineView() {
       )}
 
       {/* Lead Detail Modal */}
+      {logTarget && (
+        <QuickLogModal
+          entity={logTarget}
+          defaultRepId={logTarget.defaultRepId}
+          onClose={() => setLogTarget(null)}
+          onSuccess={() => {
+            setLogTarget(null);
+            loadPipeline();
+            if (window.showToast) window.showToast('Logged', 'Interaction recorded', 'success');
+          }}
+        />
+      )}
       {showLeadDetail && <LeadDetailModal lead={showLeadDetail} onClose={() => { setShowLeadDetail(null); loadPipeline(); }}
         stages={allStages} reps={reps} />}
       {showAddLeadModal && (
@@ -2072,6 +2102,7 @@ function CustomerTableView() {
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
   const [showDetail, setShowDetail] = useState(null);
+  const [logTarget, setLogTarget] = useState(null); // for quick interaction logging
 
   useEffect(() => { loadCustomers(); }, []);
   const loadCustomers = async () => {
@@ -2200,6 +2231,8 @@ function CustomerTableView() {
                   <td className="px-6 py-4 text-sm text-gray-500">{c.city || '-'}</td>
                   <td className="px-6 py-4 text-sm text-gray-500">{c.cnic || '-'}</td>
                   <td className="px-6 py-4 text-right">
+                    <button onClick={() => setLogTarget({ id: c.id, entity_type: 'customer', name: c.name, mobile: c.mobile })}
+                      className="text-gray-400 hover:text-blue-600 mr-3" title="Log Interaction">Log</button>
                     <button onClick={() => openEdit(c)} className="text-gray-400 hover:text-gray-600 mr-3">Edit</button>
                     {getUserRole() !== 'creator' && (
                       <button onClick={() => handleDelete(c)} className="text-gray-400 hover:text-red-500">{getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}</button>
@@ -2281,6 +2314,14 @@ function CustomerTableView() {
       )}
 
       {showDetail && <CustomerDetailModal customer={showDetail} onClose={() => setShowDetail(null)} />}
+
+      {logTarget && (
+        <QuickLogModal
+          entity={logTarget}
+          onClose={() => setLogTarget(null)}
+          onSuccess={() => { setLogTarget(null); if (window.showToast) window.showToast('Logged', 'Interaction recorded', 'success'); }}
+        />
+      )}
     </div>
   );
 }
@@ -2297,6 +2338,7 @@ function BrokersView() {
   const [form, setForm] = useState({ name: '', mobile: '', company: '', commission_rate: 2 });
   const [importFile, setImportFile] = useState(null);
   const [importResult, setImportResult] = useState(null);
+  const [logTarget, setLogTarget] = useState(null);
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
@@ -2420,6 +2462,8 @@ function BrokersView() {
                 <span className="font-medium">{b.stats.total_deals}</span>
               </div>
               <div className="flex gap-2 mt-4">
+                <button onClick={() => setLogTarget({ id: b.id, entity_type: 'broker', name: b.name, mobile: b.mobile })}
+                  className="py-2 px-3 text-sm border rounded-lg hover:bg-blue-50 text-blue-600" title="Log Interaction">Log</button>
                 <button onClick={() => openEdit(b)} className="flex-1 py-2 text-sm border rounded-lg hover:bg-gray-50">Edit</button>
                 {getUserRole() !== 'creator' && (
                   <button onClick={() => handleDelete(b)} className="py-2 px-4 text-sm text-red-500 border rounded-lg hover:bg-red-50">{getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}</button>
@@ -2454,6 +2498,14 @@ function BrokersView() {
             </div>
           )}
         </Modal>
+      )}
+
+      {logTarget && (
+        <QuickLogModal
+          entity={logTarget}
+          onClose={() => setLogTarget(null)}
+          onSuccess={() => { setLogTarget(null); if (window.showToast) window.showToast('Logged', 'Interaction recorded', 'success'); }}
+        />
       )}
     </div>
   );
@@ -2920,40 +2972,51 @@ function InteractionsView() {
   const [interactions, setInteractions] = useState([]);
   const [summary, setSummary] = useState(null);
   const [reps, setReps] = useState([]);
-  const [customers, setCustomers] = useState([]);
-  const [brokers, setBrokers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({
-    company_rep_id: '', customer_id: '', broker_id: '',
-    interaction_type: 'call', status: '', notes: '', next_follow_up: ''
+    company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: ''
   });
+  const [selectedEntityType, setSelectedEntityType] = useState('customer');
+  const [selectedEntity, setSelectedEntity] = useState(null);
+
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
     try {
-      const [intRes, sumRes, repRes, custRes, brkRes] = await Promise.all([
+      const [intRes, sumRes, repRes] = await Promise.all([
         api.get('/interactions', { params: { limit: 50 } }),
         api.get('/interactions/summary'),
-        api.get('/company-reps'),
-        api.get('/customers'),
-        api.get('/brokers')
+        api.get('/company-reps')
       ]);
       setInteractions(intRes.data);
       setSummary(sumRes.data);
       setReps(repRes.data);
-      setCustomers(custRes.data);
-      setBrokers(brkRes.data);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!selectedEntity) { alert('Please select a contact'); return; }
     try {
-      await api.post('/interactions', form);
+      const payload = {
+        company_rep_id: form.company_rep_id,
+        interaction_type: form.interaction_type,
+        status: form.status,
+        notes: form.notes,
+        next_follow_up: form.next_follow_up || null
+      };
+      if (selectedEntityType === 'customer') payload.customer_id = selectedEntity.id;
+      else if (selectedEntityType === 'broker') payload.broker_id = selectedEntity.id;
+      else if (selectedEntityType === 'lead') payload.lead_id = selectedEntity.id;
+
+      await api.post('/interactions', payload);
       setShowModal(false);
-      setForm({ company_rep_id: '', customer_id: '', broker_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '' });
+      setForm({ company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '' });
+      setSelectedEntity(null);
+      setSelectedEntityType('customer');
       loadData();
     } catch (e) { alert(e.response?.data?.detail || 'Error'); }
   };
@@ -2963,7 +3026,12 @@ function InteractionsView() {
       <div className="flex items-center justify-between">
         <div><h2 className="text-2xl font-semibold text-gray-900">Interactions</h2>
           <p className="text-sm text-gray-500 mt-1">Track rep communications</p></div>
-        <button onClick={() => setShowModal(true)} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Log Interaction</button>
+        <button onClick={() => {
+          setForm(f => ({ ...f, company_rep_id: currentUser.id || '' }));
+          setSelectedEntity(null);
+          setSelectedEntityType('customer');
+          setShowModal(true);
+        }} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Log Interaction</button>
       </div>
 
       {summary && (
@@ -3042,26 +3110,23 @@ function InteractionsView() {
                 {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div><label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
-                <select value={form.customer_id} onChange={e => setForm({...form, customer_id: e.target.value, broker_id: e.target.value ? '' : form.broker_id})} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="">Select Customer</option>
-                  {customers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.mobile})</option>)}
-                </select>
-              </div>
-              <div><label className="block text-xs font-medium text-gray-500 mb-1">Or Broker</label>
-                <select value={form.broker_id} onChange={e => setForm({...form, broker_id: e.target.value, customer_id: e.target.value ? '' : form.customer_id})} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="">Select Broker</option>
-                  {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-              </div>
-            </div>
+
+            <EntitySearchSelect
+              value={selectedEntity}
+              onChange={setSelectedEntity}
+              entityType={selectedEntityType}
+              onEntityTypeChange={setSelectedEntityType}
+              showTypeSelector={true}
+            />
+
             <div className="grid grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
                 <select required value={form.interaction_type} onChange={e => setForm({...form, interaction_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="call">📞 Call</option>
-                  <option value="message">💬 Message</option>
-                  <option value="whatsapp">📱 WhatsApp</option>
+                  <option value="call">Call</option>
+                  <option value="message">Message</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="meeting">Meeting</option>
+                  <option value="site_visit">Site Visit</option>
                 </select>
               </div>
               <Input label="Status" value={form.status} onChange={e => setForm({...form, status: e.target.value})} placeholder="e.g., Interested, Not available" />
@@ -3070,7 +3135,7 @@ function InteractionsView() {
             <Input label="Next Follow-up" type="date" value={form.next_follow_up} onChange={e => setForm({...form, next_follow_up: e.target.value})} />
             <div className="flex justify-end gap-3 pt-4">
               <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
-              <button type="submit" className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg">Log</button>
+              <button type="submit" disabled={!selectedEntity} className={`px-4 py-2 text-sm rounded-lg ${selectedEntity ? 'bg-gray-900 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}>Log</button>
             </div>
           </form>
         </Modal>
@@ -7186,6 +7251,285 @@ function BrokerDetailModal({ broker, onClose }) {
 // ============================================
 // SHARED COMPONENTS
 // ============================================
+
+// EntitySearchSelect — type-first async search for customers/brokers/leads
+// Used by InteractionsView, InteractionLogModal, and per-row quick log actions
+function EntitySearchSelect({ value, onChange, entityType, onEntityTypeChange, disabled, showTypeSelector = true }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const debounceRef = useRef(null);
+  const wrapperRef = useRef(null);
+  const inputRef = useRef(null);
+  const PAGE_SIZE = 15;
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => { if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // Reset when entity type changes
+  useEffect(() => {
+    setQuery(''); setResults([]); setOffset(0); setOpen(false);
+    if (value) onChange(null);
+  }, [entityType]);
+
+  const searchTargets = async (q, newOffset = 0, append = false) => {
+    if (!q || q.length < 2 || !entityType) return;
+    setLoading(true);
+    try {
+      const res = await api.get('/interactions/targets/search', {
+        params: { entity_type: entityType, q, limit: PAGE_SIZE, offset: newOffset }
+      });
+      const data = res.data || [];
+      if (append) setResults(prev => [...prev, ...data]);
+      else setResults(data);
+      setHasMore(data.length === PAGE_SIZE);
+      setOffset(newOffset);
+      if (!append) setHighlightIdx(0);
+    } catch (e) { console.error('Search failed:', e); }
+    finally { setLoading(false); }
+  };
+
+  const handleInputChange = (e) => {
+    const q = e.target.value;
+    setQuery(q);
+    if (value) onChange(null); // clear selection when typing
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (q.length >= 2) {
+      setOpen(true);
+      debounceRef.current = setTimeout(() => searchTargets(q), 300);
+    } else {
+      setResults([]); setOpen(false);
+    }
+  };
+
+  const handleSelect = (item) => {
+    onChange(item);
+    setQuery(item.name);
+    setOpen(false);
+  };
+
+  const handleKeyDown = (e) => {
+    if (!open || results.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightIdx(i => Math.min(i + 1, results.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightIdx(i => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter' && results[highlightIdx]) {
+      e.preventDefault();
+      handleSelect(results[highlightIdx]);
+    } else if (e.key === 'Escape') {
+      setOpen(false);
+    }
+  };
+
+  const loadMore = () => {
+    if (!loading && hasMore) searchTargets(query, offset + PAGE_SIZE, true);
+  };
+
+  const typeLabels = { customer: 'Customer', broker: 'Broker', lead: 'Lead' };
+  const typeColors = {
+    customer: 'bg-blue-100 text-blue-700',
+    broker: 'bg-amber-100 text-amber-700',
+    lead: 'bg-purple-100 text-purple-700'
+  };
+
+  return (
+    <div className="space-y-2">
+      {showTypeSelector && (
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Contact Type *</label>
+          <div className="flex gap-2">
+            {['customer', 'broker', 'lead'].map(t => (
+              <button key={t} type="button" disabled={disabled}
+                onClick={() => onEntityTypeChange && onEntityTypeChange(t)}
+                className={`px-3 py-1.5 text-sm rounded-lg border transition-all ${
+                  entityType === t
+                    ? 'bg-gray-900 text-white border-gray-900'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                {typeLabels[t]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div ref={wrapperRef} className="relative">
+        <label className="block text-xs font-medium text-gray-500 mb-1">
+          Search {typeLabels[entityType] || 'Contact'} *
+        </label>
+        <div className="relative">
+          <input ref={inputRef} type="text" value={query} onChange={handleInputChange}
+            onFocus={() => { if (results.length > 0 && !value) setOpen(true); }}
+            onKeyDown={handleKeyDown} disabled={disabled || !entityType}
+            placeholder={entityType ? `Search by name, mobile, or ID...` : 'Select type first'}
+            className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10 pr-8 ${
+              value ? 'border-green-300 bg-green-50' : ''
+            } ${(!entityType || disabled) ? 'bg-gray-50 cursor-not-allowed' : ''}`} />
+          {loading && (
+            <div className="absolute right-2 top-1/2 -translate-y-1/2">
+              <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></div>
+            </div>
+          )}
+          {value && !loading && (
+            <button type="button" onClick={() => { onChange(null); setQuery(''); setResults([]); inputRef.current?.focus(); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">&times;</button>
+          )}
+        </div>
+
+        {/* Selected value chip */}
+        {value && (
+          <div className="mt-1 flex items-center gap-2 px-2 py-1 bg-gray-50 rounded-lg border text-sm">
+            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${typeColors[entityType] || 'bg-gray-100'}`}>
+              {typeLabels[entityType]}
+            </span>
+            <span className="font-medium">{value.name}</span>
+            {value.mobile && <span className="text-gray-400">| {value.mobile}</span>}
+            {value.city && <span className="text-gray-400">| {value.city}</span>}
+            {value.source && <span className="text-gray-400">| {value.source}</span>}
+            {value.company && <span className="text-gray-400">| {value.company}</span>}
+          </div>
+        )}
+
+        {/* Dropdown results */}
+        {open && !value && (
+          <div className="absolute z-50 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+            {results.length === 0 && !loading && query.length >= 2 && (
+              <div className="p-3 text-sm text-gray-400 text-center">No results found</div>
+            )}
+            {results.map((item, idx) => (
+              <button key={item.id} type="button"
+                onClick={() => handleSelect(item)}
+                onMouseEnter={() => setHighlightIdx(idx)}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                  idx === highlightIdx ? 'bg-gray-100' : 'hover:bg-gray-50'
+                }`}>
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium shrink-0 ${typeColors[entityType] || 'bg-gray-100'}`}>
+                  {typeLabels[entityType]}
+                </span>
+                <span className="font-medium truncate">{item.name}</span>
+                <span className="text-gray-400 shrink-0">
+                  {item.city || item.source || item.company || ''}
+                </span>
+                {item.mobile && <span className="text-gray-400 ml-auto shrink-0 font-mono text-xs">{item.mobile}</span>}
+              </button>
+            ))}
+            {hasMore && (
+              <button type="button" onClick={loadMore} disabled={loading}
+                className="w-full py-2 text-xs text-gray-500 hover:text-gray-700 border-t text-center">
+                {loading ? 'Loading...' : 'Load more results'}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// QuickLogModal — lightweight interaction log from per-row actions (Customers, Brokers, Pipeline)
+// entity: { id, entity_type, name, mobile? }
+function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
+  const [reps, setReps] = useState([]);
+  const [form, setForm] = useState({
+    company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: ''
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+
+  useEffect(() => {
+    const repId = defaultRepId || currentUser.id || '';
+    setForm(f => ({ ...f, company_rep_id: repId }));
+    api.get('/company-reps').then(r => setReps(r.data)).catch(() => {});
+  }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const payload = {
+        company_rep_id: form.company_rep_id,
+        interaction_type: form.interaction_type,
+        status: form.status || null,
+        notes: form.notes || null,
+        next_follow_up: form.next_follow_up || null
+      };
+      if (entity.entity_type === 'customer') payload.customer_id = entity.id;
+      else if (entity.entity_type === 'broker') payload.broker_id = entity.id;
+      else if (entity.entity_type === 'lead') payload.lead_id = entity.id;
+
+      await api.post('/interactions', payload);
+      if (onSuccess) onSuccess();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Error logging interaction');
+    }
+    finally { setSubmitting(false); }
+  };
+
+  const role = getUserRole();
+  const canChangeRep = ['admin', 'cco', 'manager'].includes(role);
+
+  return (
+    <Modal title={`Log Interaction — ${entity.name}`} onClose={onClose}>
+      <div className="mb-3 flex items-center gap-2">
+        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+          entity.entity_type === 'customer' ? 'bg-blue-100 text-blue-700' :
+          entity.entity_type === 'broker' ? 'bg-amber-100 text-amber-700' :
+          'bg-purple-100 text-purple-700'
+        }`}>{entity.entity_type}</span>
+        <span className="text-sm font-medium">{entity.name}</span>
+        {entity.mobile && <span className="text-sm text-gray-400">| {entity.mobile}</span>}
+      </div>
+      <form onSubmit={handleSubmit} className="space-y-3">
+        {canChangeRep ? (
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Rep</label>
+            <select value={form.company_rep_id} onChange={e => setForm({...form, company_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">Select Rep</option>
+              {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div className="text-xs text-gray-500">Rep: <span className="font-medium">{currentUser.name || 'You'}</span></div>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
+            <select required value={form.interaction_type} onChange={e => setForm({...form, interaction_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="call">Call</option>
+              <option value="message">Message</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="meeting">Meeting</option>
+              <option value="site_visit">Site Visit</option>
+            </select>
+          </div>
+          <Input label="Status" value={form.status} onChange={e => setForm({...form, status: e.target.value})} placeholder="e.g., Interested" />
+        </div>
+        <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+          <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})}
+            rows={2} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+            placeholder="Call notes..." />
+        </div>
+        <Input label="Next Follow-up" type="date" value={form.next_follow_up} onChange={e => setForm({...form, next_follow_up: e.target.value})} />
+        <div className="flex justify-end gap-3 pt-2">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+          <button type="submit" disabled={submitting} className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg disabled:opacity-50">
+            {submitting ? 'Logging...' : 'Log'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function SummaryCard({ label, value, sub }) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border p-5">
