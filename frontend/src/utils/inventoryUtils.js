@@ -110,13 +110,13 @@ export function exportInventoryToExcel(inventory, plots, filename = 'inventory')
       inv.totalValue || '',
       inv.ratePerMarla || '',
       inv.dimensions || '',
-      inv.owner || '',
+      (typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner) || '',
       inv.status || '',
       inv.factorNotes || '',
       inv.notes || ''
     ]);
   });
-  
+
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(data);
   XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
@@ -146,12 +146,12 @@ export function exportManualPlotsToExcel(plots, inventory, filename = 'manual_pl
       inv.totalValue || '',
       inv.ratePerMarla || '',
       inv.dimensions || '',
-      inv.owner || '',
+      (typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner) || '',
       inv.status || '',
       inv.notes || ''
     ]);
   });
-  
+
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(data);
   XLSX.utils.book_append_sheet(wb, ws, 'Manual Plots');

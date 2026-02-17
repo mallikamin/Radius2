@@ -322,7 +322,7 @@ export default function Sidebar({ vectorState }) {
                 <div className="font-semibold">Plot {plotNum}</div>
                 {inv.marla && <div>Marla: {inv.marla}</div>}
                 {inv.totalValue && <div>Value: {formatCurrency(inv.totalValue)}</div>}
-                {inv.owner && <div>Owner: {inv.owner}</div>}
+                {inv.owner && <div>Owner: {typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner}</div>}
               </div>
             ))}
             {Object.keys(vectorState.inventory).length > 20 && (

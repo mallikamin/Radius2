@@ -221,7 +221,7 @@ function TaskTable({ tasks, loading, onRowClick, onComplete, showComplete }) {
                   <div className="text-sm font-medium text-gray-900">{t.title ?? 'Untitled'}</div>
                   <div className="text-xs text-gray-400 mt-0.5">{t.task_id ?? ''} {t.department ? `/ ${t.department}` : ''}</div>
                 </td>
-                <td className="px-6 py-4 text-sm text-gray-600">{t.assignee_name ?? t.assigned_to_name ?? 'Unassigned'}</td>
+                <td className="px-6 py-4 text-sm text-gray-600">{t.assignee_name ?? t.assigned_to_name ?? 'Unassigned'}{(t.collaborators ?? []).length > 0 && <span className="ml-1 text-xs text-gray-400">+{t.collaborators.length}</span>}</td>
                 <td className="px-6 py-4 text-center">
                   <span className={`px-2 py-1 rounded-full text-xs font-medium border ${PRIORITY_STYLES[t.priority] ?? PRIORITY_STYLES.medium}`}>
                     {(t.priority ?? 'medium').toUpperCase()}</span>
@@ -699,6 +699,7 @@ function CreateTaskModal({ api, reps, addToast, onClose, onCreated }) {
   const [form, setForm] = useState({
     title: '', description: '', type: 'general', priority: 'medium',
     department: '', assigned_to: '', due_date: '', crm_entity_type: '', crm_entity_id: '',
+    collaborators: [],
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -723,6 +724,7 @@ function CreateTaskModal({ api, reps, addToast, onClose, onCreated }) {
       if (form.due_date) fd.append('due_date', form.due_date);
       if (form.crm_entity_type) fd.append('crm_entity_type', form.crm_entity_type);
       if (form.crm_entity_id) fd.append('crm_entity_id', form.crm_entity_id);
+      if (form.collaborators.length > 0) fd.append('collaborator_ids', JSON.stringify(form.collaborators));
       await api.post('/tasks', fd);
       if (addToast) addToast('Success', 'Task created', 'success');
       onCreated();
@@ -765,6 +767,30 @@ function CreateTaskModal({ api, reps, addToast, onClose, onCreated }) {
                 {(reps ?? []).map(r => <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>)}
               </select></div>
           </div>
+          {/* Collaborators */}
+          <div>
+            <label className={labelCls}>Collaborators</label>
+            {form.collaborators.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {form.collaborators.map(cId => {
+                  const rep = (reps ?? []).find(r => r.id === cId);
+                  return (
+                    <span key={cId} className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 text-xs px-2 py-1 rounded-full">
+                      {rep?.name ?? cId}
+                      <button type="button" onClick={() => setForm(f => ({ ...f, collaborators: f.collaborators.filter(id => id !== cId) }))}
+                        className="text-gray-400 hover:text-gray-600 ml-0.5">&times;</button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            <select value="" onChange={e => { if (e.target.value) setForm(f => ({ ...f, collaborators: [...f.collaborators, e.target.value] })); }} className={inputCls}>
+              <option value="">Add collaborator...</option>
+              {(reps ?? []).filter(r => r.id !== form.assigned_to && !form.collaborators.includes(r.id)).map(r => (
+                <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>
+              ))}
+            </select>
+          </div>
           <div><label className={labelCls}>Due Date</label>
             <input type="date" value={form.due_date} onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))} className={inputCls} /></div>
           <div className="grid grid-cols-2 gap-4">
@@ -798,8 +824,12 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
   const [titleDraft, setTitleDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
   const [newSubtask, setNewSubtask] = useState('');
+  const [newSubtaskAssignee, setNewSubtaskAssignee] = useState('');
   const [activeTab, setActiveTab] = useState('comments');
+  const [attachments, setAttachments] = useState([]);
+  const [attachLoading, setAttachLoading] = useState(false);
   const titleRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     const handleEsc = (e) => { if (e.key === 'Escape') { setEditingTitle(false); setEditingDesc(false); onClose(); } };
@@ -808,6 +838,13 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
   }, [onClose]);
 
   useEffect(() => { if (editingTitle && titleRef.current) titleRef.current.focus(); }, [editingTitle]);
+
+  // Polling: refresh task data every 30 seconds while modal is open
+  useEffect(() => {
+    if (!taskId) return;
+    const interval = setInterval(() => { onUpdated(); }, 30000);
+    return () => clearInterval(interval);
+  }, [taskId, onUpdated]);
 
   const task = data?.task ?? data ?? {};
   const comments = data?.comments ?? [];
@@ -850,8 +887,9 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
     if (!newSubtask.trim()) return; setSubmitting(true);
     try {
       const fd = new FormData(); fd.append('title', newSubtask.trim());
+      if (newSubtaskAssignee) fd.append('assignee_id', newSubtaskAssignee);
       await api.post(`/tasks/${taskId}/subtasks`, fd);
-      setNewSubtask(''); onUpdated();
+      setNewSubtask(''); setNewSubtaskAssignee(''); onUpdated();
     } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Failed to create subtask', 'error'); }
     finally { setSubmitting(false); }
   };
@@ -878,7 +916,60 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
     finally { setSubmitting(false); }
   };
 
+  const fetchAttachments = useCallback(async () => {
+    setAttachLoading(true);
+    try {
+      const res = await api.get(`/media/task/${taskId}`);
+      setAttachments(res.data ?? []);
+    } catch { setAttachments([]); }
+    finally { setAttachLoading(false); }
+  }, [api, taskId]);
+
+  useEffect(() => { if (taskId && !loading) fetchAttachments(); }, [taskId, loading, fetchAttachments]);
+
+  const uploadAttachment = async (file) => {
+    if (!file) return;
+    setAttachLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('entity_type', 'task');
+      fd.append('entity_id', taskId);
+      await api.post('/media/upload', fd);
+      if (addToast) addToast('Success', 'File uploaded', 'success');
+      fetchAttachments();
+    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Upload failed', 'error'); }
+    finally { setAttachLoading(false); }
+  };
+
+  const deleteAttachment = async (mediaId) => {
+    if (!confirm('Delete this attachment?')) return;
+    try {
+      await api.delete(`/media/${mediaId}`);
+      if (addToast) addToast('Success', 'Attachment deleted', 'success');
+      fetchAttachments();
+    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Delete failed', 'error'); }
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return 'N/A';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const getFileIcon = (filename) => {
+    const ext = (filename ?? '').split('.').pop()?.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) return '🖼';
+    if (['pdf'].includes(ext)) return '📄';
+    if (['doc', 'docx'].includes(ext)) return '📝';
+    if (['xls', 'xlsx', 'csv'].includes(ext)) return '📊';
+    if (['zip', 'rar', '7z'].includes(ext)) return '📦';
+    return '📎';
+  };
+
   const canDelete = user?.role === 'admin' || user?.role === 'cco' || task.created_by === user?.id;
+  const canDeleteAttachment = user?.role === 'admin' || user?.role === 'cco';
   const completedSubtasks = subtasks.filter(s => s.status === 'completed').length;
 
   // Dropdown styles
@@ -970,7 +1061,15 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
                           {st.status === 'completed' && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                         </button>
                         <span className={`text-sm flex-1 ${st.status === 'completed' ? 'line-through text-gray-400' : 'text-gray-700'}`}>{st.title ?? 'Subtask'}</span>
-                        {st.assignee_name && <span className="text-[10px] text-gray-400 hidden group-hover:inline">{st.assignee_name}</span>}
+                        <span className="text-[10px] text-gray-400 group-hover:hidden">{st.assignee_name ?? 'Unassigned'}</span>
+                        <select className="hidden group-hover:inline-block w-28 text-[10px] text-gray-500 bg-white border border-gray-200 rounded px-1 py-0.5 cursor-pointer focus:outline-none"
+                          value={st.assignee_id ?? ''} onChange={e => {
+                            const fd = new FormData(); fd.append('assignee_id', e.target.value);
+                            api.put(`/tasks/${st.id}`, fd).then(() => onUpdated()).catch(() => { if (addToast) addToast('Error', 'Failed to reassign subtask', 'error'); });
+                          }}>
+                          <option value="">Unassigned</option>
+                          {(reps ?? []).map(r => <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>)}
+                        </select>
                       </div>
                     ))}
                   </div>
@@ -978,6 +1077,11 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
                     <input type="text" placeholder="Add a subtask..." value={newSubtask} onChange={e => setNewSubtask(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSubtask(); } }}
                       className="flex-1 px-3 py-1.5 text-sm border border-dashed border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-solid" />
+                    <select value={newSubtaskAssignee} onChange={e => setNewSubtaskAssignee(e.target.value)}
+                      className="w-32 px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10 bg-white text-gray-600">
+                      <option value="">Assignee</option>
+                      {(reps ?? []).map(r => <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>)}
+                    </select>
                     {newSubtask.trim() && (
                       <button onClick={addSubtask} disabled={submitting}
                         className="px-3 py-1.5 text-xs bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">Add</button>
@@ -985,10 +1089,10 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
                   </div>
                 </div>
 
-                {/* Tabbed: Comments / Activity */}
+                {/* Tabbed: Comments / Activity / Attachments */}
                 <div>
                   <div className="flex gap-1 border-b mb-3">
-                    {[{ id: 'comments', label: `Comments (${comments.length})` }, { id: 'activity', label: 'Activity' }].map(tab => (
+                    {[{ id: 'comments', label: `Comments (${comments.length})` }, { id: 'activity', label: 'Activity' }, { id: 'attachments', label: `Attachments (${attachments.length})` }].map(tab => (
                       <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                         className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${activeTab === tab.id ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
                         {tab.label}
@@ -1029,6 +1133,39 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
                       )) : <div className="text-xs text-gray-400 text-center py-4">No activity yet</div>}
                     </div>
                   )}
+                  {activeTab === 'attachments' && (
+                    <div>
+                      <input type="file" ref={fileInputRef} className="hidden" onChange={e => { if (e.target.files?.[0]) { uploadAttachment(e.target.files[0]); e.target.value = ''; } }} />
+                      <button onClick={() => fileInputRef.current?.click()} disabled={attachLoading}
+                        className="mb-3 px-3 py-2 text-xs font-medium border border-dashed border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 text-gray-500 w-full transition-colors disabled:opacity-50">
+                        {attachLoading ? 'Uploading...' : '+ Upload File'}
+                      </button>
+                      {attachments.length > 0 ? (
+                        <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                          {attachments.map(att => (
+                            <div key={att.id} className="flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-gray-50 group transition-colors">
+                              <span className="text-sm flex-shrink-0">{getFileIcon(att.filename ?? att.file_name)}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm text-gray-700 truncate">{att.filename ?? att.file_name ?? 'File'}</div>
+                                <div className="text-[10px] text-gray-400">{formatFileSize(att.file_size ?? att.size)} {att.uploaded_by_name ? `by ${att.uploaded_by_name}` : ''}</div>
+                              </div>
+                              <a href={att.url ?? att.file_url ?? `/api/media/${att.id}/download`} target="_blank" rel="noopener noreferrer"
+                                className="p-1 text-gray-400 hover:text-blue-600 transition-colors" title="Download"
+                                onClick={e => e.stopPropagation()}>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                              </a>
+                              {canDeleteAttachment && (
+                                <button onClick={() => deleteAttachment(att.id)}
+                                  className="p-1 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all" title="Delete">
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="text-xs text-gray-400 text-center py-4">{attachLoading ? 'Loading...' : 'No attachments yet'}</div>}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1053,6 +1190,36 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
                     className={propSelect}>
                     <option value="">Unassigned</option>
                     {(reps ?? []).map(r => <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>)}
+                  </select>
+                </div>
+                {/* Collaborators */}
+                <div>
+                  <div className="text-[10px] font-medium text-gray-400 uppercase mb-1">Collaborators</div>
+                  <div className="space-y-1 mb-1.5">
+                    {(task.collaborators ?? []).map(c => (
+                      <div key={c.id ?? c.rep_id} className="flex items-center justify-between group px-2 py-1 rounded-md hover:bg-gray-100">
+                        <span className="text-sm text-gray-600 truncate">{c.name ?? c.rep_id ?? 'Unknown'}</span>
+                        <button onClick={() => {
+                          const updatedIds = (task.collaborators ?? []).filter(x => (x.id ?? x.rep_id) !== (c.id ?? c.rep_id)).map(x => x.id ?? x.rep_id);
+                          const fd = new FormData(); fd.append('collaborator_ids', JSON.stringify(updatedIds));
+                          api.put(`/tasks/${taskId}`, fd).then(() => onUpdated()).catch(() => { if (addToast) addToast('Error', 'Failed to remove collaborator', 'error'); });
+                        }} disabled={submitting}
+                          className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity text-xs ml-1">&times;</button>
+                      </div>
+                    ))}
+                    {(task.collaborators ?? []).length === 0 && <div className="text-xs text-gray-400 px-2 py-1">None</div>}
+                  </div>
+                  <select value="" onChange={e => {
+                    if (!e.target.value) return;
+                    const currentIds = (task.collaborators ?? []).map(c => c.id ?? c.rep_id);
+                    const updatedIds = [...currentIds, e.target.value];
+                    const fd = new FormData(); fd.append('collaborator_ids', JSON.stringify(updatedIds));
+                    api.put(`/tasks/${taskId}`, fd).then(() => onUpdated()).catch(() => { if (addToast) addToast('Error', 'Failed to add collaborator', 'error'); });
+                  }} disabled={submitting} className={`${propSelect} text-xs`}>
+                    <option value="">Add...</option>
+                    {(reps ?? []).filter(r => r.id !== (task.assignee_id ?? '') && !(task.collaborators ?? []).some(c => (c.id ?? c.rep_id) === r.id)).map(r => (
+                      <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>
+                    ))}
                   </select>
                 </div>
                 {/* Due Date */}

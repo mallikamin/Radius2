@@ -84,7 +84,7 @@ export function exportPlotDetailsToPDF(plotsToExport, vectorState) {
         yPos += 6;
       }
       if (inv.owner) {
-        doc.text(`Owner: ${inv.owner}`, margin + 5, yPos);
+        doc.text(`Owner: ${typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner}`, margin + 5, yPos);
         yPos += 6;
       }
       if (inv.status) {
@@ -172,7 +172,7 @@ export function exportPlotDetailsToPDF(plotsToExport, vectorState) {
         doc.setTextColor(50, 50, 50);
         doc.text('Owner:', margin + 5, yPos);
         doc.setTextColor(0, 0, 0);
-        doc.text(inv.owner, margin + 35, yPos);
+        doc.text(typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner, margin + 35, yPos);
         yPos += 6;
       }
       
@@ -825,7 +825,7 @@ export async function exportProposalPDF(plotsToExport, vectorState, fieldConfig,
         value: fmtPKR(inv.totalValue),
         rate: fmtPKR(inv.ratePerMarla),
         dims: inv.dimensions || '',
-        owner: inv.owner || '',
+        owner: (typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner) || '',
         status: inv.status || '',
         notes: inv.notes || ''
       };

@@ -185,7 +185,7 @@ export default function PlotDetailsWindow({ vectorState }) {
                 {inv.owner && (
                   <div className="flex justify-between">
                     <span className="text-gray-600">Owner:</span>
-                    <span className="font-semibold">{inv.owner}</span>
+                    <span className="font-semibold">{typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner}</span>
                   </div>
                 )}
                 
@@ -239,7 +239,7 @@ export default function PlotDetailsWindow({ vectorState }) {
                 // Copy functionality
                 const text = `Plot: ${plot.n}\n${
                   anno ? `Annotation: ${anno.note}\n` : ''
-                }${inv.marla ? `Area: ${inv.marla} Marla\n` : ''}${inv.totalValue ? `Value: ${formatCurrency(inv.totalValue)}\n` : ''}${inv.owner ? `Owner: ${inv.owner}\n` : ''}`;
+                }${inv.marla ? `Area: ${inv.marla} Marla\n` : ''}${inv.totalValue ? `Value: ${formatCurrency(inv.totalValue)}\n` : ''}${inv.owner ? `Owner: ${typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner}\n` : ''}`;
                 navigator.clipboard.writeText(text);
                 alert('Copied to clipboard');
               }}

@@ -619,17 +619,26 @@ class TaskService:
             elif current_rep_id:
                 visible = self._get_visible_user_ids(db, current_rep_id)
                 if visible is not None:  # None means see all
+                    collab_checks = [
+                        Task.collaborator_ids.op('@>')(f'["{str(uid)}"]')
+                        for uid in visible
+                    ]
                     query = query.filter(
                         or_(
                             Task.assignee_id.in_(visible),
                             Task.created_by.in_(visible),
+                            *collab_checks
                         )
                     )
             elif role in ("admin",):
                 pass  # Fallback: admin sees all
             else:
                 query = query.filter(
-                    or_(Task.assignee_id == user_uuid, Task.created_by == user_uuid)
+                    or_(
+                        Task.assignee_id == user_uuid,
+                        Task.created_by == user_uuid,
+                        Task.collaborator_ids.op('@>')(f'["{str(user_uuid)}"]')
+                    )
                 )
 
         if status:
@@ -649,11 +658,17 @@ class TaskService:
         return query.order_by(Task.created_at.desc()).offset(offset).limit(limit).all()
 
     def get_my_tasks(self, db: Session, user_id):
-        """Get tasks assigned to current user."""
+        """Get tasks assigned to or collaborated by current user."""
         from app.main import Task
         self._normalize_task_types_once(db)
         user_uuid = user_id if isinstance(user_id, uuid_lib.UUID) else uuid_lib.UUID(str(user_id))
-        return db.query(Task).filter(Task.assignee_id == user_uuid, Task.parent_task_id.is_(None)).order_by(Task.created_at.desc()).all()
+        return db.query(Task).filter(
+            Task.parent_task_id.is_(None),
+            or_(
+                Task.assignee_id == user_uuid,
+                Task.collaborator_ids.op('@>')(f'["{str(user_uuid)}"]')
+            )
+        ).order_by(Task.created_at.desc()).all()
 
     def update_task_status(self, db: Session, task_id, new_status: str, user_id,
                            completion_notes: Optional[str] = None):
@@ -690,14 +705,21 @@ class TaskService:
         db.commit()
         return task
 
-    def _notify_task_stakeholders(self, db, task, actor_uuid, title, message):
-        """Notify all task stakeholders (creator, assignee, delegator) except the person who made the change."""
+    def _notify_task_stakeholders(self, db, task, actor_uuid, title, message, notif_type="task_updated"):
+        """Notify all task stakeholders (creator, assignee, delegator, collaborators) except the actor."""
         from app.main import CompanyRep, create_notification
+        import uuid as uuid_mod
 
         notified = set()
         stakeholder_ids = [task.created_by, task.assignee_id]
         if hasattr(task, 'delegated_by') and task.delegated_by:
             stakeholder_ids.append(task.delegated_by)
+        # Add collaborators
+        for cid in (task.collaborator_ids or []):
+            try:
+                stakeholder_ids.append(uuid_mod.UUID(cid) if isinstance(cid, str) else cid)
+            except (ValueError, AttributeError):
+                pass
 
         for uid in stakeholder_ids:
             if uid and uid != actor_uuid and uid not in notified:
@@ -705,7 +727,7 @@ class TaskService:
                 rep = db.query(CompanyRep).filter(CompanyRep.id == uid).first()
                 if rep:
                     create_notification(
-                        db, rep.rep_id, "task_updated", title, message,
+                        db, rep.rep_id, notif_type, title, message,
                         category="task", entity_type="task", entity_id=task.task_id
                     )
 
@@ -777,17 +799,14 @@ class TaskService:
 
         self._log_activity(db, task.id, author_uuid, "commented", None, content[:100])
 
-        # Notify assignee if different from commenter
-        if task.assignee_id and task.assignee_id != author_uuid:
-            assignee = db.query(CompanyRep).filter(CompanyRep.id == task.assignee_id).first()
-            if assignee:
-                author = db.query(CompanyRep).filter(CompanyRep.id == author_uuid).first()
-                create_notification(
-                    db, assignee.rep_id, "task_commented",
-                    f"Comment on: {task.title}",
-                    f"{author.name if author else 'Someone'}: {content[:80]}",
-                    category="task", entity_type="task", entity_id=task.task_id
-                )
+        # Notify ALL stakeholders (creator, assignee, collaborators, delegator) except commenter
+        author = db.query(CompanyRep).filter(CompanyRep.id == author_uuid).first()
+        self._notify_task_stakeholders(
+            db, task, author_uuid,
+            f"Comment on: {task.title}",
+            f"{author.name if author else 'Someone'}: {content[:80]}",
+            notif_type="task_commented"
+        )
 
         db.commit()
         db.refresh(comment)
@@ -822,12 +841,20 @@ class TaskService:
         if current_rep_id:
             visible = self._get_visible_user_ids(db, current_rep_id)
             if visible is not None:
+                collab_checks = [
+                    Task.collaborator_ids.op('@>')(f'["{str(uid)}"]')
+                    for uid in visible
+                ]
                 query = query.filter(
-                    or_(Task.assignee_id.in_(visible), Task.created_by.in_(visible))
+                    or_(Task.assignee_id.in_(visible), Task.created_by.in_(visible), *collab_checks)
                 )
         elif user_id and role not in ("admin",):
             user_uuid = user_id if isinstance(user_id, uuid_lib.UUID) else uuid_lib.UUID(str(user_id))
-            query = query.filter(or_(Task.assignee_id == user_uuid, Task.created_by == user_uuid))
+            query = query.filter(or_(
+                Task.assignee_id == user_uuid,
+                Task.created_by == user_uuid,
+                Task.collaborator_ids.op('@>')(f'["{str(user_uuid)}"]')
+            ))
 
         all_tasks = query.all()
         today = date.today()

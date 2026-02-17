@@ -112,7 +112,7 @@ export default function HoverPlotDetails({ vectorState }) {
         {inv.owner && (
           <div className="mb-1">
             <span className="text-gray-600">Owner: </span>
-            <span className="font-semibold">{inv.owner}</span>
+            <span className="font-semibold">{typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner}</span>
           </div>
         )}
 

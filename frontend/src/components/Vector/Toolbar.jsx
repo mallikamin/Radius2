@@ -97,16 +97,9 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
       }
       const response = await api.get('/vector/projects');
       console.log('loadProjects: Received projects', response.data);
-      // Filter to only show actual Vector projects with Vector-specific data
-      // Exclude any media files that might have been incorrectly saved
+      // Filter to only show actual Vector projects (backend now sends lightweight flag)
       const vectorProjects = (response.data || []).filter(project => {
-        // Only show projects with actual Vector metadata (not just PDFs)
-        if (!project.vector_metadata) return false;
-        const metadata = project.vector_metadata;
-        // Must have at least one of: plots, annotations, shapes, labels, branches, or projectMetadata
-        // This ensures we only show projects that were created/edited through Vector system
-        return !!(metadata.plots || metadata.annos || metadata.shapes || 
-                 metadata.labels || metadata.branches || metadata.projectMetadata);
+        return project.has_vector_data || project.vector_metadata;
       });
       console.log('loadProjects: Filtered projects', vectorProjects);
       setProjects(vectorProjects);
