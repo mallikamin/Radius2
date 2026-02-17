@@ -98,6 +98,20 @@ docker exec -it sitara_crm_db psql -U sitara -d sitara_crm
 
 ---
 
+## DigitalOcean Co-Hosting Guardrail (Orbit + POS)
+
+- Read and follow: `DIGITALOCEAN_DEPLOY_PLAYBOOK.md`
+- After any Orbit container rebuild, always verify `orbit_web` and `orbit_api` are reachable from `pos-system-nginx-1`.
+- If missing from POS network, reconnect immediately:
+```bash
+docker network connect pos-system_default orbit_web
+docker network connect pos-system_default orbit_api
+docker exec pos-system-nginx-1 nginx -t && docker exec pos-system-nginx-1 nginx -s reload
+```
+- Do not restart or modify POS services during Orbit deploy unless explicitly requested.
+
+---
+
 ## Architecture
 
 ```
@@ -281,3 +295,4 @@ const tabs = [...existing, { id: 'mytab', label: 'My Tab', icon: '📋' }];
 - `CLAUDE_REFERENCE.md` - Full technical reference
 - `DEPLOYMENT.md` - Deployment instructions
 - `AUTH_SETUP.md` - Authentication setup
+- `DIGITALOCEAN_DEPLOY_PLAYBOOK.md` - Orbit deploy + network safety checklist

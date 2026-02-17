@@ -408,7 +408,8 @@ class TaskService:
                     task_type="general", priority="medium", assignee_id=None,
                     due_date=None, department=None,
                     linked_inventory_id=None, linked_transaction_id=None,
-                    linked_customer_id=None, linked_project_id=None):
+                    linked_customer_id=None, linked_project_id=None,
+                    parent_task_id=None):
         """Create a task via direct API."""
         from app.main import Task, CompanyRep, create_notification
 
@@ -430,6 +431,7 @@ class TaskService:
             linked_transaction_id=uuid_lib.UUID(linked_transaction_id) if linked_transaction_id else None,
             linked_customer_id=uuid_lib.UUID(linked_customer_id) if linked_customer_id else None,
             linked_project_id=uuid_lib.UUID(linked_project_id) if linked_project_id else None,
+            parent_task_id=parent_task_id,
         )
 
         db.add(task)
@@ -608,7 +610,7 @@ class TaskService:
         """Get tasks with filters. Uses reporting hierarchy for visibility."""
         from app.main import Task
         self._normalize_task_types_once(db)
-        query = db.query(Task)
+        query = db.query(Task).filter(Task.parent_task_id.is_(None))
 
         if user_id:
             user_uuid = user_id if isinstance(user_id, uuid_lib.UUID) else uuid_lib.UUID(str(user_id))
@@ -651,7 +653,7 @@ class TaskService:
         from app.main import Task
         self._normalize_task_types_once(db)
         user_uuid = user_id if isinstance(user_id, uuid_lib.UUID) else uuid_lib.UUID(str(user_id))
-        return db.query(Task).filter(Task.assignee_id == user_uuid).order_by(Task.created_at.desc()).all()
+        return db.query(Task).filter(Task.assignee_id == user_uuid, Task.parent_task_id.is_(None)).order_by(Task.created_at.desc()).all()
 
     def update_task_status(self, db: Session, task_id, new_status: str, user_id,
                            completion_notes: Optional[str] = None):
@@ -814,7 +816,7 @@ class TaskService:
         from app.main import Task
         self._normalize_task_types_once(db)
 
-        query = db.query(Task)
+        query = db.query(Task).filter(Task.parent_task_id.is_(None))
 
         # Hierarchy-based filtering
         if current_rep_id:

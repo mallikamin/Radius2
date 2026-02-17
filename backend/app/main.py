@@ -2379,6 +2379,7 @@ def search_interaction_targets(
             literal("customer").label("entity_type"),
             Customer.name.label("name"),
             Customer.mobile.label("mobile"),
+            func.coalesce(Customer.additional_mobiles, literal("[]").cast(JSONB)).label("additional_mobiles"),
             Customer.city.label("city"),
             literal(None).cast(String).label("source"),
             literal(None).cast(String).label("company"),
@@ -2399,6 +2400,7 @@ def search_interaction_targets(
             literal("broker").label("entity_type"),
             Broker.name.label("name"),
             Broker.mobile.label("mobile"),
+            literal("[]").cast(JSONB).label("additional_mobiles"),
             literal(None).cast(String).label("city"),
             literal(None).cast(String).label("source"),
             Broker.company.label("company"),
@@ -2419,6 +2421,7 @@ def search_interaction_targets(
             literal("lead").label("entity_type"),
             Lead.name.label("name"),
             Lead.mobile.label("mobile"),
+            func.coalesce(Lead.additional_mobiles, literal("[]").cast(JSONB)).label("additional_mobiles"),
             Lead.city.label("city"),
             Lead.source.label("source"),
             literal(None).cast(String).label("company"),
@@ -2470,6 +2473,7 @@ def search_interaction_targets(
             "entity_type": r.entity_type,
             "name": r.name,
             "mobile": r.mobile,
+            "additional_mobiles": r.additional_mobiles or [],
             "city": r.city,
             "source": r.source,
             "company": r.company,
@@ -2604,6 +2608,12 @@ def create_interaction(data: dict, db: Session = Depends(get_db),
     if not customer and not broker and not lead:
         raise HTTPException(400, "Must specify customer, broker, or lead")
 
+    selected_contact_number = (data.get("contact_number") or "").strip()
+    notes = (data.get("notes") or "").strip()
+    if selected_contact_number:
+        prefix = f"[Spoke On] {selected_contact_number}"
+        notes = f"{prefix}\n{notes}" if notes else prefix
+
     i = Interaction(
         company_rep_id=rep.id,
         customer_id=customer.id if customer else None,
@@ -2611,7 +2621,7 @@ def create_interaction(data: dict, db: Session = Depends(get_db),
         lead_id=lead.id if lead else None,
         interaction_type=data["interaction_type"],
         status=data.get("status"),
-        notes=data.get("notes"),
+        notes=notes or None,
         next_follow_up=date.fromisoformat(data["next_follow_up"]) if data.get("next_follow_up") else None
     )
     db.add(i); db.commit(); db.refresh(i)
@@ -8365,6 +8375,7 @@ def get_leads_pipeline(rep_id: str = None, campaign_id: str = None,
         lead_data = {
             "id": str(l.id), "lead_id": l.lead_id, "name": l.name,
             "mobile": l.mobile, "email": l.email,
+            "additional_mobiles": l.additional_mobiles or [],
             "pipeline_stage": l.pipeline_stage or "New",
             "status": l.status, "lead_type": l.lead_type,
             "campaign_name": camp.name if camp else None,
@@ -9431,9 +9442,8 @@ async def create_subtask(
             str(parent.linked_transaction_id) if parent.linked_transaction_id else None,
             str(parent.linked_customer_id) if parent.linked_customer_id else None,
             str(parent.linked_project_id) if parent.linked_project_id else None,
+            parent_task_id=parent.id,
         )
-        subtask.parent_task_id = parent.id
-        db.commit()
         return _task_to_dict(subtask, db)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

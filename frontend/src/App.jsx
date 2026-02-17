@@ -1753,6 +1753,7 @@ function PipelineView() {
         <div className="space-y-2">
           {displayLeads.map(lead => {
             const stageInfo = allStages.find(s => s.stage === lead.pipeline_stage);
+            const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
             return (
               <div key={lead.id} className="bg-white rounded-xl border p-4 hover:shadow-sm transition-shadow">
                 <div className="flex items-start justify-between gap-3">
@@ -1773,7 +1774,7 @@ function PipelineView() {
                         {lead.converted_broker_id && lead.status !== 'converted' && <span className="px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded-full">Broker</span>}
                       </div>
                       <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 flex-wrap">
-                        {lead.mobile && <span>{lead.mobile}</span>}
+                        {contactNumbers.length > 0 && <span>{contactNumbers.join(' | ')}</span>}
                         {(lead.source || lead.campaign_name) && (
                           <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded font-medium">
                             {lead.source || lead.campaign_name}{lead.source_details ? ` — ${lead.source_details}` : lead.campaign_source ? ` (${lead.campaign_source})` : ''}
@@ -1791,6 +1792,7 @@ function PipelineView() {
                         entity_type: 'lead',
                         name: lead.name,
                         mobile: lead.mobile,
+                        additional_mobiles: lead.additional_mobiles || [],
                         defaultRepId: lead.assigned_rep_id || ''
                       })}
                       className="py-1 px-2 text-xs border rounded-lg hover:bg-blue-50 text-blue-600"
@@ -1905,11 +1907,12 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
   const [interactions, setInteractions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showLogForm, setShowLogForm] = useState(false);
-  const [logForm, setLogForm] = useState({ interaction_type: 'call', notes: '', next_follow_up: '' });
+  const [logForm, setLogForm] = useState({ interaction_type: 'call', notes: '', next_follow_up: '', contact_number: '' });
   const [currentStage, setCurrentStage] = useState(lead.pipeline_stage);
   const role = getUserRole();
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
 
   useEffect(() => { loadInteractions(); }, []);
   const loadInteractions = async () => {
@@ -1938,9 +1941,10 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
         lead_id: lead.lead_id,
         interaction_type: logForm.interaction_type,
         notes: logForm.notes,
+        contact_number: logForm.contact_number || null,
         next_follow_up: logForm.next_follow_up || null
       });
-      setShowLogForm(false); setLogForm({ interaction_type: 'call', notes: '', next_follow_up: '' });
+      setShowLogForm(false); setLogForm({ interaction_type: 'call', notes: '', next_follow_up: '', contact_number: '' });
       loadInteractions();
       if (window.showToast) window.showToast('Logged', 'Interaction recorded', 'success');
     } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
@@ -1973,7 +1977,7 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
         {/* Lead info */}
         <div className="grid grid-cols-2 gap-3 bg-gray-50 p-4 rounded-lg text-sm">
           <div><span className="text-xs text-gray-500 block">Lead ID</span><span className="font-mono">{lead.lead_id}</span></div>
-          <div><span className="text-xs text-gray-500 block">Mobile</span>{lead.mobile || 'N/A'}</div>
+          <div><span className="text-xs text-gray-500 block">Mobile</span>{contactNumbers.length ? contactNumbers.join(' | ') : 'N/A'}</div>
           <div><span className="text-xs text-gray-500 block">Email</span>{lead.email || 'N/A'}</div>
           <div><span className="text-xs text-gray-500 block">Campaign</span>{lead.campaign_name || 'Direct'}</div>
           <div><span className="text-xs text-gray-500 block">Assigned Rep</span>{lead.assigned_rep || 'Unassigned'}</div>
@@ -2038,6 +2042,16 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
               <input type="date" value={logForm.next_follow_up} onChange={e => setLogForm({...logForm, next_follow_up: e.target.value})}
                 className="px-3 py-2 text-sm border rounded-lg" placeholder="Follow-up date" />
             </div>
+            {contactNumbers.length > 1 && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Spoke On Number (Optional)</label>
+                <select value={logForm.contact_number} onChange={e => setLogForm({...logForm, contact_number: e.target.value})}
+                  className="w-full px-3 py-2 text-sm border rounded-lg bg-white">
+                  <option value="">Select number</option>
+                  {contactNumbers.map(num => <option key={num} value={num}>{num}</option>)}
+                </select>
+              </div>
+            )}
             <textarea value={logForm.notes} onChange={e => setLogForm({...logForm, notes: e.target.value})}
               placeholder="Notes..." rows={2} className="w-full px-3 py-2 text-sm border rounded-lg" />
             <div className="flex gap-2">
@@ -2975,10 +2989,13 @@ function InteractionsView() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({
-    company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: ''
+    company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '', contact_number: ''
   });
   const [selectedEntityType, setSelectedEntityType] = useState('customer');
   const [selectedEntity, setSelectedEntity] = useState(null);
+  const interactionContactOptions = selectedEntity
+    ? [selectedEntity.mobile, ...(selectedEntity.additional_mobiles || [])].filter(Boolean)
+    : [];
 
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
@@ -3006,6 +3023,7 @@ function InteractionsView() {
         interaction_type: form.interaction_type,
         status: form.status || null,
         notes: form.notes || null,
+        contact_number: form.contact_number || null,
         next_follow_up: form.next_follow_up || null
       };
       if (selectedEntityType === 'customer') payload.customer_id = selectedEntity.id;
@@ -3015,7 +3033,7 @@ function InteractionsView() {
       await api.post('/interactions', payload);
       if (window.showToast) window.showToast('Interaction Logged', `${form.interaction_type} with ${selectedEntity.name} recorded`, 'success');
       setShowModal(false);
-      setForm({ company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '' });
+      setForm({ company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '', contact_number: '' });
       setSelectedEntity(null);
       setSelectedEntityType('customer');
       loadData();
@@ -3028,7 +3046,7 @@ function InteractionsView() {
         <div><h2 className="text-2xl font-semibold text-gray-900">Interactions</h2>
           <p className="text-sm text-gray-500 mt-1">Track rep communications</p></div>
         <button onClick={() => {
-          setForm(f => ({ ...f, company_rep_id: currentUser.id || '' }));
+          setForm(f => ({ ...f, company_rep_id: currentUser.id || '', contact_number: '' }));
           setSelectedEntity(null);
           setSelectedEntityType('customer');
           setShowModal(true);
@@ -3114,11 +3132,28 @@ function InteractionsView() {
 
             <EntitySearchSelect
               value={selectedEntity}
-              onChange={setSelectedEntity}
+              onChange={(entity) => {
+                setSelectedEntity(entity);
+                setForm(f => ({ ...f, contact_number: '' }));
+              }}
               entityType={selectedEntityType}
-              onEntityTypeChange={setSelectedEntityType}
+              onEntityTypeChange={(t) => {
+                setSelectedEntityType(t);
+                setForm(f => ({ ...f, contact_number: '' }));
+              }}
               showTypeSelector={true}
             />
+
+            {interactionContactOptions.length > 1 && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Spoke On Number (Optional)</label>
+                <select value={form.contact_number} onChange={e => setForm({...form, contact_number: e.target.value})}
+                  className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select number</option>
+                  {interactionContactOptions.map(num => <option key={num} value={num}>{num}</option>)}
+                </select>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
@@ -7439,14 +7474,15 @@ function EntitySearchSelect({ value, onChange, entityType, onEntityTypeChange, d
 }
 
 // QuickLogModal — lightweight interaction log from per-row actions (Customers, Brokers, Pipeline)
-// entity: { id, entity_type, name, mobile? }
+// entity: { id, entity_type, name, mobile?, additional_mobiles? }
 function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
   const [reps, setReps] = useState([]);
   const [form, setForm] = useState({
-    company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: ''
+    company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '', contact_number: ''
   });
   const [submitting, setSubmitting] = useState(false);
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const contactOptions = [entity.mobile, ...(entity.additional_mobiles || [])].filter(Boolean);
 
   useEffect(() => {
     const repId = defaultRepId || currentUser.id || '';
@@ -7463,6 +7499,7 @@ function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
         interaction_type: form.interaction_type,
         status: form.status || null,
         notes: form.notes || null,
+        contact_number: form.contact_number || null,
         next_follow_up: form.next_follow_up || null
       };
       if (entity.entity_type === 'customer') payload.customer_id = entity.id;
@@ -7490,7 +7527,7 @@ function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
           'bg-purple-100 text-purple-700'
         }`}>{entity.entity_type}</span>
         <span className="text-sm font-medium">{entity.name}</span>
-        {entity.mobile && <span className="text-sm text-gray-400">| {entity.mobile}</span>}
+        {contactOptions.length > 0 && <span className="text-sm text-gray-400">| {contactOptions.join(' | ')}</span>}
       </div>
       <form onSubmit={handleSubmit} className="space-y-3">
         {canChangeRep ? (
@@ -7515,6 +7552,16 @@ function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
           </div>
           <Input label="Status" value={form.status} onChange={e => setForm({...form, status: e.target.value})} placeholder="e.g., Interested" />
         </div>
+        {contactOptions.length > 1 && (
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Spoke On Number (Optional)</label>
+            <select value={form.contact_number} onChange={e => setForm({...form, contact_number: e.target.value})}
+              className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+              <option value="">Select number</option>
+              {contactOptions.map(num => <option key={num} value={num}>{num}</option>)}
+            </select>
+          </div>
+        )}
         <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
           <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})}
             rows={2} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10"
