@@ -5,13 +5,15 @@ Ported from voice-agent — converted async→sync, User→CompanyRep.
 Uses ORBIT's existing create_notification() helper.
 """
 import re
+import html as html_mod
 import logging
+import pathlib
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date, timedelta
 import uuid as uuid_lib
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 
 logger = logging.getLogger(__name__)
 _task_type_normalization_done = False
@@ -181,6 +183,883 @@ TASK_TYPE_KEYWORDS = {
     'recovery': 'recovery', 'recover': 'recovery', 'overdue payment': 'recovery',
     'defaulter': 'recovery', 'collection': 'collection', 'collect': 'collection',
 }
+
+# ============== Daily Report HTML Template Assets ==============
+
+REPORT_GOOGLE_FONTS = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
+    '<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700'
+    '&family=Cormorant+Garamond:wght@300;400;500;600&family=Bebas+Neue'
+    '&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">'
+)
+
+REPORT_CSS = """
+  /* ===== RESET & BASE ===== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    /* Background layers */
+    --bg:             #F7F8FA;
+    --surface:        #FFFFFF;
+    --surface-alt:    #F1F3F5;
+    --surface-hover:  #E9ECF0;
+
+    /* Navy command palette */
+    --navy-900:  #0B0F1A;
+    --navy-800:  #111827;
+    --navy-700:  #1E293B;
+    --navy-600:  #334155;
+    --navy-500:  #475569;
+    --navy-400:  #64748B;
+    --navy-300:  #94A3B8;
+    --navy-200:  #CBD5E1;
+    --navy-100:  #E2E8F0;
+    --navy-50:   #F1F5F9;
+
+    /* Semantic */
+    --red-600:   #DC2626;
+    --red-500:   #EF4444;
+    --red-100:   #FEE2E2;
+    --red-50:    #FEF2F2;
+
+    --amber-600: #D97706;
+    --amber-500: #F59E0B;
+    --amber-100: #FEF3C7;
+    --amber-50:  #FFFBEB;
+
+    --green-600: #059669;
+    --green-500: #10B981;
+    --green-100: #D1FAE5;
+    --green-50:  #ECFDF5;
+
+    --blue-600:  #2563EB;
+    --blue-500:  #3B82F6;
+    --blue-100:  #DBEAFE;
+    --blue-50:   #EFF6FF;
+
+    --violet-600:#7C3AED;
+    --violet-100:#EDE9FE;
+
+    /* Text */
+    --text-primary:   #18181B;
+    --text-secondary: #52525B;
+    --text-tertiary:  #A1A1AA;
+    --text-inverse:   #FAFAFA;
+
+    /* Borders & shadows */
+    --border:        #E4E4E7;
+    --border-light:  #F4F4F5;
+    --shadow-sm:     0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md:     0 2px 8px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-lg:     0 4px 16px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+
+    /* Spacing */
+    --space-xs:  4px;
+    --space-sm:  8px;
+    --space-md:  16px;
+    --space-lg:  24px;
+    --space-xl:  40px;
+    --space-2xl: 60px;
+
+    /* Radius */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+  }
+
+  html {
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text-primary);
+    line-height: 1.6;
+    padding: 0;
+  }
+
+  /* ===== LAYOUT SHELL ===== */
+  .page-wrapper {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: var(--space-xl) var(--space-lg);
+  }
+
+  /* ===== ANIMATIONS ===== */
+  @keyframes fadeInDown {
+    from { opacity: 0; transform: translateY(-20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .animate-header  { animation: fadeInDown 0.5s ease-out both; }
+  .animate-cards   { animation: slideUp 0.45s ease-out both; animation-delay: 0.1s; }
+  .animate-section { animation: fadeIn 0.5s ease-out both; }
+  .stagger-1 { animation-delay: 0.05s; }
+  .stagger-2 { animation-delay: 0.10s; }
+  .stagger-3 { animation-delay: 0.15s; }
+  .stagger-4 { animation-delay: 0.20s; }
+  .stagger-5 { animation-delay: 0.25s; }
+  .stagger-6 { animation-delay: 0.30s; }
+
+  /* ===== HEADER ===== */
+  .report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: var(--space-xl);
+    padding-bottom: var(--space-lg);
+    border-bottom: 2px solid var(--navy-700);
+  }
+
+  .header-left { flex: 1; }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: var(--space-md);
+  }
+
+  .brand-icon {
+    width: 42px;
+    height: 42px;
+    background: var(--navy-700);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-inverse);
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.35rem;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+  }
+
+  .brand-text {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--navy-700);
+    letter-spacing: 0.5px;
+  }
+
+  .brand-sub {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 400;
+    font-size: 0.7rem;
+    color: var(--navy-400);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-top: 1px;
+  }
+
+  .report-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.85rem;
+    font-weight: 600;
+    color: var(--navy-800);
+    letter-spacing: 0.3px;
+    line-height: 1.2;
+    margin-bottom: 4px;
+  }
+
+  .report-date {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1rem;
+    color: var(--navy-400);
+    font-weight: 400;
+    letter-spacing: 0.3px;
+  }
+
+  .header-right {
+    text-align: right;
+    flex-shrink: 0;
+    padding-top: 6px;
+  }
+
+  .recipient-label {
+    font-size: 0.65rem;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+  }
+
+  .recipient-name {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--navy-800);
+    margin-bottom: 2px;
+  }
+
+  .recipient-role {
+    font-size: 0.8rem;
+    color: var(--navy-400);
+    font-weight: 400;
+  }
+
+  .rep-id-badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 3px 10px;
+    background: var(--navy-50);
+    border: 1px solid var(--navy-100);
+    border-radius: 4px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--navy-500);
+    letter-spacing: 1px;
+  }
+
+  /* ===== SUMMARY CARDS ===== */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-md);
+    margin-bottom: var(--space-xl);
+  }
+
+  .summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 22px 20px 18px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+  }
+
+  .summary-card:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+  }
+
+  .summary-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .summary-card.card-total::before    { background: var(--navy-700); }
+  .summary-card.card-due::before      { background: var(--amber-500); }
+  .summary-card.card-overdue::before  { background: var(--red-500); }
+  .summary-card.card-completed::before{ background: var(--green-500); }
+
+  .card-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-tertiary);
+    margin-bottom: 8px;
+  }
+
+  .card-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.6rem;
+    line-height: 1;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+
+  .card-total .card-value    { color: var(--navy-700); }
+  .card-due .card-value      { color: var(--amber-600); }
+  .card-overdue .card-value  { color: var(--red-600); }
+  .card-completed .card-value{ color: var(--green-600); }
+
+  .card-context {
+    font-size: 0.72rem;
+    color: var(--text-tertiary);
+    font-weight: 400;
+  }
+
+  /* ===== SECTION TITLES ===== */
+  .section {
+    margin-bottom: var(--space-xl);
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: var(--space-lg);
+  }
+
+  .section-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  .section-icon.red    { background: var(--red-100);   color: var(--red-600); }
+  .section-icon.blue   { background: var(--blue-100);  color: var(--blue-600); }
+  .section-icon.green  { background: var(--green-100); color: var(--green-600); }
+  .section-icon.violet { background: var(--violet-100); color: var(--violet-600); }
+
+  .section-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--navy-800);
+    letter-spacing: 0.3px;
+  }
+
+  .section-subtitle {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    font-weight: 400;
+    margin-top: 1px;
+  }
+
+  .section-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+    margin-left: 8px;
+  }
+
+  /* ===== ATTENTION CARDS ===== */
+  .attention-card {
+    background: var(--surface);
+    border: 1px solid var(--red-100);
+    border-left: 4px solid var(--red-500);
+    border-radius: var(--radius-md);
+    padding: 20px 24px;
+    margin-bottom: var(--space-md);
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 0.2s ease, border-left-color 0.2s ease;
+  }
+
+  .attention-card:hover {
+    box-shadow: var(--shadow-md);
+    border-left-color: var(--red-600);
+  }
+
+  .attention-card.urgent {
+    border-left-color: var(--red-600);
+    background: var(--red-50);
+  }
+
+  .attention-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 10px;
+  }
+
+  .attention-id {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--navy-400);
+    letter-spacing: 0.5px;
+  }
+
+  .attention-title {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--navy-800);
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }
+
+  .attention-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .overdue-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    background: var(--red-100);
+    color: var(--red-600);
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+
+  .today-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    background: var(--amber-100);
+    color: var(--amber-600);
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+
+  /* ===== BADGES & PILLS ===== */
+  .priority-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    line-height: 1.6;
+  }
+
+  .priority-urgent  { background: var(--red-100);   color: var(--red-600); }
+  .priority-high    { background: #FEF3C7;          color: #B45309; }
+  .priority-medium  { background: var(--blue-100);   color: var(--blue-600); }
+  .priority-low     { background: var(--navy-50);    color: var(--navy-500); }
+
+  .status-pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .status-pending     { background: var(--amber-100); color: var(--amber-600); }
+  .status-in-progress { background: var(--blue-100);  color: var(--blue-600); }
+  .status-on-hold     { background: var(--navy-50);   color: var(--navy-500); }
+  .status-completed   { background: var(--green-100); color: var(--green-600); }
+
+  .meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+  }
+
+  .meta-item .dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--navy-300);
+  }
+
+  /* ===== DATA TABLE ===== */
+  .table-wrapper {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+
+  .data-table thead {
+    background: var(--navy-50);
+    border-bottom: 2px solid var(--navy-100);
+  }
+
+  .data-table th {
+    padding: 12px 16px;
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--navy-500);
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .data-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: middle;
+    color: var(--text-primary);
+  }
+
+  .data-table tbody tr {
+    transition: background 0.15s ease;
+  }
+
+  .data-table tbody tr:hover {
+    background: var(--navy-50);
+  }
+
+  .data-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .task-id-cell {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    font-size: 0.72rem;
+    color: var(--navy-500);
+    letter-spacing: 0.5px;
+  }
+
+  .task-title-cell {
+    font-weight: 500;
+    color: var(--navy-800);
+    max-width: 240px;
+    line-height: 1.35;
+  }
+
+  .type-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    background: var(--navy-50);
+    color: var(--navy-500);
+    white-space: nowrap;
+  }
+
+  .type-finance    { background: #EDE9FE; color: #6D28D9; }
+  .type-operations { background: #DBEAFE; color: #1D4ED8; }
+  .type-sales      { background: #D1FAE5; color: #047857; }
+  .type-recovery   { background: #FEF3C7; color: #B45309; }
+
+  .dept-cell {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+  }
+
+  .due-cell {
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .due-overdue {
+    color: var(--red-600);
+    font-weight: 600;
+  }
+
+  .due-today {
+    color: var(--amber-600);
+    font-weight: 600;
+  }
+
+  .due-normal {
+    color: var(--text-secondary);
+  }
+
+  .assignee-cell {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+
+  /* ===== TIMELINE ===== */
+  .timeline-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 24px;
+    margin-bottom: var(--space-md);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .timeline-task-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .timeline-task-id {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--navy-400);
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    background: var(--navy-50);
+    border-radius: 4px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .timeline-task-title {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--navy-800);
+    line-height: 1.4;
+  }
+
+  .timeline-task-meta {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .timeline-entries {
+    position: relative;
+    padding-left: 24px;
+  }
+
+  .timeline-entries::before {
+    content: '';
+    position: absolute;
+    left: 7px;
+    top: 6px;
+    bottom: 6px;
+    width: 1.5px;
+    background: linear-gradient(to bottom, var(--navy-200), var(--border-light));
+    border-radius: 1px;
+  }
+
+  .timeline-entry {
+    position: relative;
+    padding-bottom: 18px;
+    padding-left: 12px;
+  }
+
+  .timeline-entry:last-child {
+    padding-bottom: 0;
+  }
+
+  .timeline-entry::before {
+    content: '';
+    position: absolute;
+    left: -20px;
+    top: 6px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid var(--navy-300);
+    background: var(--surface);
+    z-index: 1;
+  }
+
+  .timeline-entry.entry-comment::before  { border-color: var(--blue-500);  background: var(--blue-100); }
+  .timeline-entry.entry-status::before   { border-color: var(--green-500); background: var(--green-100); }
+  .timeline-entry.entry-assign::before   { border-color: var(--violet-600); background: var(--violet-100); }
+  .timeline-entry.entry-created::before  { border-color: var(--navy-400);  background: var(--navy-50); }
+  .timeline-entry.entry-priority::before { border-color: var(--amber-500); background: var(--amber-100); }
+
+  .timeline-time {
+    font-size: 0.65rem;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    letter-spacing: 0.3px;
+    margin-bottom: 3px;
+  }
+
+  .timeline-text {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    line-height: 1.45;
+  }
+
+  .timeline-text strong {
+    color: var(--navy-700);
+    font-weight: 600;
+  }
+
+  .timeline-text .status-change {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .timeline-text .arrow {
+    color: var(--text-tertiary);
+    font-size: 0.7rem;
+  }
+
+  /* ===== FOOTER ===== */
+  .report-footer {
+    margin-top: var(--space-2xl);
+    padding-top: var(--space-lg);
+    border-top: 2px solid var(--navy-700);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+
+  .footer-left {}
+
+  .footer-brand {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--navy-500);
+    margin-bottom: 4px;
+  }
+
+  .footer-meta {
+    font-size: 0.68rem;
+    color: var(--text-tertiary);
+    line-height: 1.6;
+  }
+
+  .footer-right {
+    text-align: right;
+  }
+
+  .footer-confidential {
+    font-size: 0.6rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-tertiary);
+    margin-bottom: 4px;
+  }
+
+  .footer-page {
+    font-size: 0.65rem;
+    color: var(--text-tertiary);
+  }
+
+  /* ===== RESPONSIVE ===== */
+  @media (max-width: 768px) {
+    .page-wrapper {
+      padding: var(--space-lg) var(--space-md);
+    }
+
+    .report-header {
+      flex-direction: column;
+      gap: var(--space-md);
+    }
+
+    .header-right {
+      text-align: left;
+    }
+
+    .summary-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .table-wrapper {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .data-table {
+      min-width: 700px;
+    }
+
+    .attention-top {
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .report-footer {
+      flex-direction: column;
+      gap: var(--space-md);
+      align-items: flex-start;
+    }
+
+    .footer-right {
+      text-align: left;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .summary-grid {
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-sm);
+    }
+
+    .card-value {
+      font-size: 2rem;
+    }
+  }
+
+  /* ===== PRINT ===== */
+  @media print {
+    @page {
+      size: A4 portrait;
+      margin: 18mm 15mm 20mm 15mm;
+    }
+
+    html { font-size: 13px; }
+
+    body {
+      background: #fff;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    .page-wrapper {
+      max-width: 100%;
+      padding: 0;
+    }
+
+    .summary-card,
+    .attention-card,
+    .table-wrapper,
+    .timeline-block {
+      box-shadow: none;
+      break-inside: avoid;
+    }
+
+    .summary-card:hover,
+    .attention-card:hover,
+    .data-table tbody tr:hover {
+      transform: none;
+      box-shadow: none;
+      background: transparent;
+    }
+
+    .timeline-block {
+      page-break-inside: avoid;
+    }
+
+    .section {
+      page-break-inside: avoid;
+    }
+
+    .report-footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 12px 15mm;
+      border-top: 1.5px solid var(--navy-700);
+      background: #fff;
+    }
+  }
+"""
+
+# SVG icon constants for section headers
+SVG_ATTENTION = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+SVG_TASKLIST = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'
+SVG_TIMELINE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>'
+SVG_CLOCK = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
 
 
 def _disambiguate_name(variant: str, candidates: list, text_lower: str, creator_name: str = None) -> str:
@@ -1054,6 +1933,948 @@ class TaskService:
             "task_type_department": TASK_TYPE_DEPARTMENT,
             "status_config": STATUS_CONFIG,
         }
+
+    # ============== Daily Report Generation ==============
+
+    def generate_daily_reports(self, db: Session, target_rep_id: str = None) -> List[Dict[str, Any]]:
+        """Generate daily task summary HTML reports.
+        If target_rep_id: single user. Otherwise: all active users with assigned tasks.
+        Returns list of dicts: [{rep_id, name, file_path, task_count}]
+        """
+        from app.main import CompanyRep, Task, TaskActivity, MediaFile, create_notification, MEDIA_ROOT
+
+        today = date.today()
+        seven_days_ago = today - timedelta(days=7)
+        tomorrow = today + timedelta(days=1)
+
+        # 1. Query active reps
+        if target_rep_id:
+            reps = db.query(CompanyRep).filter(
+                CompanyRep.rep_id == target_rep_id,
+                CompanyRep.status == 'active'
+            ).all()
+        else:
+            reps = db.query(CompanyRep).filter(CompanyRep.status == 'active').all()
+
+        # Build a name cache for actor lookups
+        all_reps = db.query(CompanyRep).filter(CompanyRep.status == 'active').all()
+        rep_name_cache = {r.id: r.name for r in all_reps}
+
+        results = []
+
+        for rep in reps:
+            # 2. Find all tasks assigned to this rep OR where they are a collaborator
+            tasks = db.query(Task).filter(
+                or_(
+                    Task.assignee_id == rep.id,
+                    Task.collaborator_ids.op('@>')(f'["{str(rep.id)}"]')
+                )
+            ).all()
+
+            if not tasks:
+                continue
+
+            # 3. Query TaskActivity for those tasks (last 7 days)
+            task_ids = [t.id for t in tasks]
+            activities = db.query(TaskActivity).filter(
+                TaskActivity.task_id.in_(task_ids),
+                TaskActivity.created_at >= datetime.combine(seven_days_ago, datetime.min.time())
+            ).order_by(TaskActivity.created_at.desc()).all()
+
+            # Group activities by task
+            activities_by_task: Dict[Any, list] = {}
+            for act in activities:
+                activities_by_task.setdefault(act.task_id, []).append(act)
+
+            # 4. Build HTML report
+            html_content = self._build_report_html(
+                rep_name=rep.name,
+                rep_title=rep.title or rep.role or "",
+                rep_id=rep.rep_id,
+                report_date=today,
+                tomorrow_date=tomorrow,
+                tasks=tasks,
+                activities_by_task=activities_by_task,
+                today=today,
+                seven_days_ago=seven_days_ago,
+                rep_name_cache=rep_name_cache,
+            )
+
+            # 5. Save HTML file to disk
+            report_dir = MEDIA_ROOT / "reports" / "daily" / today.isoformat()
+            report_dir.mkdir(parents=True, exist_ok=True)
+            file_path = report_dir / f"{rep.rep_id}_{today.isoformat()}.html"
+            file_path.write_text(html_content, encoding='utf-8')
+
+            # 6. Create MediaFile record
+            try:
+                file_id_result = db.execute(text("SELECT nextval('media_file_id_seq')")).scalar()
+                file_id = f"RPT-{str(file_id_result).zfill(5)}"
+            except Exception:
+                file_id_result = db.execute(text("SELECT COUNT(*) + 1 FROM media_files")).scalar()
+                file_id = f"RPT-{str(file_id_result).zfill(5)}"
+
+            media = MediaFile(
+                file_id=file_id,
+                entity_type="report",
+                entity_id=rep.id,
+                file_name=f"Daily_Task_Summary_{rep.rep_id}_{today.isoformat()}.html",
+                file_path=str(file_path.resolve()),
+                file_type="document",
+                file_size=len(html_content.encode('utf-8')),
+                uploaded_by_rep_id=None,
+                description=f"Daily task summary for {rep.name} - {today.isoformat()}"
+            )
+            db.add(media)
+
+            # 7. Create notification for the rep
+            create_notification(
+                db, rep.rep_id, "task_report",
+                "Daily Task Summary Ready",
+                f"Your task report for {today.strftime('%b %d, %Y')} is available",
+                category="task", entity_type="report", entity_id=str(media.id)
+            )
+
+            results.append({
+                "rep_id": rep.rep_id,
+                "name": rep.name,
+                "file_path": str(file_path.resolve()),
+                "task_count": len(tasks),
+            })
+
+        db.commit()
+        return results
+
+    # ============== CEO Organizational Overview Report ==============
+
+    def generate_org_report(self, db: Session):
+        """Generate organizational bird's-eye view report for CEO.
+        Returns dict with {rep_id, name, file_path, task_count} or None.
+        """
+        from app.main import CompanyRep, Task, TaskActivity, MediaFile, create_notification, MEDIA_ROOT
+
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+
+        # 1. Find CEO: admin with no reports_to, title containing 'CEO'
+        top_admins = db.query(CompanyRep).filter(
+            CompanyRep.status == 'active',
+            CompanyRep.role == 'admin',
+            CompanyRep.reports_to.is_(None)
+        ).all()
+
+        if not top_admins:
+            logger.warning("generate_org_report: no top-level admin found")
+            return None
+
+        ceo = None
+        for rep in top_admins:
+            if rep.title and 'ceo' in rep.title.lower():
+                ceo = rep
+                break
+        if ceo is None:
+            ceo = top_admins[0]
+
+        # 2. Load all tasks
+        all_tasks = db.query(Task).all()
+        if not all_tasks:
+            logger.info("generate_org_report: no tasks in system")
+            return None
+
+        # 3. Load all active reps
+        all_reps = db.query(CompanyRep).filter(CompanyRep.status == 'active').all()
+        rep_name_cache = {r.id: r.name for r in all_reps}
+        rep_obj_cache = {r.id: r for r in all_reps}
+
+        # 4. Build task lookup by id for activity cross-ref
+        task_by_id = {t.id: t for t in all_tasks}
+
+        # 5. Group tasks by department
+        departments_order = ["Sales", "Recovery", "Finance", "Operations", "Unassigned"]
+        dept_tasks = {d: [] for d in departments_order}
+        for t in all_tasks:
+            dept = t.department if t.department in dept_tasks else "Unassigned"
+            dept_tasks[dept].append(t)
+
+        # 6. For each department, compute stats
+        dept_data = []
+        for dept_name in departments_order:
+            tasks_in_dept = dept_tasks[dept_name]
+            if not tasks_in_dept:
+                continue  # skip empty departments
+
+            active_tasks = [t for t in tasks_in_dept if t.status not in TERMINAL_STATUSES]
+            active_count = len(active_tasks)
+            overdue_tasks = [t for t in active_tasks if t.due_date and t.due_date < today]
+            overdue_count = len(overdue_tasks)
+            completed_today_list = [
+                t for t in tasks_in_dept
+                if t.status in TERMINAL_STATUSES
+                and t.completed_at
+                and t.completed_at.date() == today
+            ]
+            completed_today_count = len(completed_today_list)
+
+            # Attention items: overdue sorted by days overdue DESC, then urgent active (limit 8 total)
+            attention_items = []
+            for t in sorted(overdue_tasks, key=lambda x: (today - x.due_date).days, reverse=True):
+                attention_items.append(t)
+            urgent_active = [
+                t for t in active_tasks
+                if (t.priority or "").lower() == "urgent"
+                and t not in overdue_tasks
+            ]
+            for t in urgent_active:
+                attention_items.append(t)
+            attention_items = attention_items[:8]
+
+            # Team members: unique assignees in this dept
+            assignee_ids = set()
+            for t in tasks_in_dept:
+                if t.assignee_id:
+                    assignee_ids.add(t.assignee_id)
+
+            members = []
+            for aid in assignee_ids:
+                rep_obj = rep_obj_cache.get(aid)
+                if not rep_obj:
+                    continue
+                member_tasks = [t for t in tasks_in_dept if t.assignee_id == aid]
+                member_active = [t for t in member_tasks if t.status not in TERMINAL_STATUSES]
+                member_overdue = [t for t in member_active if t.due_date and t.due_date < today]
+                member_completed = [
+                    t for t in member_tasks
+                    if t.status in TERMINAL_STATUSES
+                    and t.completed_at
+                    and t.completed_at.date() == today
+                ]
+                members.append({
+                    "name": rep_obj.name,
+                    "title": rep_obj.title or rep_obj.role or "",
+                    "assigned": len(member_tasks),
+                    "active": len(member_active),
+                    "overdue": len(member_overdue),
+                    "completed": len(member_completed),
+                })
+            # Sort members by overdue DESC, then active DESC
+            members.sort(key=lambda m: (-m["overdue"], -m["active"]))
+
+            dept_data.append({
+                "name": dept_name,
+                "active_count": active_count,
+                "overdue_count": overdue_count,
+                "completed_today_count": completed_today_count,
+                "total_count": len(tasks_in_dept),
+                "attention_items": attention_items,
+                "members": members,
+            })
+
+        # 7. Org-wide stats
+        all_active = [t for t in all_tasks if t.status not in TERMINAL_STATUSES]
+        org_stats = {
+            "total_active": len(all_active),
+            "overdue": sum(1 for t in all_active if t.due_date and t.due_date < today),
+            "completed_today": sum(
+                1 for t in all_tasks
+                if t.status in TERMINAL_STATUSES
+                and t.completed_at
+                and t.completed_at.date() == today
+            ),
+            "due_today": sum(
+                1 for t in all_active if t.due_date and t.due_date == today
+            ),
+        }
+
+        # 8. Recent activities (last 24 hours)
+        cutoff_24h = datetime.combine(today, datetime.min.time()) - timedelta(hours=24)
+        recent_activities = db.query(TaskActivity).filter(
+            TaskActivity.created_at >= cutoff_24h
+        ).order_by(TaskActivity.created_at.desc()).limit(50).all()
+
+        # 9. Build HTML
+        html_content = self._build_org_report_html(
+            ceo_name=ceo.name,
+            ceo_title=ceo.title or "CEO",
+            ceo_rep_id=ceo.rep_id,
+            report_date=today,
+            org_stats=org_stats,
+            dept_data=dept_data,
+            recent_activities=recent_activities,
+            rep_name_cache=rep_name_cache,
+            task_by_id=task_by_id,
+        )
+
+        # 10. Save HTML file to disk
+        report_dir = MEDIA_ROOT / "reports" / "daily" / today.isoformat()
+        report_dir.mkdir(parents=True, exist_ok=True)
+        file_path = report_dir / f"ORG_{today.isoformat()}.html"
+        file_path.write_text(html_content, encoding='utf-8')
+
+        # 11. Create MediaFile record
+        try:
+            file_id_result = db.execute(text("SELECT nextval('media_file_id_seq')")).scalar()
+            file_id = f"RPT-{str(file_id_result).zfill(5)}"
+        except Exception:
+            file_id_result = db.execute(text("SELECT COUNT(*) + 1 FROM media_files")).scalar()
+            file_id = f"RPT-{str(file_id_result).zfill(5)}"
+
+        media = MediaFile(
+            file_id=file_id,
+            entity_type="report",
+            entity_id=ceo.id,
+            file_name=f"Org_Task_Overview_{today.isoformat()}.html",
+            file_path=str(file_path.resolve()),
+            file_type="document",
+            file_size=len(html_content.encode('utf-8')),
+            uploaded_by_rep_id=None,
+            description=f"Organizational task overview for {ceo.name} - {today.isoformat()}"
+        )
+        db.add(media)
+
+        # 12. Create notification for CEO
+        create_notification(
+            db, ceo.rep_id, "task_report",
+            "Organizational Task Overview Ready",
+            f"Your org-wide task report for {today.strftime('%b %d, %Y')} is available",
+            category="task", entity_type="org_report", entity_id=str(media.id)
+        )
+
+        db.commit()
+
+        logger.info(f"generate_org_report: report generated for {ceo.name} ({ceo.rep_id}), {len(all_tasks)} tasks")
+
+        return {
+            "rep_id": ceo.rep_id,
+            "name": ceo.name,
+            "file_path": str(file_path.resolve()),
+            "task_count": len(all_tasks),
+        }
+
+    def _build_org_report_html(self, ceo_name: str, ceo_title: str, ceo_rep_id: str,
+                                report_date: date, org_stats: Dict,
+                                dept_data: list, recent_activities: list,
+                                rep_name_cache: Dict, task_by_id: Dict) -> str:
+        """Build the full organizational overview HTML report."""
+        esc = html_mod.escape
+        today = report_date
+        tomorrow = today + timedelta(days=1)
+
+        # Format date strings
+        date_str = report_date.strftime("%A, %B %d, %Y")
+        tomorrow_str = tomorrow.strftime("%A, %B %d, %Y")
+
+        # --- Extra CSS for org report ---
+        org_extra_css = """
+  /* ===== ORG REPORT ADDITIONS ===== */
+  .dept-section { margin-bottom: 32px; }
+  .dept-header-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px; background: var(--navy-50); border: 1px solid var(--navy-100);
+    border-radius: var(--radius-md); margin-bottom: 16px;
+  }
+  .dept-header-bar .dept-name {
+    font-family: 'Playfair Display', serif; font-size: 1.1rem; font-weight: 600; color: var(--navy-800);
+  }
+  .dept-header-bar .dept-stats { display: flex; gap: 8px; }
+  .dept-stat-pill {
+    padding: 3px 10px; border-radius: 20px; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.3px;
+  }
+  .dept-stat-pill.active { background: var(--blue-100); color: var(--blue-600); }
+  .dept-stat-pill.overdue { background: var(--red-100); color: var(--red-600); }
+  .dept-stat-pill.total { background: var(--navy-50); color: var(--navy-500); border: 1px solid var(--navy-200); }
+  .workload-table td.overdue-cell { color: var(--red-600); font-weight: 600; }
+  .activity-feed { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 20px; }
+  .activity-row { padding: 10px 0; border-bottom: 1px solid var(--border-light); display: flex; align-items: baseline; gap: 10px; font-size: 0.8rem; }
+  .activity-row:last-child { border-bottom: none; }
+  .activity-row .act-time { font-size: 0.65rem; color: var(--text-tertiary); flex-shrink: 0; min-width: 130px; }
+  .activity-row .act-text { color: var(--text-secondary); }
+  .activity-row .act-text strong { color: var(--navy-700); }
+"""
+
+        # --- Build per-department sections ---
+        dept_sections_parts = []
+        for dept in dept_data:
+            dept_name = esc(dept["name"])
+            total_count = dept["total_count"]
+            active_count = dept["active_count"]
+            overdue_count = dept["overdue_count"]
+
+            # Overdue pill (only if > 0)
+            overdue_pill = ""
+            if overdue_count > 0:
+                overdue_pill = f'<span class="dept-stat-pill overdue">{overdue_count} Overdue</span>'
+
+            # Attention cards
+            attention_html = ""
+            if dept["attention_items"]:
+                attention_parts = []
+                for t in dept["attention_items"]:
+                    if t.due_date and t.due_date < today and t.status not in TERMINAL_STATUSES:
+                        days_overdue = (today - t.due_date).days
+                        attention_parts.append(
+                            self._build_attention_card(t, "overdue", days_overdue, today, esc)
+                        )
+                    elif (t.priority or "").lower() == "urgent":
+                        attention_parts.append(
+                            self._build_attention_card(t, "today", 0, today, esc)
+                        )
+                    else:
+                        attention_parts.append(
+                            self._build_attention_card(t, "today", 0, today, esc)
+                        )
+                attention_html = f'<div style="margin-bottom: 16px;">{"".join(attention_parts)}</div>'
+
+            # Team member table
+            members_html = ""
+            if dept["members"]:
+                member_rows = []
+                for m in dept["members"]:
+                    overdue_style = ' style="color:var(--red-600); font-weight:600"' if m["overdue"] > 0 else ''
+                    member_rows.append(
+                        f'<tr>'
+                        f'<td style="font-weight:500; color:var(--navy-800)">{esc(m["name"])}</td>'
+                        f'<td class="dept-cell">{esc(m["title"])}</td>'
+                        f'<td>{m["assigned"]}</td>'
+                        f'<td>{m["active"]}</td>'
+                        f'<td{overdue_style}>{m["overdue"]}</td>'
+                        f'<td>{m["completed"]}</td>'
+                        f'</tr>'
+                    )
+                members_html = f"""<div class="table-wrapper" style="margin-bottom: 8px;">
+    <table class="data-table">
+      <thead>
+        <tr><th>Team Member</th><th>Title</th><th>Assigned</th><th>Active</th><th>Overdue</th><th>Completed</th></tr>
+      </thead>
+      <tbody>
+        {"".join(member_rows)}
+      </tbody>
+    </table>
+  </div>"""
+
+            dept_sections_parts.append(f"""<div class="section dept-section animate-section">
+  <div class="dept-header-bar">
+    <div class="dept-name">{dept_name}</div>
+    <div class="dept-stats">
+      <span class="dept-stat-pill total">{total_count} Total</span>
+      <span class="dept-stat-pill active">{active_count} Active</span>
+      {overdue_pill}
+    </div>
+  </div>
+  {attention_html}
+  {members_html}
+</div>""")
+
+        dept_sections_html = "\n".join(dept_sections_parts)
+
+        # --- Build activity feed rows ---
+        activity_rows_parts = []
+        if recent_activities:
+            for act in recent_activities:
+                actor_name = rep_name_cache.get(act.actor_id, "System")
+                action_raw = (act.action or "unknown").lower()
+                action_display = action_raw.replace("_", " ").capitalize()
+
+                # Look up task title
+                task_obj = task_by_id.get(act.task_id)
+                task_title = task_obj.title if task_obj else "Unknown Task"
+
+                # Format timestamp (cross-platform safe: no %-I)
+                if act.created_at:
+                    raw_time = act.created_at.strftime("%I:%M %p").lstrip("0")
+                    timestamp_str = f'{act.created_at.strftime("%b %d")} {raw_time}'
+                else:
+                    timestamp_str = ""
+
+                activity_rows_parts.append(
+                    f'<div class="activity-row">'
+                    f'<span class="act-time">{esc(timestamp_str)}</span>'
+                    f'<span class="act-text"><strong>{esc(actor_name)}</strong> {esc(action_display)}'
+                    f' on <strong>{esc(task_title)}</strong></span>'
+                    f'</div>'
+                )
+        else:
+            activity_rows_parts.append(
+                '<div class="activity-row">'
+                '<span class="act-text" style="color: var(--text-tertiary);">No activity recorded in the last 24 hours.</span>'
+                '</div>'
+            )
+
+        activity_rows_html = "\n      ".join(activity_rows_parts)
+
+        # --- Assemble full HTML ---
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Organizational Task Overview &mdash; SBL Orbit</title>
+{REPORT_GOOGLE_FONTS}
+<style>
+{REPORT_CSS}
+/* Org report additions */
+{org_extra_css}
+</style>
+</head>
+<body>
+
+<div class="page-wrapper">
+
+  <header class="report-header animate-header">
+    <div class="header-left">
+      <div class="brand">
+        <div class="brand-icon">O</div>
+        <div><div class="brand-text">SBL Orbit</div></div>
+      </div>
+      <h1 class="report-title">Organizational Task Overview</h1>
+      <div class="report-date">{esc(date_str)}</div>
+    </div>
+    <div class="header-right">
+      <div class="recipient-label">Prepared for</div>
+      <div class="recipient-name">{esc(ceo_name)}</div>
+      <div class="recipient-role">{esc(ceo_title)}</div>
+      <div class="rep-id-badge">{esc(ceo_rep_id)}</div>
+    </div>
+  </header>
+
+  <div class="summary-grid animate-cards">
+    <div class="summary-card card-total stagger-1">
+      <div class="card-label">Active Tasks</div>
+      <div class="card-value">{org_stats['total_active']}</div>
+      <div class="card-context">Across all departments</div>
+    </div>
+    <div class="summary-card card-due stagger-2">
+      <div class="card-label">Due Today</div>
+      <div class="card-value">{org_stats['due_today']}</div>
+      <div class="card-context">Require action today</div>
+    </div>
+    <div class="summary-card card-overdue stagger-3">
+      <div class="card-label">Overdue</div>
+      <div class="card-value">{org_stats['overdue']}</div>
+      <div class="card-context">Past deadline</div>
+    </div>
+    <div class="summary-card card-completed stagger-4">
+      <div class="card-label">Completed Today</div>
+      <div class="card-value">{org_stats['completed_today']}</div>
+      <div class="card-context">Resolved today</div>
+    </div>
+  </div>
+
+  {dept_sections_html}
+
+  <div class="section animate-section">
+    <div class="section-header">
+      <div class="section-icon violet">{SVG_TIMELINE}</div>
+      <div>
+        <div class="section-title">Recent Organization Activity</div>
+        <div class="section-subtitle">Updates across all departments in the last 24 hours</div>
+      </div>
+      <div class="section-line"></div>
+    </div>
+    <div class="activity-feed">
+      {activity_rows_html}
+    </div>
+  </div>
+
+  <footer class="report-footer animate-section">
+    <div class="footer-left">
+      <div class="footer-brand">Generated automatically by SBL Orbit Task Engine</div>
+      <div class="footer-meta">
+        Report period: Last 24 hours<br>
+        Next scheduled report: {esc(tomorrow_str)} at 5:30 PM
+      </div>
+    </div>
+    <div class="footer-right">
+      <div class="footer-confidential">Internal &middot; Confidential</div>
+      <div class="footer-page">SBL Orbit v3</div>
+    </div>
+  </footer>
+
+</div>
+
+</body>
+</html>"""
+
+    def _build_report_html(self, rep_name: str, rep_title: str, rep_id: str,
+                           report_date: date, tomorrow_date: date,
+                           tasks: list, activities_by_task: Dict,
+                           today: date, seven_days_ago: date,
+                           rep_name_cache: Dict) -> str:
+        """Build the full HTML report string for one user."""
+        esc = html_mod.escape
+
+        # --- Compute summary stats ---
+        active_tasks = [t for t in tasks if t.status not in TERMINAL_STATUSES]
+        total_active = len(active_tasks)
+        due_today_tasks = [t for t in active_tasks if t.due_date and t.due_date == today]
+        due_today_count = len(due_today_tasks)
+        overdue_tasks = [t for t in active_tasks if t.due_date and t.due_date < today]
+        overdue_count = len(overdue_tasks)
+        completed_7d = len([
+            t for t in tasks
+            if t.status in TERMINAL_STATUSES
+            and t.completed_at
+            and t.completed_at.date() >= seven_days_ago
+        ])
+
+        # --- Format date string ---
+        date_str = report_date.strftime("%A, %B %d, %Y")  # e.g. "Tuesday, February 18, 2026"
+        tomorrow_str = tomorrow_date.strftime("%A, %B %d, %Y")
+
+        # --- Build attention items ---
+        attention_items = []
+        # Overdue first, sorted by days overdue DESC
+        for t in sorted(overdue_tasks, key=lambda x: (today - x.due_date).days, reverse=True):
+            days = (today - t.due_date).days
+            attention_items.append(self._build_attention_card(t, "overdue", days, today, esc))
+        # Due today
+        for t in due_today_tasks:
+            attention_items.append(self._build_attention_card(t, "today", 0, today, esc))
+
+        attention_html = "\n".join(attention_items) if attention_items else '<p style="color: var(--text-tertiary); font-size: 0.85rem;">No overdue or due-today tasks. You\'re on track.</p>'
+
+        # --- Build task table rows ---
+        # Sort: overdue first, then due-today, then by due_date ASC, then created_at DESC
+        def task_sort_key(t):
+            is_overdue = 0 if (t.due_date and t.due_date < today and t.status not in TERMINAL_STATUSES) else 1
+            is_due_today = 0 if (t.due_date and t.due_date == today and t.status not in TERMINAL_STATUSES) else 1
+            due = t.due_date if t.due_date else date.max
+            created = t.created_at if t.created_at else datetime.min
+            return (is_overdue, is_due_today, due, -created.timestamp() if isinstance(created, datetime) else 0)
+
+        sorted_tasks = sorted(tasks, key=task_sort_key)
+        table_rows = "\n".join(self._build_table_row(t, today, esc) for t in sorted_tasks)
+
+        # --- Build activity timeline ---
+        # Only tasks with activities in last 7 days
+        timeline_blocks = []
+        for t in sorted_tasks:
+            task_activities = activities_by_task.get(t.id, [])
+            if not task_activities:
+                continue
+            timeline_blocks.append(
+                self._build_timeline_block(t, task_activities, rep_name_cache, esc)
+            )
+        timeline_html = "\n".join(timeline_blocks) if timeline_blocks else '<p style="color: var(--text-tertiary); font-size: 0.85rem;">No activity recorded in the last 7 days.</p>'
+
+        # --- Assemble full HTML ---
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Task Summary &mdash; SBL Orbit</title>
+{REPORT_GOOGLE_FONTS}
+<style>
+{REPORT_CSS}
+</style>
+</head>
+<body>
+
+<div class="page-wrapper">
+
+  <header class="report-header animate-header">
+    <div class="header-left">
+      <div class="brand">
+        <div class="brand-icon">O</div>
+        <div>
+          <div class="brand-text">SBL Orbit</div>
+          <div class="brand-sub"></div>
+        </div>
+      </div>
+      <h1 class="report-title">Daily Task Summary</h1>
+      <div class="report-date">{esc(date_str)}</div>
+    </div>
+    <div class="header-right">
+      <div class="recipient-label">Prepared for</div>
+      <div class="recipient-name">{esc(rep_name)}</div>
+      <div class="recipient-role">{esc(rep_title)}</div>
+      <div class="rep-id-badge">{esc(rep_id)}</div>
+    </div>
+  </header>
+
+  <div class="summary-grid animate-cards">
+    <div class="summary-card card-total stagger-1">
+      <div class="card-label">Total Active</div>
+      <div class="card-value">{total_active}</div>
+      <div class="card-context">Assigned tasks</div>
+    </div>
+    <div class="summary-card card-due stagger-2">
+      <div class="card-label">Due Today</div>
+      <div class="card-value">{due_today_count}</div>
+      <div class="card-context">Require action</div>
+    </div>
+    <div class="summary-card card-overdue stagger-3">
+      <div class="card-label">Overdue</div>
+      <div class="card-value">{overdue_count}</div>
+      <div class="card-context">Past deadline</div>
+    </div>
+    <div class="summary-card card-completed stagger-4">
+      <div class="card-label">Completed</div>
+      <div class="card-value">{completed_7d}</div>
+      <div class="card-context">Last 7 days</div>
+    </div>
+  </div>
+
+  <div class="section animate-section stagger-3">
+    <div class="section-header">
+      <div class="section-icon red">
+        {SVG_ATTENTION}
+      </div>
+      <div>
+        <div class="section-title">Attention Required</div>
+        <div class="section-subtitle">Overdue and due-today tasks needing immediate action</div>
+      </div>
+      <div class="section-line"></div>
+    </div>
+    {attention_html}
+  </div>
+
+  <div class="section animate-section stagger-4">
+    <div class="section-header">
+      <div class="section-icon blue">
+        {SVG_TASKLIST}
+      </div>
+      <div>
+        <div class="section-title">All Assigned Tasks</div>
+        <div class="section-subtitle">Complete list of active and recently completed tasks</div>
+      </div>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Task ID</th>
+            <th>Title</th>
+            <th>Type</th>
+            <th>Priority</th>
+            <th>Status</th>
+            <th>Department</th>
+            <th>Due Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          {table_rows}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section animate-section stagger-5">
+    <div class="section-header">
+      <div class="section-icon violet">
+        {SVG_TIMELINE}
+      </div>
+      <div>
+        <div class="section-title">Activity Timeline</div>
+        <div class="section-subtitle">Recent progress and updates on active tasks</div>
+      </div>
+      <div class="section-line"></div>
+    </div>
+    {timeline_html}
+  </div>
+
+  <footer class="report-footer animate-section stagger-6">
+    <div class="footer-left">
+      <div class="footer-brand">Generated automatically by SBL Orbit Task Engine</div>
+      <div class="footer-meta">
+        Report period: Last 24 hours<br>
+        Next scheduled report: {esc(tomorrow_str)} at 7:00 AM
+      </div>
+    </div>
+    <div class="footer-right">
+      <div class="footer-confidential">Internal &middot; Confidential</div>
+      <div class="footer-page">SBL Orbit v3</div>
+    </div>
+  </footer>
+
+</div>
+
+</body>
+</html>"""
+
+    def _build_attention_card(self, task, urgency_type: str, days_overdue: int,
+                              today: date, esc) -> str:
+        """Build a single attention card HTML for an overdue or due-today task."""
+        priority = (task.priority or "medium").lower()
+        status = (task.status or "pending").lower()
+        status_display = status.replace("_", " ").replace("-", " ").title()
+        priority_display = priority.title()
+        department = html_mod.escape(task.department or "General")
+        due_str = task.due_date.strftime("%b %d, %Y") if task.due_date else "No date"
+
+        if urgency_type == "overdue":
+            card_class = "attention-card urgent"
+            badge_html = f'<div class="overdue-badge">{SVG_CLOCK} {days_overdue} day{"s" if days_overdue != 1 else ""} overdue</div>'
+        else:
+            card_class = "attention-card"
+            badge_html = f'<div class="today-badge">{SVG_CLOCK} Due today</div>'
+
+        priority_css = f"priority-{priority}" if priority in ("urgent", "high", "medium", "low") else "priority-medium"
+        status_css = f"status-{status.replace('_', '-')}" if status in ("pending", "in_progress", "on_hold", "completed") else "status-pending"
+
+        return f"""    <div class="{card_class}">
+      <div class="attention-top">
+        <div class="attention-id">{esc(task.task_id or "")}</div>
+        {badge_html}
+      </div>
+      <div class="attention-title">{esc(task.title or "")}</div>
+      <div class="attention-meta">
+        <span class="priority-badge {priority_css}">{esc(priority_display)}</span>
+        <span class="status-pill {status_css}">{esc(status_display)}</span>
+        <span class="meta-item"><span class="dot"></span> Due: {esc(due_str)}</span>
+        <span class="meta-item"><span class="dot"></span> {department}</span>
+      </div>
+    </div>"""
+
+    def _build_table_row(self, task, today: date, esc) -> str:
+        """Build a single table row HTML for the task list."""
+        priority = (task.priority or "medium").lower()
+        status = (task.status or "pending").lower()
+        task_type = (task.task_type or "general").lower()
+        department = esc(task.department or "General")
+
+        priority_css = f"priority-{priority}" if priority in ("urgent", "high", "medium", "low") else "priority-medium"
+        status_css = f"status-{status.replace('_', '-')}" if status in ("pending", "in_progress", "on_hold", "completed") else "status-pending"
+        status_display = status.replace("_", " ").replace("-", " ").title()
+        priority_display = priority.title()
+
+        # Type badge CSS
+        type_css_map = {
+            "finance": "type-finance", "approval": "type-finance", "report": "type-finance",
+            "legal": "type-finance", "reconciliation": "type-finance", "documentation": "type-finance",
+            "operations": "type-operations", "inventory": "type-operations",
+            "transaction": "type-operations", "general": "type-operations",
+            "sales": "type-sales", "site_visit": "type-sales", "customer": "type-sales",
+            "recovery": "type-recovery", "collection": "type-recovery", "follow_up": "type-recovery",
+        }
+        type_css = type_css_map.get(task_type, "")
+        type_display = task_type.replace("_", " ").title()
+
+        # Due date formatting
+        if task.due_date:
+            is_overdue = task.due_date < today and task.status not in TERMINAL_STATUSES
+            is_today = task.due_date == today and task.status not in TERMINAL_STATUSES
+            if is_overdue:
+                due_css = "due-overdue"
+            elif is_today:
+                due_css = "due-today"
+            else:
+                due_css = "due-normal"
+            due_display = task.due_date.strftime("%b %d")
+        else:
+            due_css = "due-normal"
+            due_display = "&mdash;"
+
+        return f"""          <tr>
+            <td class="task-id-cell">{esc(task.task_id or "")}</td>
+            <td class="task-title-cell">{esc(task.title or "")}</td>
+            <td><span class="type-badge {type_css}">{esc(type_display)}</span></td>
+            <td><span class="priority-badge {priority_css}">{esc(priority_display)}</span></td>
+            <td><span class="status-pill {status_css}">{esc(status_display)}</span></td>
+            <td class="dept-cell">{department}</td>
+            <td class="due-cell {due_css}">{due_display}</td>
+          </tr>"""
+
+    def _build_timeline_block(self, task, activities: list, rep_name_cache: Dict, esc) -> str:
+        """Build a timeline block for a single task with its activities."""
+        priority = (task.priority or "medium").lower()
+        status = (task.status or "pending").lower()
+        priority_css = f"priority-{priority}" if priority in ("urgent", "high", "medium", "low") else "priority-medium"
+        status_css = f"status-{status.replace('_', '-')}" if status in ("pending", "in_progress", "on_hold", "completed") else "status-pending"
+        status_display = status.replace("_", " ").replace("-", " ").title()
+        priority_display = priority.title()
+
+        entries_html = []
+        # Activities already sorted newest first from the query
+        for act in activities:
+            actor_name = rep_name_cache.get(act.actor_id, "System")
+            action = (act.action or "").lower()
+            if act.created_at:
+                # Cross-platform: avoid %-I (Linux only) — use %I and strip leading zero manually
+                raw_time = act.created_at.strftime("%I:%M %p").lstrip("0")
+                timestamp = f'{act.created_at.strftime("%b %d, %Y")} &mdash; {raw_time}'
+            else:
+                timestamp = ""
+
+            # Determine entry CSS class based on action type
+            if "commented" in action or "comment" in action:
+                entry_class = "entry-comment"
+            elif action in ("status_changed", "updated") or "status" in action:
+                entry_class = "entry-status"
+            elif action in ("assigned", "delegated", "reassigned"):
+                entry_class = "entry-assign"
+            elif action == "created":
+                entry_class = "entry-created"
+            elif "priority" in action:
+                entry_class = "entry-priority"
+            else:
+                entry_class = "entry-created"
+
+            # Build the description text
+            text_html = self._format_activity_text(act, actor_name, esc)
+
+            entries_html.append(f"""        <div class="timeline-entry {entry_class}">
+          <div class="timeline-time">{timestamp}</div>
+          <div class="timeline-text">{text_html}</div>
+        </div>""")
+
+        entries_joined = "\n".join(entries_html)
+
+        return f"""    <div class="timeline-block">
+      <div class="timeline-task-header">
+        <span class="timeline-task-id">{esc(task.task_id or "")}</span>
+        <div>
+          <div class="timeline-task-title">{esc(task.title or "")}</div>
+          <div class="timeline-task-meta">
+            <span class="priority-badge {priority_css}">{esc(priority_display)}</span>
+            <span class="status-pill {status_css}">{esc(status_display)}</span>
+          </div>
+        </div>
+      </div>
+      <div class="timeline-entries">
+{entries_joined}
+      </div>
+    </div>"""
+
+    def _format_activity_text(self, activity, actor_name: str, esc) -> str:
+        """Format a single activity entry's text content."""
+        action = (activity.action or "").lower()
+        old_val = activity.old_value or ""
+        new_val = activity.new_value or ""
+
+        if action == "commented":
+            return f'<strong>{esc(actor_name)}</strong> commented: &ldquo;{esc(new_val)}&rdquo;'
+        elif action == "status_changed":
+            old_css = f"status-{old_val.replace('_', '-')}" if old_val else "status-pending"
+            new_css = f"status-{new_val.replace('_', '-')}" if new_val else "status-pending"
+            old_display = esc(old_val.replace("_", " ").title()) if old_val else "Unknown"
+            new_display = esc(new_val.replace("_", " ").title()) if new_val else "Unknown"
+            return (
+                f'<strong>{esc(actor_name)}</strong> changed status: '
+                f'<span class="status-change">'
+                f'<span class="status-pill {old_css}" style="font-size:0.58rem; padding:1px 7px;">{old_display}</span> '
+                f'<span class="arrow">&rarr;</span> '
+                f'<span class="status-pill {new_css}" style="font-size:0.58rem; padding:1px 7px;">{new_display}</span>'
+                f'</span>'
+            )
+        elif action in ("assigned", "delegated", "reassigned"):
+            return f'<strong>{esc(actor_name)}</strong> {esc(action)} task'
+        elif action == "created":
+            return f'Task created by <strong>{esc(actor_name)}</strong>'
+        elif "priority" in action:
+            old_p_css = f"priority-{old_val.lower()}" if old_val else "priority-medium"
+            new_p_css = f"priority-{new_val.lower()}" if new_val else "priority-medium"
+            return (
+                f'<strong>{esc(actor_name)}</strong> changed priority: '
+                f'<span class="priority-badge {old_p_css}" style="font-size:0.56rem;">{esc(old_val.title() if old_val else "Medium")}</span> '
+                f'<span class="arrow">&rarr;</span> '
+                f'<span class="priority-badge {new_p_css}" style="font-size:0.56rem;">{esc(new_val.title() if new_val else "Medium")}</span>'
+            )
+        else:
+            desc = f"{action}: {new_val}" if new_val else action
+            return f'<strong>{esc(actor_name)}</strong> {esc(desc)}'
 
     # ============== Helper Methods ==============
 

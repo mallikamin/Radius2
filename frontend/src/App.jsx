@@ -219,6 +219,27 @@ export default function App() {
   const markNotifRead = async (nid) => {
     try { await api.post(`/notifications/${nid}/read`); setNotifications(prev => prev.filter(n => n.id !== nid)); setUnreadCount(prev => Math.max(0, prev - 1)); } catch (e) { /* silent */ }
   };
+  const openAuthReport = async (url) => {
+    try {
+      const res = await api.get(url, { responseType: 'text' });
+      const win = window.open('', '_blank');
+      if (win) { win.document.write(res.data); win.document.close(); }
+    } catch (e) { console.error('Failed to open report:', e); }
+  };
+  const handleNotifClick = (n) => {
+    markNotifRead(n.id);
+    setShowNotifPanel(false);
+    if (n.type === 'task_report') {
+      // entity_type === "report", entity_id is the media record id
+      // For personal reports: /tasks/daily-report/{rep_id}
+      // For org reports: /tasks/daily-report/org
+      // The notification data or entity_id may contain the rep_id
+      const repId = n.data?.rep_id || user?.rep_id;
+      if (repId) openAuthReport(`/tasks/daily-report/${repId}`);
+    } else if (n.entity_type === 'task' && n.entity_id) {
+      setActiveTab('tasks');
+    }
+  };
   const markAllRead = async () => {
     try { await api.post('/notifications/read-all'); setNotifications([]); setUnreadCount(0); } catch (e) { /* silent */ }
   };
@@ -286,8 +307,22 @@ export default function App() {
     return true;
   };
   
-  // CFO gets a focused header: Tasks, Reports, Analytics only
-  const isCFO = user?.rep_id === 'REP-0010';
+  // Team-based focused headers
+  const TEAM_HEADER_CONFIG = {
+    // Finance team: CFO + Luqman (consultant reporting to CFO)
+    finance: {
+      members: ['REP-0010', 'REP-0011'],
+      primaryIds: ['tasks', 'reports', 'dashboard'],
+    },
+    // Operations team: COO Hassan Danish, Ahsan Ejaz (Director Land), Sarosh Javed (CEO)
+    operations: {
+      members: ['REP-0003', 'REP-0004', 'REP-0009'],
+      primaryIds: ['tasks', 'inventory', 'transactions', 'vector', 'dashboard', 'reports'],
+    },
+  };
+
+  // Determine which team config applies to current user
+  const userTeam = Object.entries(TEAM_HEADER_CONFIG).find(([_, cfg]) => cfg.members.includes(user?.rep_id))?.[1] ?? null;
 
   // Primary tabs - always visible in header
   const allPrimaryTabs = [
@@ -299,11 +334,6 @@ export default function App() {
     { id: 'vector', label: 'Vector' },
     { id: 'dashboard', label: 'Analytics' }
   ];
-  const cfoPrimaryIds = ['tasks', 'reports', 'dashboard'];
-  const primaryTabs = (isCFO
-    ? allPrimaryTabs.filter(tab => cfoPrimaryIds.includes(tab.id))
-    : allPrimaryTabs
-  ).filter(tab => canAccess(tab.id));
 
   // More menu items - icon grid
   const defaultMoreTabs = [
@@ -314,11 +344,26 @@ export default function App() {
     { id: 'payments', label: 'Payments', icon: '\u{1F4B8}' },
     { id: 'media', label: 'Media Library', icon: '\u{1F4F7}' }
   ];
-  // CFO: demoted tabs go to More menu
-  const cfoExtraTabs = isCFO
-    ? allPrimaryTabs.filter(tab => !cfoPrimaryIds.includes(tab.id)).map(tab => ({ ...tab, icon: { customers: '\u{1F465}', campaigns: '\u{1F4E3}', interactions: '\u{1F4DE}', vector: '\u{1F5FA}' }[tab.id] || '\u{1F4CB}' }))
+
+  // Icon map for tabs that can appear in either primary or more menu
+  const TAB_ICONS = { customers: '\u{1F465}', campaigns: '\u{1F4E3}', interactions: '\u{1F4DE}', vector: '\u{1F5FA}', inventory: '\u{1F4E6}', transactions: '\u{1F4B1}', tasks: '\u{2705}', reports: '\u{1F4CA}', dashboard: '\u{1F4C8}' };
+
+  // All known tabs (primary + more) for team-based selection
+  const allKnownTabs = [...allPrimaryTabs, ...defaultMoreTabs];
+
+  // Team members: promoted tabs go to header, demoted tabs go to More menu
+  const primaryTabs = (userTeam
+    ? userTeam.primaryIds.map(id => allKnownTabs.find(t => t.id === id)).filter(Boolean)
+    : allPrimaryTabs
+  ).filter(tab => canAccess(tab.id));
+
+  const teamExtraTabs = userTeam
+    ? allKnownTabs.filter(tab => !userTeam.primaryIds.includes(tab.id) && allPrimaryTabs.some(p => p.id === tab.id)).map(tab => ({ ...tab, icon: TAB_ICONS[tab.id] || '\u{1F4CB}' }))
     : [];
-  const moreTabs = [...cfoExtraTabs, ...defaultMoreTabs].filter(tab => canAccess(tab.id));
+  const teamFilteredMoreTabs = userTeam
+    ? defaultMoreTabs.filter(tab => !userTeam.primaryIds.includes(tab.id))
+    : defaultMoreTabs;
+  const moreTabs = [...teamExtraTabs, ...teamFilteredMoreTabs].filter(tab => canAccess(tab.id));
 
   // All tabs for reference
   const allTabs = [...primaryTabs, ...moreTabs];
@@ -364,7 +409,7 @@ export default function App() {
                     {notifications.length === 0 ? (
                       <div className="px-4 py-8 text-center text-sm text-gray-400">No new notifications</div>
                     ) : notifications.map(n => (
-                      <div key={n.id} onClick={() => { markNotifRead(n.id); setShowNotifPanel(false); }}
+                      <div key={n.id} onClick={() => handleNotifClick(n)}
                         className="px-4 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
                         <div className="text-sm font-medium text-gray-900">{n.title}</div>
                         {n.message && <div className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</div>}

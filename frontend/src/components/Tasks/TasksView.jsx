@@ -54,6 +54,8 @@ export default function TasksView({ api, user, addToast, setActiveTab }) {
       if (filters.department) params.department = filters.department;
       if (filters.type) params.task_type = filters.type;
       if (debouncedSearch) params.search = debouncedSearch;
+      // Department view needs all tasks to show accurate per-department counts
+      if (subTab === 'department') params.limit = 500;
       const [tasksRes, repsRes] = await Promise.all([
         api.get('/tasks', { params }).catch(() => ({ data: [] })),
         api.get('/company-reps').catch(() => ({ data: [] })),
@@ -62,7 +64,7 @@ export default function TasksView({ api, user, addToast, setActiveTab }) {
       setReps(repsRes.data || []);
     } catch (e) { console.error('Failed to load tasks:', e); }
     finally { setLoading(false); }
-  }, [api, filters, debouncedSearch]);
+  }, [api, filters, debouncedSearch, subTab]);
 
   const loadMyTasks = useCallback(async () => {
     try { const res = await api.get('/tasks/my').catch(() => ({ data: [] })); setMyTasks(res.data || []); }
@@ -519,6 +521,29 @@ function DashboardTab({ api, summary, tasks }) {
   const [execData, setExecData] = useState(null);
   const [execLoading, setExecLoading] = useState(true);
   const [expandedPerson, setExpandedPerson] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [reportResult, setReportResult] = useState(null);
+
+  const openReport = async (url) => {
+    try {
+      const res = await api.get(url, { responseType: 'text' });
+      const win = window.open('', '_blank');
+      if (win) { win.document.write(res.data); win.document.close(); }
+    } catch (e) {
+      console.error('Failed to open report:', e);
+    }
+  };
+
+  const generateReports = async () => {
+    setGenerating(true);
+    setReportResult(null);
+    try {
+      const res = await api.post('/tasks/daily-report');
+      setReportResult(res.data);
+    } catch (e) {
+      setReportResult({ error: e.response?.data?.detail || 'Failed to generate reports' });
+    } finally { setGenerating(false); }
+  };
 
   useEffect(() => {
     (async () => {
@@ -536,6 +561,46 @@ function DashboardTab({ api, summary, tasks }) {
 
   return (
     <div className="space-y-6">
+      {/* Report Generation */}
+      <div className="flex items-center justify-between bg-white rounded-2xl shadow-sm border p-4">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Daily Task Reports</h3>
+          <p className="text-[10px] text-gray-400 mt-0.5">Generate personalized HTML reports for all users with assigned tasks</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {reportResult && !reportResult.error && (
+            <span className="text-xs text-green-600 font-medium">{reportResult.message}</span>
+          )}
+          {reportResult?.error && (
+            <span className="text-xs text-red-600 font-medium">{reportResult.error}</span>
+          )}
+          <button onClick={generateReports} disabled={generating}
+            className="px-4 py-2 text-xs font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 whitespace-nowrap">
+            {generating ? 'Generating...' : 'Generate Reports'}
+          </button>
+        </div>
+      </div>
+
+      {reportResult?.reports?.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border p-4">
+          <div className="text-xs font-medium text-gray-500 mb-2">Generated Reports ({reportResult.reports.length})</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {reportResult.reports.map(r => (
+              <button key={r.rep_id} onClick={() => openReport(`/tasks/daily-report/${r.rep_id}`)}
+                className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors text-left w-full">
+                <div>
+                  <div className="text-xs font-medium text-gray-800">{r.name}</div>
+                  <div className="text-[10px] text-gray-400">{r.rep_id} — {r.task_count} tasks</div>
+                </div>
+                <svg className="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Org-wide Stats */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[{ l: 'Total', v: org.total ?? s.total ?? 0, c: 'text-gray-900' },
@@ -549,6 +614,21 @@ function DashboardTab({ api, summary, tasks }) {
           </div>
         ))}
       </div>
+
+      {/* Department Breakdown */}
+      {s.by_department && Object.keys(s.by_department).length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">By Department</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {Object.entries(s.by_department).sort((a,b) => b[1] - a[1]).map(([dept, count]) => (
+              <div key={dept} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-50">
+                <span className="text-xs font-medium text-gray-700 capitalize">{dept}</span>
+                <span className="text-sm font-semibold text-gray-900">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {execLoading ? <div className="p-8 text-center text-gray-400">Loading executive summary...</div> : execData && (<>
         {/* Your Tasks */}
@@ -797,7 +877,7 @@ function CreateTaskModal({ api, reps, addToast, onClose, onCreated }) {
             <div><label className={labelCls}>CRM Link Type</label>
               <select value={form.crm_entity_type} onChange={e => setForm(f => ({ ...f, crm_entity_type: e.target.value }))} className={inputCls}>
                 <option value="">None</option><option value="customer">Customer</option><option value="transaction">Transaction</option>
-                <option value="inventory">Inventory</option><option value="lead">Lead</option>
+                <option value="inventory">Inventory</option><option value="project">Project</option><option value="lead">Lead</option>
               </select></div>
             <div><label className={labelCls}>CRM Entity ID</label>
               <input value={form.crm_entity_id} onChange={e => setForm(f => ({ ...f, crm_entity_id: e.target.value }))} className={inputCls} placeholder="e.g. CUST-0001" disabled={!form.crm_entity_type} /></div>

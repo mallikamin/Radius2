@@ -4805,7 +4805,7 @@ async def upload_media(
     db: Session = Depends(get_db)
 ):
     """Upload media file"""
-    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task"]:
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report"]:
         raise HTTPException(400, "Invalid entity_type")
 
     # Verify entity exists
@@ -4824,6 +4824,11 @@ async def upload_media(
         entity = db.query(Customer).filter((Customer.id == entity_id) | (Customer.customer_id == entity_id)).first()
     elif entity_type == "broker":
         entity = db.query(Broker).filter((Broker.id == entity_id) | (Broker.broker_id == entity_id)).first()
+    elif entity_type == "task":
+        entity = db.query(Task).filter((Task.id == entity_id) | (Task.task_id == entity_id)).first()
+    elif entity_type == "report":
+        # Reports are stored against rep.id; skip entity lookup, use entity_id directly
+        entity = db.query(CompanyRep).filter((CompanyRep.id == entity_id) | (CompanyRep.rep_id == entity_id)).first()
 
     if not entity:
         raise HTTPException(404, f"{entity_type} not found")
@@ -4962,7 +4967,7 @@ def download_media_file(file_id: str, db: Session = Depends(get_db)):
 @app.get("/api/media/{entity_type}/{entity_id}")
 def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get_db)):
     """List media files for an entity"""
-    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task"]:
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report"]:
         raise HTTPException(400, "Invalid entity_type")
 
     # Get entity
@@ -4981,6 +4986,10 @@ def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get
         entity = db.query(Customer).filter((Customer.id == entity_id) | (Customer.customer_id == entity_id)).first()
     elif entity_type == "broker":
         entity = db.query(Broker).filter((Broker.id == entity_id) | (Broker.broker_id == entity_id)).first()
+    elif entity_type == "task":
+        entity = db.query(Task).filter((Task.id == entity_id) | (Task.task_id == entity_id)).first()
+    elif entity_type == "report":
+        entity = db.query(CompanyRep).filter((CompanyRep.id == entity_id) | (CompanyRep.rep_id == entity_id)).first()
 
     if not entity:
         raise HTTPException(404, f"{entity_type} not found")
@@ -9235,6 +9244,69 @@ async def departments_config(
     current_user = Depends(get_current_user)
 ):
     return _task_service.get_departments_config()
+
+@app.post("/api/tasks/daily-report")
+async def generate_daily_report(
+    rep_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Generate daily task summary reports. Admin/CCO only."""
+    if current_user.role not in ("admin", "cco"):
+        raise HTTPException(status_code=403, detail="Admin/CCO only")
+    try:
+        results = _task_service.generate_daily_reports(db, target_rep_id=rep_id)
+        # Also generate org report when generating for all users (no specific rep)
+        org_result = None
+        if not rep_id:
+            try:
+                org_result = _task_service.generate_org_report(db)
+            except Exception as e:
+                logger.error(f"Org report generation failed: {e}", exc_info=True)
+        response = {"message": f"Generated {len(results)} report(s)", "reports": results}
+        if org_result:
+            response["org_report"] = org_result
+        return response
+    except Exception as e:
+        logger.error(f"Daily report generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tasks/daily-report/org")
+async def get_org_daily_report(
+    report_date: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get the organizational task overview report. Admin/CCO only."""
+    from fastapi.responses import HTMLResponse
+    if current_user.role not in ("admin", "cco"):
+        raise HTTPException(403, "Admin/CCO only")
+    target_date = date.fromisoformat(report_date) if report_date else date.today()
+    file_path = MEDIA_ROOT / "reports" / "daily" / target_date.isoformat() / f"ORG_{target_date.isoformat()}.html"
+    if not file_path.exists():
+        raise HTTPException(404, f"No org report found for {target_date}")
+    return HTMLResponse(content=file_path.read_text(encoding='utf-8'))
+
+@app.get("/api/tasks/daily-report/{rep_id}")
+async def get_daily_report(
+    rep_id: str,
+    report_date: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get the latest daily report for a rep. Returns the HTML file."""
+    from fastapi.responses import HTMLResponse
+    # Admin/CCO can view any, others can only view their own
+    if current_user.role not in ("admin", "cco") and current_user.rep_id != rep_id:
+        raise HTTPException(403, "Access denied")
+
+    target_date = date.fromisoformat(report_date) if report_date else date.today()
+    file_path = MEDIA_ROOT / "reports" / "daily" / target_date.isoformat() / f"{rep_id}_{target_date.isoformat()}.html"
+
+    if not file_path.exists():
+        raise HTTPException(404, f"No report found for {rep_id} on {target_date}")
+
+    return HTMLResponse(content=file_path.read_text(encoding='utf-8'))
 
 @app.get("/api/tasks/status-options/{task_type_name}")
 async def status_options(
