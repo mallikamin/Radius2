@@ -162,6 +162,37 @@ export default function LegendPanel({ vectorState }) {
       });
     }
 
+    // Fallback: when no annotations have plotIds but inventory exists, show "All Inventory" summary
+    const hasAnnotatedPlots = vectorState.annos.some(a => a.plotIds && a.plotIds.length > 0);
+    let fallbackMode = false;
+    if (!hasAnnotatedPlots && invKeys.length > 0) {
+      fallbackMode = true;
+      let fallbackMarla = 0;
+      let fallbackValue = 0;
+      let plotsWithInv = 0;
+      invKeys.forEach(key => {
+        const inv = vectorState.inventory[key];
+        const m = parseFloat(inv.marla) || 0;
+        const v = parseFloat(inv.totalValue) || 0;
+        fallbackMarla += m;
+        fallbackValue += v;
+        if (m > 0 || v > 0) plotsWithInv++;
+      });
+      globalMarlaTotal = fallbackMarla;
+      globalValueTotal = fallbackValue;
+      items.push({
+        id: '__all_inventory__',
+        color: '#3b82f6',
+        note: 'All Inventory',
+        count: invKeys.length,
+        plotsWithData: plotsWithInv,
+        marla: fallbackMarla,
+        value: fallbackValue,
+        isManual: false,
+        isFallback: true
+      });
+    }
+
     // Sort by value total (descending) or count or marla
     items.sort((a, b) => {
       if (a.value > 0 || b.value > 0) {
@@ -173,7 +204,7 @@ export default function LegendPanel({ vectorState }) {
       return b.count - a.count;
     });
 
-    return { items, globalMarlaTotal, globalValueTotal };
+    return { items, globalMarlaTotal, globalValueTotal, fallbackMode };
   }, [vectorState.annos, vectorState.plots, vectorState.inventory, vectorState.legend.manualEntries]);
 
   // Position legend based on position setting (only if not manually positioned)
@@ -264,7 +295,7 @@ export default function LegendPanel({ vectorState }) {
 
   if (!vectorState.legend.visible) return null;
 
-  const { items, globalMarlaTotal, globalValueTotal } = legendItems;
+  const { items, globalMarlaTotal, globalValueTotal, fallbackMode } = legendItems;
 
   return (
     <div
@@ -281,7 +312,7 @@ export default function LegendPanel({ vectorState }) {
         onMouseDown={handleDragStart}
       >
         <span>
-          📊 LEGEND
+          📊 {fallbackMode ? 'INVENTORY TOTALS' : 'LEGEND'}
           {(globalMarlaTotal > 0 || globalValueTotal > 0) && (
             <span className="ml-2 text-green-400">
               {globalMarlaTotal > 0 && `${globalMarlaTotal.toFixed(1)}M`}
@@ -382,43 +413,83 @@ export default function LegendPanel({ vectorState }) {
               return (
                 <div
                   key={idx}
-                  className={`flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0 cursor-pointer transition-all ${
+                  className={`flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0 cursor-pointer transition-all ${
                     isActiveView
                       ? 'bg-indigo-50 border-l-2 border-l-indigo-500 pl-1'
                       : 'hover:bg-gray-50'
                   }`}
                   onClick={() => {
-                    // Toggle view: click to focus, click again to show all
+                    if (item.isManual) return; // manual entries are info-only, not filterable
                     if (isActiveView) {
                       vectorState.setActiveView('all');
                     } else {
                       vectorState.setActiveView(item.id);
                     }
                   }}
-                  title={isActiveView ? "Click to show all" : `Click to focus on ${item.note}`}
+                  title={item.isManual ? item.note : (isActiveView ? "Click to show all" : `Click to focus on ${item.note}`)}
                 >
                   <div
-                    className="w-4 h-3 rounded flex-shrink-0"
+                    className="w-4 h-3 rounded flex-shrink-0 mt-0.5"
                     style={{ backgroundColor: item.color }}
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-xs truncate flex items-center gap-1">
-                      {item.note}
-                      {isActiveView && <span className="text-indigo-500">●</span>}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {item.count} plots
-                      {parts.length > 0 && (
-                        <span className="float-right text-blue-600 font-semibold">
-                          {parts.join(' | ')}
-                        </span>
+                    <div className="font-semibold text-xs flex gap-1" style={{ wordBreak: 'break-word', whiteSpace: 'normal' }}>
+                      <span className="flex-1">{item.note}</span>
+                      {isActiveView && <span className="text-indigo-500 flex-shrink-0">●</span>}
+                      {item.isManual && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (confirm(`Remove legend entry "${item.note}"?`)) {
+                              const updated = (vectorState.legend.manualEntries || []).filter(
+                                me => !(me.text === item.note && me.color === item.color)
+                              );
+                              vectorState.setLegend({ ...vectorState.legend, manualEntries: updated });
+                              vectorState.setHasUnsavedChanges(true);
+                            }
+                          }}
+                          className="text-red-400 hover:text-red-600 text-[9px] flex-shrink-0"
+                          title="Remove this entry"
+                        >
+                          x
+                        </button>
                       )}
                     </div>
+                    {!item.isManual && (
+                      <div className="text-xs text-gray-500">
+                        {item.count} plots
+                        {parts.length > 0 && (
+                          <span className="float-right text-blue-600 font-semibold">
+                            {parts.join(' | ')}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
             })
           )}
+
+          {/* Add manual legend entry button */}
+          <div className="border-t border-gray-200 pt-1 mt-1">
+            <button
+              onClick={() => {
+                const text = prompt('Legend entry text:');
+                if (!text || !text.trim()) return;
+                const color = prompt('Color (hex):', '#9ca3af');
+                if (!color) return;
+                const entry = { text: text.trim(), color: color.trim() || '#9ca3af' };
+                const current = vectorState.legend.manualEntries || [];
+                vectorState.setLegend({ ...vectorState.legend, manualEntries: [...current, entry] });
+                vectorState.setHasUnsavedChanges(true);
+              }}
+              className="w-full text-[10px] text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded py-1 transition-colors"
+              title="Add a custom text entry to the legend"
+            >
+              + Add Entry
+            </button>
+          </div>
         </div>
       )}
     </div>

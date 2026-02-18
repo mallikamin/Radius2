@@ -1,31 +1,128 @@
 import * as XLSX from 'xlsx';
 
 /**
- * Auto-detect column mapping from Excel row
+ * Auto-detect column mapping from Excel row.
+ * Uses strict precedence: longer/more-specific patterns are checked first.
+ * Returns { columnMap, diagnostics } where diagnostics shows which header mapped to which field.
  */
 export function detectColumnMapping(firstRow) {
   const columnMap = {};
-  
-  Object.keys(firstRow || {}).forEach(key => {
-    const lowerKey = key.toLowerCase().trim();
-    if (lowerKey.includes('plot') || lowerKey.includes('#')) columnMap.plot = key;
-    if (lowerKey.includes('marla') || lowerKey.includes('size')) columnMap.marla = key;
-    if (lowerKey.includes('dimension')) columnMap.dimensions = key;
-    if (lowerKey.includes('owner') || lowerKey.includes('name')) columnMap.owner = key;
-    if (lowerKey.includes('value') && !lowerKey.includes('rate')) columnMap.totalValue = key;
-    if (lowerKey.includes('rate') || lowerKey.includes('price')) columnMap.ratePerMarla = key;
-    if (lowerKey.includes('factor') && lowerKey.includes('note')) columnMap.factorNotes = key;
-    else if (lowerKey.includes('corner') || lowerKey.includes('boulevard') || lowerKey.includes('road') || lowerKey.includes('feature')) columnMap.factorNotes = key;
-    if (lowerKey.includes('note') || lowerKey.includes('remark') || lowerKey.includes('comment')) columnMap.notes = key;
-    if (lowerKey.includes('status') || lowerKey.includes('condition')) columnMap.status = key;
-    if (lowerKey.includes('date') || lowerKey.includes('updated')) columnMap.date = key;
+  const diagnostics = {}; // field → { header, reason }
+  const claimed = new Set(); // headers already assigned
+
+  const headers = Object.keys(firstRow || {});
+
+  // Helper: claim a header for a field (skip if header already claimed or field already mapped)
+  const claim = (field, headerKey, reason) => {
+    if (columnMap[field] || claimed.has(headerKey)) return false;
+    columnMap[field] = headerKey;
+    claimed.add(headerKey);
+    diagnostics[field] = { header: headerKey, reason };
+    return true;
+  };
+
+  // Pass 1: Exact / highly-specific patterns (longest match first to avoid collisions)
+  // Order matters — "rate per marla" must be checked BEFORE "marla" alone
+  headers.forEach(key => {
+    const lk = key.toLowerCase().trim();
+
+    // ratePerMarla — must precede marla check. "Rate per Marla", "rate/marla", "price per marla"
+    if (lk.includes('rate per') || lk.includes('rate/') || lk.includes('price per')) {
+      claim('ratePerMarla', key, 'exact: rate per / price per');
+      return; // don't let this header match anything else
+    }
+
+    // totalValue — "total value", "value" but NOT "rate"
+    if ((lk.includes('total') && lk.includes('value')) || (lk === 'value')) {
+      claim('totalValue', key, 'exact: total value');
+      return;
+    }
+
+    // factorNotes — "factor note(s)"
+    if (lk.includes('factor') && lk.includes('note')) {
+      claim('factorNotes', key, 'exact: factor note');
+      return;
+    }
   });
-  
-  return columnMap;
+
+  // Pass 2: Broader patterns (only for fields not yet claimed)
+  headers.forEach(key => {
+    if (claimed.has(key)) return;
+    const lk = key.toLowerCase().trim();
+
+    if (!columnMap.plot && (lk.includes('plot') || lk === '#' || lk === 'sr' || lk === 'sr#' || lk === 'sr.')) {
+      claim('plot', key, 'broad: plot/#');
+    }
+
+    // marla/size — but NOT if this header also contains "rate" or "per" (those are ratePerMarla)
+    if (!columnMap.marla && (lk.includes('marla') || lk.includes('size')) && !lk.includes('rate') && !lk.includes('per') && !lk.includes('price')) {
+      claim('marla', key, 'broad: marla/size (excludes rate/per/price)');
+    }
+
+    if (!columnMap.dimensions && lk.includes('dimension')) {
+      claim('dimensions', key, 'broad: dimension');
+    }
+
+    if (!columnMap.owner && (lk.includes('owner') || lk === 'name')) {
+      claim('owner', key, 'broad: owner/name');
+    }
+
+    if (!columnMap.totalValue && lk.includes('value') && !lk.includes('rate')) {
+      claim('totalValue', key, 'broad: value (not rate)');
+    }
+
+    if (!columnMap.ratePerMarla && (lk.includes('rate') || lk.includes('price'))) {
+      claim('ratePerMarla', key, 'broad: rate/price');
+    }
+
+    if (!columnMap.factorNotes && (lk.includes('corner') || lk.includes('boulevard') || lk.includes('road') || lk.includes('feature'))) {
+      claim('factorNotes', key, 'broad: corner/boulevard/road/feature');
+    }
+
+    if (!columnMap.notes && (lk.includes('note') || lk.includes('remark') || lk.includes('comment')) && !lk.includes('factor')) {
+      claim('notes', key, 'broad: note/remark/comment (not factor)');
+    }
+
+    if (!columnMap.status && (lk.includes('status') || lk.includes('condition'))) {
+      claim('status', key, 'broad: status/condition');
+    }
+
+    if (!columnMap.date && (lk.includes('date') || lk.includes('updated'))) {
+      claim('date', key, 'broad: date/updated');
+    }
+  });
+
+  // Conflict check: warn if marla and ratePerMarla mapped to the same header
+  if (columnMap.marla && columnMap.ratePerMarla && columnMap.marla === columnMap.ratePerMarla) {
+    console.error('[inventoryUtils] CONFLICT: marla and ratePerMarla mapped to same header:', columnMap.marla);
+    // Prefer ratePerMarla (more specific), clear marla
+    delete columnMap.marla;
+    delete diagnostics.marla;
+  }
+
+  return { columnMap, diagnostics };
 }
 
 /**
- * Import inventory from Excel file
+ * Parse a numeric value from a cell: strips commas, currency symbols (PKR, Rs, $, etc.),
+ * and trailing text suffixes (e.g., "/marla", "per marla").
+ */
+function parseNumeric(raw) {
+  if (raw === null || raw === undefined) return 0;
+  if (typeof raw === 'number') return isNaN(raw) ? 0 : raw;
+  const cleaned = String(raw)
+    .replace(/,/g, '')                    // strip commas: 1,500,000 → 1500000
+    .replace(/PKR|Rs\.?|USD|\$|£|€/gi, '') // strip currency symbols
+    .replace(/\s*(per|\/)\s*marla/gi, '')  // strip "/marla", "per marla"
+    .replace(/\s*marla$/gi, '')            // strip trailing "marla"
+    .trim();
+  const val = parseFloat(cleaned);
+  return isNaN(val) ? 0 : val;
+}
+
+/**
+ * Import inventory from Excel file.
+ * Returns { inventory, imported, updated, columnDiagnostics }
  */
 export function importInventoryFromExcel(file, onProgress) {
   return new Promise((resolve, reject) => {
@@ -34,38 +131,41 @@ export function importInventoryFromExcel(file, onProgress) {
       try {
         const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-        
+
         if (rows.length === 0) {
           reject(new Error('Excel file is empty'));
           return;
         }
-        
-        const columnMap = detectColumnMapping(rows[0]);
+
+        const { columnMap, diagnostics: columnDiagnostics } = detectColumnMapping(rows[0]);
+        console.log('[inventoryUtils] Column mapping:', columnMap);
+        console.log('[inventoryUtils] Diagnostics:', columnDiagnostics);
+
         const inventory = {};
         let imported = 0;
         let updated = 0;
-        
+
         rows.forEach((r, idx) => {
           const plotNum = String(r[columnMap.plot] || r['Plot#'] || r['Plot'] || r['PlotNo'] || '').trim();
           if (!plotNum) return;
-          
-          const marla = parseFloat(r[columnMap.marla] || r['Marla'] || 0);
-          const totalValue = parseFloat(r[columnMap.totalValue] || r['Total Value'] || r['Value'] || 0);
-          const ratePerMarla = parseFloat(r[columnMap.ratePerMarla] || r['Rate'] || r['Price'] || r['Rate per Marla'] || 0);
-          
+
+          const marla = parseNumeric(r[columnMap.marla] || r['Marla']);
+          const totalValue = parseNumeric(r[columnMap.totalValue] || r['Total Value'] || r['Value']);
+          const ratePerMarla = parseNumeric(r[columnMap.ratePerMarla] || r['Rate'] || r['Price'] || r['Rate per Marla']);
+
           // Calculate missing values
           let calculatedTotalValue = totalValue;
           let calculatedRate = ratePerMarla;
-          
+
           if (totalValue > 0 && marla > 0 && ratePerMarla === 0) {
             calculatedRate = totalValue / marla;
           } else if (ratePerMarla > 0 && marla > 0 && totalValue === 0) {
             calculatedTotalValue = ratePerMarla * marla;
           }
-          
+
           const existing = inventory[plotNum] || {};
           const isNew = !existing.marla && !existing.totalValue;
-          
+
           inventory[plotNum] = {
             marla: marla || existing.marla || 0,
             totalValue: calculatedTotalValue || existing.totalValue || 0,
@@ -77,12 +177,12 @@ export function importInventoryFromExcel(file, onProgress) {
             notes: r[columnMap.notes] || r['Notes'] || existing.notes || '',
             date: r[columnMap.date] || r['Date'] || existing.date || new Date().toISOString()
           };
-          
+
           if (isNew) imported++;
           else updated++;
         });
-        
-        resolve({ inventory, imported, updated });
+
+        resolve({ inventory, imported, updated, columnDiagnostics });
       } catch (error) {
         reject(error);
       }

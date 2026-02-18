@@ -1,4 +1,6 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+
+const HISTORY_MAX = 50;
 
 // Vector state management hook
 export function useVectorState() {
@@ -13,6 +15,13 @@ export function useVectorState() {
   const [annos, setAnnos] = useState([]);
   const [labels, setLabels] = useState([]);
   const [plots, setPlots] = useState([]);
+
+  // Undo/Redo history
+  const historyRef = useRef([]);
+  const historyIndexRef = useRef(-1);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const isUndoRedoRef = useRef(false); // guard to skip pushing during undo/redo
   const [pdfBase64, setPdfBase64] = useState(null);
   const [pdfImg, setPdfImg] = useState(null);
   const [pdfScale, setPdfScale] = useState(1);
@@ -279,6 +288,23 @@ export function useVectorState() {
     } else {
       console.log('loadProjectData: No pdfBase64 in data');
     }
+
+    // Reset undo history and push initial snapshot after load
+    historyRef.current = [{
+      plots: loadedPlots,
+      annos: processedAnnos,
+      plotOffsets: normalizedOffsets,
+      plotRotations: data.plotRotations || {},
+      labels: data.labels || [],
+      shapes: data.shapes || []
+    }];
+    historyIndexRef.current = 0;
+    // Note: setCanUndo/setCanRedo not available inside useCallback without deps,
+    // so we set them via a microtask
+    setTimeout(() => {
+      setCanUndo(false);
+      setCanRedo(false);
+    }, 0);
   }, []);
 
   // Add plot
@@ -291,14 +317,26 @@ export function useVectorState() {
     setPlots(prev => prev.map(p => p.id === plotId ? { ...p, ...updates } : p));
   }, []);
 
-  // Remove plot
+  // Remove plot — also cleans up annotations that reference it
   const removePlot = useCallback((plotId) => {
     setPlots(prev => prev.filter(p => p.id !== plotId));
+    // Remove this plotId from any annotations
+    const plotIdStr = String(plotId);
+    setAnnos(prev => prev.map(a => {
+      const hasIt = a.plotIds.some(pid => String(pid) === plotIdStr);
+      if (!hasIt) return a;
+      return {
+        ...a,
+        plotIds: a.plotIds.filter(pid => String(pid) !== plotIdStr),
+        plotNums: (a.plotNums || []) // plotNums will be stale but harmless; recalculated on next render
+      };
+    }));
     setSelected(prev => {
       const next = new Set(prev);
       next.delete(plotId);
       return next;
     });
+    setHasUnsavedChanges(true);
   }, []);
 
   // Add annotation
@@ -307,14 +345,226 @@ export function useVectorState() {
     setHasUnsavedChanges(true);
   }, []);
 
-  // Update annotation - PRESERVE ORDER
+  // Update annotation - PRESERVE ORDER, deduplicate plotIds
   const updateAnnotation = useCallback((annoId, updates) => {
-    setAnnos(prev => prev.map(a => a.id === annoId ? { ...a, ...updates } : a)); // map preserves order
+    setAnnos(prev => prev.map(a => {
+      if (a.id !== annoId) return a;
+      const merged = { ...a, ...updates };
+      // Deduplicate plotIds if present
+      if (merged.plotIds && Array.isArray(merged.plotIds)) {
+        const seen = new Set();
+        merged.plotIds = merged.plotIds.filter(pid => {
+          const key = String(pid);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
+      return merged;
+    })); // map preserves order
   }, []);
 
   // Remove annotation
   const removeAnnotation = useCallback((annoId) => {
     setAnnos(prev => prev.filter(a => a.id !== annoId));
+    setHasUnsavedChanges(true);
+  }, []);
+
+  // Atomic: add a single plot to an annotation (stale-closure safe)
+  const addPlotToAnnotation = useCallback((annoId, plotId, plotNum) => {
+    setAnnos(prev => prev.map(a => {
+      if (a.id !== annoId) return a;
+      const plotIdStr = String(plotId);
+      if (a.plotIds.some(pid => String(pid) === plotIdStr)) return a; // already present
+      return {
+        ...a,
+        plotIds: [...a.plotIds, plotId],
+        plotNums: [...new Set([...(a.plotNums || []), plotNum])]
+      };
+    }));
+    setHasUnsavedChanges(true);
+  }, []);
+
+  // Atomic: remove a single plot from an annotation (stale-closure safe)
+  const removePlotFromAnnotation = useCallback((annoId, plotId) => {
+    const plotIdStr = String(plotId);
+    setAnnos(prev => prev.map(a => {
+      if (a.id !== annoId) return a;
+      return {
+        ...a,
+        plotIds: a.plotIds.filter(pid => String(pid) !== plotIdStr)
+      };
+    }));
+    setHasUnsavedChanges(true);
+  }, []);
+
+  // Deduplicate plotIds within each annotation (cleanup utility)
+  const deduplicateAnnotations = useCallback(() => {
+    let totalRemoved = 0;
+    setAnnos(prev => prev.map(a => {
+      const seen = new Set();
+      const deduped = a.plotIds.filter(pid => {
+        const key = String(pid);
+        if (seen.has(key)) { totalRemoved++; return false; }
+        seen.add(key);
+        return true;
+      });
+      if (deduped.length === a.plotIds.length) return a;
+      return { ...a, plotIds: deduped };
+    }));
+    return totalRemoved;
+  }, []);
+
+  // Remove cross-annotation duplicates: keep each plotId only in the FIRST annotation it appears in
+  const removeCrossAnnotationDuplicates = useCallback(() => {
+    let totalRemoved = 0;
+    const globalSeen = new Set();
+    setAnnos(prev => prev.map(a => {
+      // First deduplicate within this annotation
+      const withinSeen = new Set();
+      const withinDeduped = a.plotIds.filter(pid => {
+        const key = String(pid);
+        if (withinSeen.has(key)) { totalRemoved++; return false; }
+        withinSeen.add(key);
+        return true;
+      });
+      // Then remove any plotIds already seen in earlier annotations
+      const crossDeduped = withinDeduped.filter(pid => {
+        const key = String(pid);
+        if (globalSeen.has(key)) { totalRemoved++; return false; }
+        globalSeen.add(key);
+        return true;
+      });
+      if (crossDeduped.length === a.plotIds.length) return a;
+      return { ...a, plotIds: crossDeduped };
+    }));
+    return totalRemoved;
+  }, []);
+
+  // Remove auto-extracted plots when a manual plot with the same name exists
+  // Computes mapping first, then applies setPlots and setAnnos separately (no side effects in updaters)
+  // Returns { removed, relinked } counts
+  const removeAutoPlotDuplicates = useCallback(() => {
+    // Phase 1: Compute the mapping from current plots state
+    const currentPlots = plots; // read from closure (latest via dependency)
+    const manualByName = {};
+    currentPlots.forEach(p => {
+      if (p.manual && !manualByName[p.n]) manualByName[p.n] = p;
+    });
+
+    const autoToRemove = new Map(); // autoId → manualId
+    currentPlots.forEach(p => {
+      if (!p.manual && manualByName[p.n]) {
+        autoToRemove.set(p.id, manualByName[p.n].id);
+        // Also map string version for type-flexible matching
+        autoToRemove.set(String(p.id), manualByName[p.n].id);
+      }
+    });
+
+    if (autoToRemove.size === 0) return { removed: 0, relinked: 0 };
+
+    const removed = currentPlots.filter(p => !p.manual && manualByName[p.n]).length;
+    let relinked = 0;
+
+    // Phase 2: Apply setAnnos (relink auto IDs → manual IDs)
+    setAnnos(prev => prev.map(a => {
+      let changed = false;
+      const newPlotIds = a.plotIds.map(pid => {
+        const manualId = autoToRemove.get(pid) || autoToRemove.get(String(pid));
+        if (manualId !== undefined) {
+          changed = true;
+          relinked++;
+          return manualId;
+        }
+        return pid;
+      });
+      if (!changed) return a;
+      // Deduplicate after relinking
+      const seen = new Set();
+      const deduped = newPlotIds.filter(pid => {
+        const key = String(pid);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return { ...a, plotIds: deduped };
+    }));
+
+    // Phase 3: Apply setPlots (remove auto-extracted ghosts)
+    setPlots(prev => prev.filter(p => !(! p.manual && manualByName[p.n])));
+
+    setHasUnsavedChanges(true);
+    return { removed, relinked };
+  }, [plots]);
+
+  // --- Undo / Redo ---
+  const _captureSnapshot = useCallback(() => {
+    return { plots, annos, plotOffsets, plotRotations, labels, shapes };
+  }, [plots, annos, plotOffsets, plotRotations, labels, shapes]);
+
+  const pushHistory = useCallback(() => {
+    if (isUndoRedoRef.current) return;
+    const snapshot = _captureSnapshot();
+    const history = historyRef.current;
+    const idx = historyIndexRef.current;
+    // Trim any redo entries
+    const newHistory = history.slice(0, idx + 1);
+    newHistory.push(snapshot);
+    // Cap size
+    if (newHistory.length > HISTORY_MAX) newHistory.shift();
+    historyRef.current = newHistory;
+    historyIndexRef.current = newHistory.length - 1;
+    setCanUndo(historyIndexRef.current > 0);
+    setCanRedo(false);
+  }, [_captureSnapshot]);
+
+  const undo = useCallback(() => {
+    if (historyIndexRef.current <= 0) return;
+    // Push current state if we're at the tip (so redo can restore it)
+    if (historyIndexRef.current === historyRef.current.length - 1) {
+      const snapshot = _captureSnapshot();
+      // Replace tip with current (in case there were changes since last push)
+      historyRef.current[historyIndexRef.current] = snapshot;
+    }
+    isUndoRedoRef.current = true;
+    historyIndexRef.current -= 1;
+    const prev = historyRef.current[historyIndexRef.current];
+    setPlots(prev.plots);
+    setAnnos(prev.annos);
+    setPlotOffsets(prev.plotOffsets);
+    setPlotRotations(prev.plotRotations);
+    setLabels(prev.labels);
+    setShapes(prev.shapes);
+    setCanUndo(historyIndexRef.current > 0);
+    setCanRedo(true);
+    setHasUnsavedChanges(true);
+    // Allow next push after React processes updates
+    setTimeout(() => { isUndoRedoRef.current = false; }, 0);
+  }, [_captureSnapshot]);
+
+  const redo = useCallback(() => {
+    if (historyIndexRef.current >= historyRef.current.length - 1) return;
+    isUndoRedoRef.current = true;
+    historyIndexRef.current += 1;
+    const next = historyRef.current[historyIndexRef.current];
+    setPlots(next.plots);
+    setAnnos(next.annos);
+    setPlotOffsets(next.plotOffsets);
+    setPlotRotations(next.plotRotations);
+    setLabels(next.labels);
+    setShapes(next.shapes);
+    setCanUndo(true);
+    setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+    setHasUnsavedChanges(true);
+    setTimeout(() => { isUndoRedoRef.current = false; }, 0);
+  }, []);
+
+  // Auto-push initial snapshot when project loads
+  const resetHistory = useCallback(() => {
+    historyRef.current = [];
+    historyIndexRef.current = -1;
+    setCanUndo(false);
+    setCanRedo(false);
   }, []);
 
   // Update inventory
@@ -550,6 +800,14 @@ export function useVectorState() {
     setBranchVisibility,
     setActiveView,
 
+    // Undo/Redo
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+    pushHistory,
+    resetHistory,
+
     // Actions
     loadProjectData,
     addPlot,
@@ -558,6 +816,11 @@ export function useVectorState() {
     addAnnotation,
     updateAnnotation,
     removeAnnotation,
+    addPlotToAnnotation,
+    removePlotFromAnnotation,
+    deduplicateAnnotations,
+    removeCrossAnnotationDuplicates,
+    removeAutoPlotDuplicates,
     updateInventory,
     addChangeLog,
     clearChangeLog,

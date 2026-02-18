@@ -886,26 +886,6 @@ export default function VectorMap() {
                 <span className="text-base">➕</span>
                 <span className="text-xs font-medium text-gray-700">Add Plot</span>
               </div>
-              <div 
-                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${
-                  tool === 'brush' ? 'bg-blue-100' : 'hover:bg-gray-100'
-                }`}
-                onClick={() => setTool('brush')}
-                title="Brush Tool"
-              >
-                <span className="text-base">🖌️</span>
-                <span className="text-xs font-medium text-gray-700">Brush</span>
-              </div>
-              <div 
-                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors ${
-                  tool === 'eraser' ? 'bg-blue-100' : 'hover:bg-gray-100'
-                }`}
-                onClick={() => setTool('eraser')}
-                title="Eraser Tool"
-              >
-                <span className="text-base">🧹</span>
-                <span className="text-xs font-medium text-gray-700">Eraser</span>
-              </div>
             </div>
           </div>
         )}

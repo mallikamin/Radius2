@@ -103,12 +103,10 @@ export function useKeyboardShortcuts(vectorState) {
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 'z' && !e.shiftKey) {
           e.preventDefault();
-          // Undo functionality - to be implemented with undo stack
-          console.log('Undo');
+          if (vectorState.undo) vectorState.undo();
         } else if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) {
           e.preventDefault();
-          // Redo functionality - to be implemented
-          console.log('Redo');
+          if (vectorState.redo) vectorState.redo();
         }
       }
 
@@ -133,6 +131,7 @@ export function useKeyboardShortcuts(vectorState) {
       if ((e.key === 'Delete' || e.key === 'Backspace') && vectorState.selected.size > 0) {
         e.preventDefault();
         if (confirm(`Delete ${vectorState.selected.size} selected plot(s)?`)) {
+          if (vectorState.pushHistory) vectorState.pushHistory();
           vectorState.selected.forEach(plotId => {
             vectorState.removePlot(plotId);
           });

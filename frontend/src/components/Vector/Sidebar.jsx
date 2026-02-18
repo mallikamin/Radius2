@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import { exportInventoryToExcel, exportManualPlotsToExcel } from '../../utils/inventoryUtils';
 import { buildExportCanvasEnhanced, exportProposalPDF } from '../../utils/exportUtils';
 import SelectionPanel from './SelectionPanel';
-import BrushPanel from './BrushPanel';
-import EraserPanel from './EraserPanel';
 import MassRenamePanel from './MassRenamePanel';
 import SearchPanel from './SearchPanel';
 import LabelsPanel from './LabelsPanel';
@@ -133,8 +131,6 @@ export default function Sidebar({ vectorState, displayMode = 'plot' }) {
           { id: 'annotations', icon: '📝', label: 'Annotate' },
           { id: 'plots',       icon: '📍', label: 'Plots' },
           { id: 'inventory',   icon: '📊', label: 'Inventory' },
-          { id: 'brush',       icon: '🖌️', label: 'Brush' },
-          { id: 'eraser',      icon: '🧹', label: 'Eraser' },
           { id: 'massrename',  icon: '🔄', label: 'Rename' },
           { id: 'search',      icon: '🔍', label: 'Search' },
           { id: 'labels',      icon: '🏷️', label: 'Labels' },
@@ -164,14 +160,6 @@ export default function Sidebar({ vectorState, displayMode = 'plot' }) {
       <div className="flex-1 overflow-y-auto p-3">
         {activeTab === 'selection' && (
           <SelectionPanel vectorState={vectorState} />
-        )}
-
-        {activeTab === 'brush' && (
-          <BrushPanel vectorState={vectorState} />
-        )}
-
-        {activeTab === 'eraser' && (
-          <EraserPanel vectorState={vectorState} />
         )}
 
         {activeTab === 'massrename' && (
@@ -213,7 +201,43 @@ export default function Sidebar({ vectorState, displayMode = 'plot' }) {
         {activeTab === 'annotations' && (
           <div className="space-y-2">
             <div className="flex justify-between items-center mb-2">
-              <h3 className="text-sm font-semibold">Annotations ({vectorState.annos.length})</h3>
+              <h3 className="text-sm font-semibold">
+                Annotations ({vectorState.annos.length})
+                <span className="text-[10px] text-gray-400 font-normal ml-1">
+                  {vectorState.annos.reduce((sum, a) => sum + (a.plotIds?.length || 0), 0)} plot refs
+                </span>
+              </h3>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => {
+                    if (vectorState.pushHistory) vectorState.pushHistory();
+                    // 1. Remove auto-extracted plots that have a manual counterpart (same name)
+                    const { removed: autoRemoved, relinked } = vectorState.removeAutoPlotDuplicates();
+                    // 2. Clean within-annotation dupes
+                    const withinRemoved = vectorState.deduplicateAnnotations();
+                    // 3. Clean cross-annotation dupes
+                    const crossRemoved = vectorState.removeCrossAnnotationDuplicates();
+                    const total = autoRemoved + withinRemoved + crossRemoved;
+                    if (total > 0) {
+                      const parts = [];
+                      if (autoRemoved > 0) parts.push(`${autoRemoved} auto-extracted ghost plots removed`);
+                      if (relinked > 0) parts.push(`${relinked} annotation refs relinked`);
+                      if (withinRemoved > 0) parts.push(`${withinRemoved} within-annotation dupes`);
+                      if (crossRemoved > 0) parts.push(`${crossRemoved} cross-annotation dupes`);
+                      vectorState.addChangeLog('Clean duplicates', parts.join(', '));
+                      alert(`Cleaned:\n${parts.join('\n')}\n\nSave to persist.`);
+                    } else {
+                      alert('No duplicates found.');
+                    }
+                  }}
+                  className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded hover:bg-amber-200"
+                  title="Remove duplicate plotIds within and across annotations"
+                >
+                  Clean Dupes
+                </button>
+              </div>
+            </div>
+            <div className="flex justify-end mb-1">
               <button
                 onClick={() => {
                   const note = prompt('Annotation note:');
@@ -314,7 +338,22 @@ export default function Sidebar({ vectorState, displayMode = 'plot' }) {
             </div>
             {vectorState.plots.filter(p => p.manual).map(plot => (
               <div key={plot.id} className="p-2 border border-gray-200 rounded text-xs">
-                <div className="font-semibold">Plot {plot.n}</div>
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold">Plot {plot.n}</div>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Delete manual plot "${plot.n}"?`)) {
+                        if (vectorState.pushHistory) vectorState.pushHistory();
+                        vectorState.removePlot(plot.id);
+                        vectorState.addChangeLog('Plot deleted', `Deleted manual plot: ${plot.n}`);
+                      }
+                    }}
+                    className="text-red-500 hover:text-red-700 text-xs font-bold px-1"
+                    title="Delete this manual plot"
+                  >
+                    x
+                  </button>
+                </div>
                 <div className="text-gray-600">
                   X: {Math.round(plot.x)}, Y: {Math.round(plot.y)}
                 </div>

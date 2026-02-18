@@ -34,7 +34,10 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
   }, [offX, offY, scale]);
 
   // Find plot at coordinates (check both plot position and annotation position for hover)
+  // When multiple plots overlap, prefer manual over auto-extracted
   const findPlotAt = useCallback((mx, my, checkAnnotation = false) => {
+    let bestMatch = null;
+
     // First check annotation positions (where annotations are drawn)
     if (checkAnnotation) {
       for (const p of vectorState.plots) {
@@ -43,26 +46,32 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
         const drawY = p.y + offset.oy;
         const w = p.w || 20;
         const h = p.h || 14;
-        
-        // Check annotation position (where the annotation box is drawn)
-        if (mx >= drawX - w/2 && mx <= drawX + w/2 && 
+
+        if (mx >= drawX - w/2 && mx <= drawX + w/2 &&
             my >= drawY - h/2 && my <= drawY + h/2) {
-          return p;
+          // Prefer manual plot over auto when both match
+          if (!bestMatch || (p.manual && !bestMatch.manual)) {
+            bestMatch = p;
+          }
         }
       }
+      if (bestMatch) return bestMatch;
     }
-    
-    // Then check actual plot positions
+
+    // Then check actual plot positions — prefer manual over auto
+    bestMatch = null;
     for (const p of vectorState.plots) {
       const w = p.w || 20;
       const h = p.h || 14;
-      
-      if (mx >= p.x - w/2 && mx <= p.x + w/2 && 
+
+      if (mx >= p.x - w/2 && mx <= p.x + w/2 &&
           my >= p.y - h/2 && my <= p.y + h/2) {
-        return p;
+        if (!bestMatch || (p.manual && !bestMatch.manual)) {
+          bestMatch = p;
+        }
       }
     }
-    return null;
+    return bestMatch;
   }, [vectorState.plots, vectorState.plotOffsets]);
 
   // Find annotation at coordinates (click on annotation box)
@@ -224,43 +233,8 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
           return;
         }
 
-        // Draw manual plot indicator (clean pill style)
-        if (p.manual && !anno) {
-          const mFont = 'bold 10px Arial';
-          ctx.font = mFont;
-          const mTextW = ctx.measureText(p.n).width;
-          const mw = Math.max(mTextW + 8, 18);
-          const mh = 14;
-          const mx = p.x - mw / 2;
-          const my = p.y - mh / 2;
-          const mr = 3; // border radius
-
-          // Rounded rect background
-          ctx.fillStyle = '#f8f8f8';
-          ctx.beginPath();
-          ctx.moveTo(mx + mr, my);
-          ctx.lineTo(mx + mw - mr, my);
-          ctx.arcTo(mx + mw, my, mx + mw, my + mr, mr);
-          ctx.lineTo(mx + mw, my + mh - mr);
-          ctx.arcTo(mx + mw, my + mh, mx + mw - mr, my + mh, mr);
-          ctx.lineTo(mx + mr, my + mh);
-          ctx.arcTo(mx, my + mh, mx, my + mh - mr, mr);
-          ctx.lineTo(mx, my + mr);
-          ctx.arcTo(mx, my, mx + mr, my, mr);
-          ctx.closePath();
-          ctx.fill();
-
-          // Border
-          ctx.strokeStyle = '#9ca3af';
-          ctx.lineWidth = 1;
-          ctx.stroke();
-
-          // Text
-          ctx.fillStyle = '#374151';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(p.n, p.x, p.y);
-        }
+        // Removed: duplicate manual plot render path that drew unannotated manual plots twice
+        // Manual unannotated plots are now only drawn in the single branch below (else if p.manual)
 
         if (anno || isSel || p.manual || isHovered) {
           const displayText = anno ? (displayMode === 'note' ? (anno.note || anno.cat || '•') : p.n) : p.n;
@@ -571,54 +545,25 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       });
     }
 
-    // Brush painting
+    // Brush painting — uses atomic addPlotToAnnotation (stale-closure safe)
     if (brushPainting && tool === 'brush' && brushAnnotationId && plot) {
-      const anno = vectorState.annos.find(a => a.id === brushAnnotationId);
-      // Use type-flexible matching for plotIds check
-      const plotIdStr = String(plot.id);
-      const hasPlotId = anno && anno.plotIds.some(pid => String(pid) === plotIdStr);
-      if (anno && !hasPlotId) {
-        // Add plot to annotation
-        const updatedPlotIds = [...anno.plotIds, plot.id];
-        const updatedPlotNums = [...(anno.plotNums || []), plot.n].filter((v, i, a) => a.indexOf(v) === i);
-        vectorState.updateAnnotation(brushAnnotationId, {
-          plotIds: updatedPlotIds,
-          plotNums: updatedPlotNums
-        });
-        vectorState.addChangeLog('Brush paint', `Added plot ${plot.n} to annotation "${anno.note || anno.cat}"`);
-      }
+      vectorState.addPlotToAnnotation(brushAnnotationId, plot.id, plot.n);
     }
 
-    // Eraser (on mouse move while dragging)
+    // Eraser (on mouse move while dragging) — uses atomic removePlotFromAnnotation
     if (eraserActive && tool === 'eraser' && plot) {
-      // Find annotation containing this plot (type-flexible matching)
       const plotIdStr = String(plot.id);
       const anno = vectorState.annos.find(a => a.plotIds.some(pid => String(pid) === plotIdStr));
       if (anno) {
-        const eraserMode = window.eraserMode || 'removePlot'; // 'removePlot' or 'removeAnnotation'
-
-        // Check if we already processed this plot in this drag session
         const processedKey = `eraser_${plot.id}_${anno.id}`;
-        if (!window.eraserProcessed) {
-          window.eraserProcessed = new Set();
-        }
-
+        if (!window.eraserProcessed) window.eraserProcessed = new Set();
         if (!window.eraserProcessed.has(processedKey)) {
           window.eraserProcessed.add(processedKey);
-
+          const eraserMode = window.eraserMode || 'removePlot';
           if (eraserMode === 'removePlot') {
-            // Remove plot from annotation (type-flexible filter)
-            const updatedPlotIds = anno.plotIds.filter(id => String(id) !== plotIdStr);
-            const updatedPlotNums = anno.plotNums.filter(n => n !== plot.n);
-            vectorState.updateAnnotation(anno.id, {
-              plotIds: updatedPlotIds,
-              plotNums: updatedPlotNums
-            });
-            vectorState.addChangeLog('Eraser', `Removed plot ${plot.n} from annotation "${anno.note || anno.cat}"`);
+            vectorState.removePlotFromAnnotation(anno.id, plot.id);
           } else if (eraserMode === 'removeAnnotation') {
-            // Remove entire annotation
             vectorState.removeAnnotation(anno.id);
-            vectorState.addChangeLog('Eraser', `Removed annotation "${anno.note || anno.cat}"`);
           }
         }
       }
@@ -680,6 +625,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
       const plotNum = prompt('Enter plot number:' + (suggestedPlotNum ? ` (suggested: ${suggestedPlotNum})` : ''), suggestedPlotNum);
       if (plotNum && plotNum.trim()) {
+        if (vectorState.pushHistory) vectorState.pushHistory();
         const newPlot = {
           id: Date.now(),
           n: plotNum.trim(),
@@ -691,16 +637,23 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
         };
         vectorState.addPlot(newPlot);
         vectorState.addChangeLog('Manual plot added', `Added plot: ${plotNum.trim()}`);
+        // Auto-switch to select to prevent accidental double-add on next click
+        if (setTool) setTool('select');
       }
       return; // Don't process other clicks when adding plot
     }
     
     if (plot) {
       if (tool === 'select') {
+        // Guard: select must never mutate plots array
+        const plotCountBefore = vectorState.plots.length;
         if (e.shiftKey || e.ctrlKey) {
           vectorState.selectPlot(plot.id, true);
         } else {
           vectorState.selectPlot(plot.id, false);
+        }
+        if (vectorState.plots.length !== plotCountBefore) {
+          console.error('[Vector] BUG: select click mutated plots!', plotCountBefore, '->', vectorState.plots.length);
         }
         // Show plot details
         if (window.showPlotDetails) {
@@ -754,56 +707,33 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       setDragStart({ x: e.clientX, y: e.clientY });
       lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     } else if (tool === 'brush') {
-      // Start brush painting
+      // Start brush painting — uses atomic addPlotToAnnotation
       const currentBrushAnnoId = window.currentBrushAnnotationId || null;
       if (currentBrushAnnoId) {
         setBrushAnnotationId(currentBrushAnnoId);
         setBrushPainting(true);
-
-        // Add first plot if clicked on one
         const rect = canvasRef.current.getBoundingClientRect();
         const [mx, my] = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
         const plot = findPlotAt(mx, my, false);
         if (plot) {
-          const anno = vectorState.annos.find(a => a.id === currentBrushAnnoId);
-          // Use type-flexible matching for plotIds check
-          const plotIdStr = String(plot.id);
-          const hasPlotId = anno && anno.plotIds.some(pid => String(pid) === plotIdStr);
-          if (anno && !hasPlotId) {
-            const updatedPlotIds = [...anno.plotIds, plot.id];
-            const updatedPlotNums = [...(anno.plotNums || []), plot.n].filter((v, i, a) => a.indexOf(v) === i);
-            vectorState.updateAnnotation(currentBrushAnnoId, {
-              plotIds: updatedPlotIds,
-              plotNums: updatedPlotNums
-            });
-          }
+          vectorState.addPlotToAnnotation(currentBrushAnnoId, plot.id, plot.n);
         }
       } else {
         alert('Please select an annotation to paint in the Brush Settings panel');
       }
     } else if (tool === 'eraser') {
-      // Start eraser
+      // Start eraser — uses atomic removePlotFromAnnotation
       setEraserActive(true);
-
-      // Erase first plot if clicked on one
       const rect = canvasRef.current.getBoundingClientRect();
       const [mx, my] = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
       const plot = findPlotAt(mx, my, false);
       if (plot) {
-        // Use type-flexible matching for finding annotation
         const plotIdStr = String(plot.id);
         const anno = vectorState.annos.find(a => a.plotIds.some(pid => String(pid) === plotIdStr));
         if (anno) {
           const eraserMode = window.eraserMode || 'removePlot';
-
           if (eraserMode === 'removePlot') {
-            // Type-flexible filter
-            const updatedPlotIds = anno.plotIds.filter(id => String(id) !== plotIdStr);
-            const updatedPlotNums = anno.plotNums.filter(n => n !== plot.n);
-            vectorState.updateAnnotation(anno.id, {
-              plotIds: updatedPlotIds,
-              plotNums: updatedPlotNums
-            });
+            vectorState.removePlotFromAnnotation(anno.id, plot.id);
           } else if (eraserMode === 'removeAnnotation') {
             vectorState.removeAnnotation(anno.id);
           }
@@ -853,6 +783,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       setMovingPlots(false);
       setInitialPlotPositions({});
       if (vectorState.selected.size > 0) {
+        if (vectorState.pushHistory) vectorState.pushHistory();
         vectorState.addChangeLog('Plots moved', `Moved ${vectorState.selected.size} plot(s)`);
       }
     }

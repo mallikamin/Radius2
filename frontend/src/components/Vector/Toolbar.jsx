@@ -33,11 +33,8 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
     { id: 'select', label: 'Select', icon: '👆' },
     { id: 'pan', label: 'Pan', icon: '✋' },
     { id: 'add', label: '+Plot', icon: '+' },
-    { id: 'brush', label: '🖌️', title: 'Paint annotation' },
-    { id: 'eraser', label: '🧹', title: 'Erase annotation' },
     { id: 'label', label: '+Text', icon: 'T' },
     { id: 'shape', label: '+Shape', icon: '⬜' },
-    { id: 'move', label: '✋', title: 'Move' }
   ];
 
   const handleSave = () => {
@@ -342,9 +339,9 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
           🗄️ {vectorState.databaseMode ? 'DB ON' : 'DB OFF'}
       </button>
         
-        {/* Tools - Compact (only essential ones) */}
+        {/* Tools */}
         <div className="flex items-center gap-0.5">
-          {tools.slice(0, 4).map(t => (
+          {tools.map(t => (
             <button
               key={t.id}
               onClick={() => setTool(t.id)}
@@ -365,6 +362,30 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
               {t.icon || t.label}
             </button>
           ))}
+        </div>
+
+        <div className="w-px h-5 bg-gray-700 mx-1" />
+
+        {/* Undo / Redo */}
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => vectorState.undo?.()}
+            disabled={!vectorState.canUndo}
+            className={`px-2 py-1 text-xs rounded ${vectorState.canUndo ? 'bg-gray-800 hover:bg-gray-700' : 'bg-gray-800 opacity-40 cursor-not-allowed'}`}
+            style={{ color: '#fff', border: 'none', cursor: vectorState.canUndo ? 'pointer' : 'not-allowed' }}
+            title="Undo (Ctrl+Z)"
+          >
+            ↶
+          </button>
+          <button
+            onClick={() => vectorState.redo?.()}
+            disabled={!vectorState.canRedo}
+            className={`px-2 py-1 text-xs rounded ${vectorState.canRedo ? 'bg-gray-800 hover:bg-gray-700' : 'bg-gray-800 opacity-40 cursor-not-allowed'}`}
+            style={{ color: '#fff', border: 'none', cursor: vectorState.canRedo ? 'pointer' : 'not-allowed' }}
+            title="Redo (Ctrl+Y)"
+          >
+            ↷
+          </button>
         </div>
 
         <div className="w-px h-5 bg-gray-700 mx-1" />
