@@ -16,8 +16,8 @@ export default function SearchPanel({ vectorState }) {
     const results = [];
 
     // Search in all plots
-    const allPlots = includeManualPlots 
-      ? vectorState.plots 
+    const allPlots = includeManualPlots
+      ? vectorState.plots
       : vectorState.plots.filter(p => !p.manual);
 
     allPlots.forEach(plot => {
@@ -39,6 +39,43 @@ export default function SearchPanel({ vectorState }) {
       window.zoomToPlot(plotId);
       vectorState.selectPlot(plotId, false);
     }
+  };
+
+  const handleAnnotatePlot = (plot) => {
+    const note = prompt(`Annotation note for plot ${plot.n}:`);
+    if (!note) return;
+    const color = prompt('Color (hex):', '#6366f1');
+
+    vectorState.addAnnotation({
+      id: Date.now(),
+      note,
+      cat: '',
+      color: color || '#6366f1',
+      plotIds: [plot.id],
+      plotNums: [plot.n],
+      rotation: 0,
+      fontSize: 12
+    });
+    vectorState.setHasUnsavedChanges(true);
+  };
+
+  const handleAnnotateAll = () => {
+    if (searchResults.length === 0) return;
+    const note = prompt(`Annotation note for ${searchResults.length} plots:`);
+    if (!note) return;
+    const color = prompt('Color (hex):', '#6366f1');
+
+    vectorState.addAnnotation({
+      id: Date.now(),
+      note,
+      cat: '',
+      color: color || '#6366f1',
+      plotIds: searchResults.map(p => p.id),
+      plotNums: searchResults.map(p => p.n).filter((v, i, a) => a.indexOf(v) === i),
+      rotation: 0,
+      fontSize: 12
+    });
+    vectorState.setHasUnsavedChanges(true);
   };
 
   const handleClearSearch = () => {
@@ -96,8 +133,19 @@ export default function SearchPanel({ vectorState }) {
       {/* Search Results */}
       {searchResults.length > 0 && (
         <div className="space-y-2">
-          <div className="text-xs font-medium text-gray-700">
-            Results ({searchResults.length})
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-medium text-gray-700">
+              Results ({searchResults.length})
+            </div>
+            {searchResults.length > 1 && (
+              <button
+                onClick={handleAnnotateAll}
+                className="px-2 py-0.5 text-[10px] bg-purple-600 text-white rounded hover:bg-purple-700"
+                title={`Create one annotation for all ${searchResults.length} results`}
+              >
+                Annotate All
+              </button>
+            )}
           </div>
           <div className="max-h-64 overflow-y-auto border border-gray-200 rounded p-2 space-y-1">
             {searchResults.map(plot => (
@@ -116,12 +164,21 @@ export default function SearchPanel({ vectorState }) {
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => handleZoomToPlot(plot.id)}
-                  className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-                >
-                  Zoom
-                </button>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => handleZoomToPlot(plot.id)}
+                    className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                  >
+                    Zoom
+                  </button>
+                  <button
+                    onClick={() => handleAnnotatePlot(plot)}
+                    className="px-2 py-1 text-xs bg-purple-600 text-white rounded hover:bg-purple-700"
+                    title="Create annotation for this plot"
+                  >
+                    Annotate
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -135,10 +192,10 @@ export default function SearchPanel({ vectorState }) {
           <li>Enter plot number (partial or full)</li>
           <li>Click Search or press Enter</li>
           <li>Click Zoom to navigate to plot</li>
+          <li>Click Annotate to create annotation</li>
           <li>Toggle to include/exclude manual plots</li>
         </ol>
       </div>
     </div>
   );
 }
-

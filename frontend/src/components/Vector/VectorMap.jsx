@@ -14,12 +14,14 @@ import Sidebar from './Sidebar';
 export default function VectorMap() {
   const vectorState = useVectorState();
   const fileInputRef = useRef(null);
+  const replacePdfInputRef = useRef(null);
   const pdfBase64Ref = useRef(null); // Store pdfBase64 in ref to avoid React state async issues
   const annosRef = useRef([]); // Store annotations in ref to avoid React state async issues
   const plotsRef = useRef([]); // Store plots in ref to avoid React state async issues
   const inventoryRef = useRef({}); // Store inventory in ref to avoid React state async issues
   const currentProjectIdRef = useRef(null); // Track project ID for immediate access during save
   const projectNameRef = useRef('No Project'); // Track project name for immediate access during save
+  const pdfChangedRef = useRef(false); // Track if PDF was replaced (skip sending on save if false)
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [tool, setTool] = useState('select');
@@ -33,6 +35,7 @@ export default function VectorMap() {
     window.setVectorTool = setTool;
     window.loadProjectFromDB = handleLoadProjectFromDB;
     window.saveProjectToDB = handleSaveToDatabase;
+    window.replacePDF = () => replacePdfInputRef.current?.click();
     window.exitVector = () => {
       // Go back to Radius main app - switch to projects tab
       if (window.setActiveTab) {
@@ -45,6 +48,7 @@ export default function VectorMap() {
       window.setVectorTool = null;
       window.loadProjectFromDB = null;
       window.saveProjectToDB = null;
+      window.replacePDF = null;
       window.exitVector = null;
     };
   }, []);
@@ -179,9 +183,7 @@ export default function VectorMap() {
         projectNameRef.current = projectName; // Immediate sync
       }
 
-      console.log('handleSaveToDatabase: Saving project with name:', projectName);
-
-      // Prepare complete project data in vector_metadata (similar to JSON save)
+      // Prepare complete project data in vector_metadata
       // Use refs as fallback to avoid React state async issues
       const annosToSave = vectorState.annos?.length > 0 ? vectorState.annos : annosRef.current || [];
       const plotsToSave = vectorState.plots?.length > 0 ? vectorState.plots : plotsRef.current || [];
@@ -212,117 +214,40 @@ export default function VectorMap() {
         }
       };
       
-      // Log what we're saving to verify all data is included
-      console.log('handleSaveToDatabase: Metadata to save:', {
-        plotsCount: vectorMetadata.plots.length,
-        plotsSource: vectorState.plots?.length > 0 ? 'state' : 'ref',
-        annosCount: vectorMetadata.annos.length,
-        annosSource: vectorState.annos?.length > 0 ? 'state' : 'ref',
-        inventoryKeys: Object.keys(vectorMetadata.inventory).length,
-        inventorySource: Object.keys(vectorState.inventory || {}).length > 0 ? 'state' : 'ref',
-        shapesCount: vectorMetadata.shapes.length,
-        labelsCount: vectorMetadata.labels.length,
-        branchesCount: vectorMetadata.branches.length,
-        hasLegend: !!vectorMetadata.legend,
-        legendEntries: vectorMetadata.legend.manualEntries?.length || 0
-      });
+      // Quick save summary
+      console.log('Save data:', vectorMetadata.plots.length, 'plots,', vectorMetadata.annos.length, 'annos,', vectorMetadata.shapes.length, 'shapes');
 
-      // CRITICAL DEBUG: Log actual plot IDs and annotation plotIds to verify they match
-      const plotIdsBeingSaved = vectorMetadata.plots.slice(0, 5).map(p => p.id);
-      const firstAnnoPlotIds = vectorMetadata.annos[0]?.plotIds?.slice(0, 5) || [];
-      console.log('handleSaveToDatabase: PLOT ID CHECK:', {
-        plotIdsSample: plotIdsBeingSaved,
-        firstAnnoPlotIdsSample: firstAnnoPlotIds,
-        doTheyMatch: firstAnnoPlotIds.some(id => plotIdsBeingSaved.includes(id))
-      });
-      
-      // CRITICAL: Verify annotations are actually in state and being saved
-      const stateAnnosCount = vectorState.annos?.length || 0;
-      const metadataAnnosCount = vectorMetadata.annos.length;
-      
-      if (stateAnnosCount !== metadataAnnosCount) {
-        console.error('handleSaveToDatabase: ✗ ANNOTATION COUNT MISMATCH!', {
-          state: stateAnnosCount,
-          metadata: metadataAnnosCount
-        });
-      } else if (metadataAnnosCount > 0) {
-        console.log('handleSaveToDatabase: ✓ Annotations verified -', metadataAnnosCount, 'annotations will be saved');
-        // Verify annotation structure
-        const firstAnno = vectorMetadata.annos[0];
-        console.log('handleSaveToDatabase: First annotation structure:', {
-          id: firstAnno.id,
-          note: firstAnno.note,
-          plotIds: firstAnno.plotIds?.length || 0,
-          hasAllProps: Object.keys(firstAnno)
-        });
-      } else {
-        console.warn('handleSaveToDatabase: ⚠ No annotations to save');
-      }
-
-      // Ensure we have the PDF base64 - check both state and ref (ref is more reliable due to React async state)
-      let pdfBase64FromState = vectorState.pdfBase64 || null;
-      let pdfBase64FromRef = pdfBase64Ref.current || null;
-      let pdfBase64ToSave = pdfBase64FromState || pdfBase64FromRef;
-
-      console.log('handleSaveToDatabase: PDF base64 check - state:', !!pdfBase64FromState, 'ref:', !!pdfBase64FromRef, 'final:', !!pdfBase64ToSave);
-
-      // If PDF is missing but we have a project ID, try to recover it from the server
+      // PDF handling: only include PDF in payload if it was changed/replaced
       const existingProjectId = currentProjectIdRef.current || vectorState.currentProjectId;
-      if (!pdfBase64ToSave && existingProjectId) {
-        console.log('handleSaveToDatabase: Attempting to recover PDF from server for project:', existingProjectId);
-        try {
-          const recoveryResponse = await api.get(`/vector/projects/${existingProjectId}`);
-          if (recoveryResponse.data?.pdfBase64) {
-            pdfBase64ToSave = recoveryResponse.data.pdfBase64;
-            // Store in ref and state for future use
-            pdfBase64Ref.current = pdfBase64ToSave;
-            vectorState.setPdfBase64(pdfBase64ToSave);
-            console.log('handleSaveToDatabase: Recovered PDF from server, length:', pdfBase64ToSave.length);
-          }
-        } catch (recoveryError) {
-          console.warn('handleSaveToDatabase: Could not recover PDF from server:', recoveryError.message);
-        }
-      }
+      let pdfBase64ToSave = null;
 
-      if (!pdfBase64ToSave) {
-        console.warn('handleSaveToDatabase: No PDF base64 found in state, ref, or server. PDF will not be saved.');
-        console.warn('handleSaveToDatabase: Current state - pdfImg:', !!vectorState.pdfImg, 'pdfBase64:', !!vectorState.pdfBase64);
-
-        // Warn user but allow save - they might want to save without PDF
-        const continueWithoutPdf = confirm('Warning: No PDF map found in this project. The project will be saved without the map PDF. You can load a PDF later using the "Open" button.\n\nDo you want to continue saving?');
-        if (!continueWithoutPdf) {
-          setLoading(false);
-          return;
+      if (!existingProjectId) {
+        // New project — must include PDF
+        pdfBase64ToSave = vectorState.pdfBase64 || pdfBase64Ref.current || null;
+        if (!pdfBase64ToSave) {
+          const continueWithoutPdf = confirm('No PDF map found. Save without the map?\nYou can load a PDF later.');
+          if (!continueWithoutPdf) { setLoading(false); return; }
         }
+      } else if (pdfChangedRef.current) {
+        // Existing project, PDF was replaced — include new PDF
+        pdfBase64ToSave = vectorState.pdfBase64 || pdfBase64Ref.current || null;
+        console.log('Save: including replaced PDF, length:', pdfBase64ToSave?.length || 0);
       } else {
-        console.log('handleSaveToDatabase: PDF base64 found, length:', pdfBase64ToSave.length);
-        // Ensure both state and ref are synced
-        if (!pdfBase64FromState) {
-          console.log('handleSaveToDatabase: Updating state with pdfBase64');
-          vectorState.setPdfBase64(pdfBase64ToSave);
-        }
-        if (!pdfBase64FromRef) {
-          console.log('handleSaveToDatabase: Updating ref with pdfBase64');
-          pdfBase64Ref.current = pdfBase64ToSave;
-        }
+        // Existing project, PDF unchanged — skip PDF to save bandwidth
+        console.log('Save: PDF unchanged, skipping from payload');
       }
 
       const projectData = {
         name: projectName,
         map_name: vectorState.mapName || 'Map',
-        map_pdf_base64: pdfBase64ToSave,
         map_size: vectorState.mapW && vectorState.mapH ? JSON.stringify({ width: vectorState.mapW, height: vectorState.mapH }) : null,
         vector_metadata: JSON.stringify(vectorMetadata)
       };
+      if (pdfBase64ToSave) {
+        projectData.map_pdf_base64 = pdfBase64ToSave;
+      }
 
-      console.log('handleSaveToDatabase: Project data to save:', { 
-        name: projectData.name, 
-        map_name: projectData.map_name,
-        hasPdfBase64: !!projectData.map_pdf_base64,
-        pdfBase64Length: projectData.map_pdf_base64 ? projectData.map_pdf_base64.length : 0,
-        mapW: vectorState.mapW,
-        mapH: vectorState.mapH
-      });
+      console.log('Save:', projectData.name, '| PDF included:', !!projectData.map_pdf_base64, '| metadata keys:', Object.keys(vectorMetadata).length);
 
       // Use ref for immediate access (avoids React async state issues)
       // Note: projectId was already defined earlier for PDF recovery
@@ -339,77 +264,29 @@ export default function VectorMap() {
         }
       });
       
-      // Log what's being sent in formData
-      console.log('handleSaveToDatabase: FormData keys:', Array.from(formData.keys()));
-      const vectorMetadataStr = formData.get('vector_metadata');
-      if (vectorMetadataStr) {
-        try {
-          const metadata = JSON.parse(vectorMetadataStr);
-          console.log('handleSaveToDatabase: vector_metadata being saved:', {
-            annosCount: metadata.annos?.length || 0,
-            annosSample: metadata.annos?.slice(0, 2), // Show first 2 annotations
-            plotsCount: metadata.plots?.length || 0,
-            shapesCount: metadata.shapes?.length || 0,
-            labelsCount: metadata.labels?.length || 0,
-            hasLegend: !!metadata.legend,
-            legendEntries: metadata.legend?.manualEntries?.length || 0
-          });
-          
-          // Verify annotations are actually in the string
-          if (metadata.annos && metadata.annos.length > 0) {
-            console.log('handleSaveToDatabase: ✓ Annotations ARE in metadata, count:', metadata.annos.length);
-          } else {
-            console.error('handleSaveToDatabase: ✗ NO ANNOTATIONS in metadata!');
-            console.error('handleSaveToDatabase: State annos at save time:', vectorState.annos?.length || 0);
-          }
-        } catch (e) {
-          console.error('handleSaveToDatabase: Error parsing vector_metadata:', e);
-        }
-      } else {
-        console.error('handleSaveToDatabase: ✗ vector_metadata is missing from FormData!');
-      }
-
       let savedProjectId = currentProjectId;
       if (currentProjectId) {
-        // Update existing project
-        console.log('handleSaveToDatabase: Updating existing project', currentProjectId);
-        const updateResponse = await api.put(`/vector/projects/${currentProjectId}`, formData, {
+        await api.put(`/vector/projects/${currentProjectId}`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
-        console.log('handleSaveToDatabase: Update response', updateResponse.data);
       } else {
-        // Create new project
-        console.log('handleSaveToDatabase: Creating new project (no existing currentProjectId)');
         const response = await api.post('/vector/projects', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
         savedProjectId = response.data.id;
-        console.log('handleSaveToDatabase: Created project with ID', savedProjectId);
         vectorState.setCurrentProjectId(savedProjectId);
-        currentProjectIdRef.current = savedProjectId; // Immediate sync for subsequent saves
-        console.log('handleSaveToDatabase: Set currentProjectId to', savedProjectId);
+        currentProjectIdRef.current = savedProjectId;
       }
 
       vectorState.setHasUnsavedChanges(false);
+      pdfChangedRef.current = false; // Reset after successful save
       vectorState.addChangeLog('Project saved to database', `Saved project: ${projectName}`);
 
-      // Reload project list if modal is open
       if (window.refreshProjectList) {
         window.refreshProjectList();
       }
 
-      // If this was a new project, reload it to ensure everything is synced
-      // BUT: Don't reload if we just saved successfully - the data is already in state
-      // Reloading can cause data loss if the backend hasn't fully committed yet
-      // Only reload if explicitly needed (e.g., to sync with server-side changes)
-      if (!currentProjectId || savedProjectId !== currentProjectId) {
-        console.log('handleSaveToDatabase: New project created, skipping auto-reload to preserve current state');
-        console.log('handleSaveToDatabase: Project saved with ID:', savedProjectId);
-        console.log('handleSaveToDatabase: Current state preserved - annos:', vectorState.annos?.length || 0);
-        // Don't auto-reload - the data is already in state and correct
-        // User can manually reload if needed
-      }
-      
+      console.log('Saved:', savedProjectId, '| PDF sent:', !!projectData.map_pdf_base64);
       alert('Project saved to database successfully!');
 
     } catch (err) {
@@ -430,99 +307,38 @@ export default function VectorMap() {
       return;
     }
 
-    console.log('handleLoadProjectFromDB: Loading project', projectId);
     setLoading(true);
     setError(null);
-    
+
     try {
       const api = axios.create({ baseURL: '/api' });
       const token = localStorage.getItem('token');
       if (token) {
         api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       }
-      
-      console.log('handleLoadProjectFromDB: Fetching project data...');
+
+      const t0 = performance.now();
       const response = await api.get(`/vector/projects/${projectId}`);
       const data = response.data;
-      
-      // Validate that we have project data
-      if (!data) {
-        throw new Error('No project data received from server');
-      }
-      
-      // Log what we received from backend
-      console.log('handleLoadProjectFromDB: Backend response data:', {
-        projectName: data.projectName,
-        hasPdf: !!data.pdfBase64,
-        plotsCount: data.plots?.length || 0,
-        annosCount: data.annos?.length || 0,
-        annosSample: data.annos?.slice(0, 2), // Show first 2 annotations
-        shapesCount: data.shapes?.length || 0,
-        labelsCount: data.labels?.length || 0,
-        branchesCount: data.branches?.length || 0,
-        hasLegend: !!data.legend,
-        legendVisible: data.legend?.visible,
-        legendEntries: data.legend?.manualEntries?.length || 0,
-        hasInventory: !!data.inventory && Object.keys(data.inventory).length > 0,
-        inventoryKeys: data.inventory ? Object.keys(data.inventory).length : 0
-      });
+      console.log('Load: API fetch', Math.round(performance.now() - t0), 'ms');
 
-      // CRITICAL DEBUG: Check if plot IDs from backend match annotation plotIds
-      const backendPlotIds = data.plots?.slice(0, 5).map(p => p.id) || [];
-      const backendFirstAnnoPlotIds = data.annos?.[0]?.plotIds?.slice(0, 5) || [];
-      console.log('handleLoadProjectFromDB: BACKEND PLOT ID CHECK:', {
-        plotIdsSample: backendPlotIds,
-        firstAnnoPlotIdsSample: backendFirstAnnoPlotIds,
-        doTheyMatch: backendFirstAnnoPlotIds.some(id => backendPlotIds.includes(id))
-      });
-      
-      // CRITICAL: Store all data in refs BEFORE any async operations
-      // This preserves data during React's async state updates
+      if (!data) throw new Error('No project data received from server');
 
-      // Store annotations in ref
-      if (data.annos && data.annos.length > 0) {
-        console.log('handleLoadProjectFromDB: ✓ Annotations ARE in backend response, count:', data.annos.length);
-        annosRef.current = data.annos;
-        console.log('handleLoadProjectFromDB: Stored', data.annos.length, 'annotations in annosRef');
-      } else {
-        console.error('handleLoadProjectFromDB: ✗ NO ANNOTATIONS in backend response!');
-      }
+      console.log('Load:', data.projectName, '|', data.plots?.length || 0, 'plots,', data.annos?.length || 0, 'annos, PDF:', !!data.pdfBase64);
 
-      // Store plots in ref
-      if (data.plots && data.plots.length > 0) {
-        console.log('handleLoadProjectFromDB: ✓ Plots ARE in backend response, count:', data.plots.length);
-        plotsRef.current = data.plots;
-        console.log('handleLoadProjectFromDB: Stored', data.plots.length, 'plots in plotsRef');
-      } else {
-        console.warn('handleLoadProjectFromDB: ⚠ No plots in backend response');
-      }
+      // Store all data in refs BEFORE any async operations (preserves during React batching)
+      if (data.annos?.length > 0) annosRef.current = data.annos;
+      if (data.plots?.length > 0) plotsRef.current = data.plots;
+      if (data.inventory && Object.keys(data.inventory).length > 0) inventoryRef.current = data.inventory;
 
-      // Store inventory in ref
-      if (data.inventory && Object.keys(data.inventory).length > 0) {
-        console.log('handleLoadProjectFromDB: ✓ Inventory IS in backend response, keys:', Object.keys(data.inventory).length);
-        inventoryRef.current = data.inventory;
-        console.log('handleLoadProjectFromDB: Stored inventory with', Object.keys(data.inventory).length, 'entries');
-      } else {
-        console.warn('handleLoadProjectFromDB: ⚠ No inventory in backend response');
-      }
-
-      // Log full data structure for debugging
-      console.log('handleLoadProjectFromDB: Full data structure:', {
-        annos: data.annos,
-        plots: data.plots?.length,
-        inventory: Object.keys(data.inventory || {}).length,
-        legend: data.legend,
-        shapes: data.shapes,
-        labels: data.labels
-      });
-
-      // Set project ID first so it's available in loadProjectData
+      // Set project ID first
       vectorState.setCurrentProjectId(projectId);
-      currentProjectIdRef.current = projectId; // Immediate sync for save operations
-      
-      // If PDF base64 exists, load it FIRST
+      currentProjectIdRef.current = projectId;
+      pdfChangedRef.current = false; // Fresh load — PDF not changed
+
+      // Load PDF if present
       if (data.pdfBase64) {
-        console.log('handleLoadProjectFromDB: Loading PDF...');
+        const t1 = performance.now();
         try {
           const result = await loadPDFFromBase64(data.pdfBase64, (progress) => {
             vectorState.setMapW(progress.mapW);
@@ -530,172 +346,78 @@ export default function VectorMap() {
             vectorState.setPdfScale(progress.pdfScale);
             vectorState.setPdfImg(progress.pdfImg);
           });
-          
+          console.log('Load: PDF render', Math.round(performance.now() - t1), 'ms');
+
           if ((!data.plots || data.plots.length === 0) && result.page) {
-            console.warn('handleLoadProjectFromDB: ⚠ NO SAVED PLOTS - extracting from PDF (this will create NEW IDs!)');
             try {
               const textContent = await result.page.getTextContent();
-              const extractedPlots = extractPlots(
-                textContent,
-                { width: result.mapW, height: result.mapH },
-                result.pdfScale
-              );
-              data.plots = extractedPlots;
-              console.log('handleLoadProjectFromDB: Extracted', extractedPlots.length, 'plots from PDF');
+              data.plots = extractPlots(textContent, { width: result.mapW, height: result.mapH }, result.pdfScale);
+              console.log('Load: extracted', data.plots.length, 'plots from PDF');
             } catch (extractError) {
               console.warn('Could not extract plots from PDF:', extractError);
               data.plots = data.plots || [];
             }
-          } else {
-            console.log('handleLoadProjectFromDB: ✓ Using', data.plots?.length || 0, 'saved plots (not extracting from PDF)');
           }
-          console.log('handleLoadProjectFromDB: PDF loaded successfully');
-
-          // CRITICAL DEBUG: Check if plot IDs are still intact after PDF load
-          console.log('handleLoadProjectFromDB: AFTER PDF LOAD - Plot IDs:', data.plots?.slice(0, 5).map(p => p.id));
         } catch (pdfError) {
           console.error('Error loading PDF:', pdfError);
-          // Don't block project loading if PDF fails - continue with project data
-          setError('PDF loaded but failed to render: ' + pdfError.message);
+          setError('PDF failed to render: ' + pdfError.message);
         }
       } else {
-        console.log('handleLoadProjectFromDB: No PDF to load - project will load without map');
-        // Even without PDF, we should still load the project data
-        // Set default map dimensions if not present
         if (!data.mapW || !data.mapH) {
           vectorState.setMapW(1000);
           vectorState.setMapH(1000);
         }
       }
-      
-      // Add projectId to data so loadProjectData can use it
-      const projectDataWithId = {
-        ...data,
-        projectId: projectId
-      };
-      
-      console.log('handleLoadProjectFromDB: Loading project data...', projectDataWithId);
-      
-      // Load project data with error handling
+
+      // Load project data
       try {
-        console.log('handleLoadProjectFromDB: Calling loadProjectData with:', {
-          projectName: projectDataWithId.projectName,
-          name: projectDataWithId.name,
-          plots: projectDataWithId.plots?.length || 0,
-          annos: projectDataWithId.annos?.length || 0,
-          annosSample: projectDataWithId.annos?.slice(0, 1), // Show first annotation structure
-          shapes: projectDataWithId.shapes?.length || 0,
-          labels: projectDataWithId.labels?.length || 0,
-          branches: projectDataWithId.branches?.length || 0,
-          hasLegend: !!projectDataWithId.legend,
-          legendEntries: projectDataWithId.legend?.manualEntries?.length || 0,
-          hasInventory: !!projectDataWithId.inventory && Object.keys(projectDataWithId.inventory).length > 0,
-          hasPdf: !!projectDataWithId.pdfBase64
-        });
-        
-        // CRITICAL: Verify annotations structure before loading
-        if (projectDataWithId.annos && projectDataWithId.annos.length > 0) {
-          const firstAnno = projectDataWithId.annos[0];
-          console.log('handleLoadProjectFromDB: First annotation structure:', {
-            id: firstAnno.id,
-            note: firstAnno.note,
-            cat: firstAnno.cat,
-            plotIds: firstAnno.plotIds,
-            plotNums: firstAnno.plotNums,
-            color: firstAnno.color,
-            hasX: 'x' in firstAnno,
-            hasY: 'y' in firstAnno,
-            hasAllProps: Object.keys(firstAnno)
-          });
-        }
-        vectorState.loadProjectData(projectDataWithId);
-        console.log('handleLoadProjectFromDB: Project data loaded successfully');
+        vectorState.loadProjectData({ ...data, projectId });
       } catch (loadError) {
         console.error('Error in loadProjectData:', loadError);
-        console.error('Load error stack:', loadError.stack);
         throw new Error('Failed to load project data: ' + loadError.message);
       }
-      
-      // Ensure project name is set correctly and update refs immediately
-      if (data.projectName) {
-        vectorState.setProjectName(data.projectName);
-        projectNameRef.current = data.projectName; // Immediate sync
-        console.log('handleLoadProjectFromDB: Set project name to', data.projectName);
-      } else if (data.name) {
-        // Fallback to name field if projectName not present
-        vectorState.setProjectName(data.name);
-        projectNameRef.current = data.name; // Immediate sync
-        console.log('handleLoadProjectFromDB: Set project name to (from name field)', data.name);
+
+      // Set project name
+      const name = data.projectName || data.name;
+      if (name) {
+        vectorState.setProjectName(name);
+        projectNameRef.current = name;
       }
 
-      // IMMEDIATE VERIFICATION & RECOVERY: Use refs for reliable data access
-      // Refs were set from data before loadProjectData call
-
-      // Verify and recover ANNOTATIONS
-      const expectedAnnosCount = data.annos?.length || 0;
-      const refAnnosCount = annosRef.current?.length || 0;
-      console.log('handleLoadProjectFromDB: Annotation verification:', {
-        expectedFromData: expectedAnnosCount,
-        inRef: refAnnosCount
-      });
-      if (expectedAnnosCount > 0 && refAnnosCount !== expectedAnnosCount) {
-        console.warn('handleLoadProjectFromDB: RECOVERING annotations from data');
+      // Verify and recover from refs if React batching lost data
+      if (data.annos?.length > 0 && annosRef.current?.length !== data.annos.length) {
         vectorState.setAnnos(data.annos);
         annosRef.current = data.annos;
       }
-
-      // Verify and recover PLOTS
-      const expectedPlotsCount = data.plots?.length || 0;
-      const refPlotsCount = plotsRef.current?.length || 0;
-      console.log('handleLoadProjectFromDB: Plot verification:', {
-        expectedFromData: expectedPlotsCount,
-        inRef: refPlotsCount
-      });
-      if (expectedPlotsCount > 0 && refPlotsCount !== expectedPlotsCount) {
-        console.warn('handleLoadProjectFromDB: RECOVERING plots from data');
+      if (data.plots?.length > 0 && plotsRef.current?.length !== data.plots.length) {
         vectorState.setPlots(data.plots);
         plotsRef.current = data.plots;
       }
-
-      // Verify and recover INVENTORY
-      const expectedInventoryCount = Object.keys(data.inventory || {}).length;
-      const refInventoryCount = Object.keys(inventoryRef.current || {}).length;
-      console.log('handleLoadProjectFromDB: Inventory verification:', {
-        expectedFromData: expectedInventoryCount,
-        inRef: refInventoryCount
-      });
-      if (expectedInventoryCount > 0 && refInventoryCount !== expectedInventoryCount) {
-        console.warn('handleLoadProjectFromDB: RECOVERING inventory from data');
+      const expectedInvCount = Object.keys(data.inventory || {}).length;
+      if (expectedInvCount > 0 && Object.keys(inventoryRef.current || {}).length !== expectedInvCount) {
         vectorState.setInventory(data.inventory);
         inventoryRef.current = data.inventory;
       }
 
-      // Force a re-render to ensure all data is displayed
-      // This helps when React's batched updates don't trigger a re-render
-      if (expectedAnnosCount > 0 || expectedPlotsCount > 0) {
-        console.log('handleLoadProjectFromDB: Forcing state update to ensure render');
-        // Directly set all critical data to trigger re-render
+      // Force re-render for critical data
+      if ((data.annos?.length || 0) > 0 || (data.plots?.length || 0) > 0) {
         vectorState.setAnnos(data.annos || []);
         vectorState.setPlots(data.plots || []);
         vectorState.setInventory(data.inventory || {});
       }
 
-      vectorState.addChangeLog('Project loaded from database', `Loaded project: ${data.projectName || data.name || projectId}`);
-      
-      // Clear any previous errors if load was successful
+      vectorState.addChangeLog('Project loaded from database', `Loaded project: ${name || projectId}`);
       setError(null);
-      console.log('handleLoadProjectFromDB: Project loaded successfully');
-      
-      // If no PDF was loaded, show a message to the user
+      console.log('Load: total', Math.round(performance.now() - t0), 'ms');
+
       if (!data.pdfBase64) {
-        alert('Project loaded successfully, but no map PDF was found. You can load a PDF map using the "Open" button.');
+        alert('Project loaded, but no map PDF found. Use "Open" to load a PDF.');
       }
-      
+
     } catch (err) {
-      console.error('Error loading project from database:', err);
-      console.error('Error details:', err.response?.data);
+      console.error('Error loading project:', err);
       const errorMessage = err.response?.data?.detail || err.message || 'Unknown error';
-      setError('Failed to load project from database: ' + errorMessage);
+      setError('Failed to load project: ' + errorMessage);
       alert('Error loading project: ' + errorMessage);
     } finally {
       setLoading(false);
@@ -719,7 +441,7 @@ export default function VectorMap() {
       // Store in ref for immediate access (avoids React state async issues)
       if (pdfBase64ToPreserve) {
         pdfBase64Ref.current = pdfBase64ToPreserve;
-        console.log('handleLoadProject: Stored pdfBase64 in ref');
+        pdfChangedRef.current = true; // New file load — mark PDF as changed for save
       }
       
       // If PDF base64 exists, load it FIRST to get map dimensions
@@ -953,7 +675,9 @@ export default function VectorMap() {
       // Convert PDF to base64 for saving
       const arrayBuffer = await file.arrayBuffer();
       const base64 = arrayBufferToBase64(arrayBuffer);
-      
+      pdfBase64Ref.current = base64;
+      pdfChangedRef.current = true; // New PDF — mark as changed for save
+
       // Create empty project structure
       const projectData = {
         projectName: file.name.replace('.pdf', ''),
@@ -1003,6 +727,48 @@ export default function VectorMap() {
     }
   };
 
+  // Replace PDF for an existing project (keeps all vector metadata)
+  const handleReplacePDF = async (file) => {
+    if (!file || !file.name.endsWith('.pdf')) {
+      alert('Please select a valid PDF file.');
+      return;
+    }
+
+    if (!confirm('Replace the map PDF for this project?\nAll annotations, shapes, labels, and inventory will be kept.')) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await loadPDFFromFile(file, (progress) => {
+        vectorState.setMapW(progress.mapW);
+        vectorState.setMapH(progress.mapH);
+        vectorState.setPdfScale(progress.pdfScale);
+        vectorState.setPdfImg(progress.pdfImg);
+      });
+
+      // Convert to base64
+      const arrayBuffer = await file.arrayBuffer();
+      const base64 = arrayBufferToBase64(arrayBuffer);
+      vectorState.setPdfBase64(base64);
+      pdfBase64Ref.current = base64;
+      pdfChangedRef.current = true;
+
+      vectorState.setHasUnsavedChanges(true);
+      vectorState.addChangeLog('PDF replaced', `Replaced map PDF with: ${file.name}`);
+      console.log('Replace PDF: done, new dimensions:', result.mapW, 'x', result.mapH);
+      alert('PDF replaced. Save the project to persist changes.');
+    } catch (err) {
+      console.error('Error replacing PDF:', err);
+      setError('Failed to replace PDF: ' + err.message);
+      alert('Error replacing PDF: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle file input change
   const handleFileInputChange = (e) => {
     const file = e.target.files[0];
@@ -1042,6 +808,18 @@ export default function VectorMap() {
         type="file"
         accept=".json,.pdf"
         onChange={handleFileInputChange}
+        className="hidden"
+      />
+      {/* Hidden file input for PDF replacement */}
+      <input
+        ref={replacePdfInputRef}
+        type="file"
+        accept=".pdf"
+        onChange={(e) => {
+          const file = e.target.files[0];
+          if (file) handleReplacePDF(file);
+          e.target.value = '';
+        }}
         className="hidden"
       />
 

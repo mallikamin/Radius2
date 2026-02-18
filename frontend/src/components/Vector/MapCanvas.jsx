@@ -6,10 +6,10 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
   const [scale, setScale] = useState(1);
   const [offX, setOffX] = useState(0);
   const [offY, setOffY] = useState(0);
-  const [hoveredPlotId, setHoveredPlotId] = useState(null);
+  const hoveredPlotIdRef = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+  const lastMousePosRef = useRef({ x: 0, y: 0 });
   const [editingAnnotation, setEditingAnnotation] = useState(null);
   const [brushPainting, setBrushPainting] = useState(false);
   const [brushAnnotationId, setBrushAnnotationId] = useState(null);
@@ -22,6 +22,9 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
   const [panSensitivity, setPanSensitivity] = useState(0.05); // 0.01 to 0.1, default 0.05
   const [panSmoothing, setPanSmoothing] = useState(0.05); // 0.01 to 0.1, default 0.05
   const smoothedDeltaRef = useRef({ x: 0, y: 0 });
+
+  // requestAnimationFrame guard to prevent redundant redraws
+  const drawRequestRef = useRef(null);
 
   // Screen to map coordinates conversion
   const screenToMap = useCallback((sx, sy) => {
@@ -189,7 +192,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
         // Use string conversion for type-flexible lookup
         const anno = annoMap[String(p.id)];
         const isSel = vectorState.selected.has(p.id);
-        const isHovered = hoveredPlotId === p.id;
+        const isHovered = hoveredPlotIdRef.current === p.id;
 
         // Skip plots not in active annotation when filtered view is active
         if (isFilteredView) {
@@ -501,7 +504,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     });
 
     ctx.restore();
-  }, [vectorState, vectorState.annos, vectorState.plots, vectorState.plotOffsets, vectorState.activeView, scale, offX, offY, hoveredPlotId, displayMode]);
+  }, [vectorState, vectorState.annos, vectorState.plots, vectorState.plotOffsets, vectorState.activeView, scale, offX, offY, displayMode]);
 
   // Handle mouse move for hover
   const handleMouseMove = useCallback((e) => {
@@ -511,8 +514,17 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     const rect = canvas.getBoundingClientRect();
     const [mx, my] = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
     const plot = findPlotAt(mx, my, true); // Check both plot and annotation positions for hover
-    setHoveredPlotId(plot?.id || null);
-    
+    const newHoveredId = plot?.id || null;
+    if (hoveredPlotIdRef.current !== newHoveredId) {
+      hoveredPlotIdRef.current = newHoveredId;
+      // Trigger redraw via rAF for hover highlight change
+      if (drawRequestRef.current) cancelAnimationFrame(drawRequestRef.current);
+      drawRequestRef.current = requestAnimationFrame(() => {
+        drawRequestRef.current = null;
+        render();
+      });
+    }
+
     // Show live hover details window
     if (plot && window.showHoverPlotDetails) {
       window.showHoverPlotDetails(plot.id, e.clientX, e.clientY);
@@ -522,8 +534,8 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
     // Pan if dragging (works for both pan tool and middle mouse button)
     if (dragging && (tool === 'pan' || e.button === 1)) {
-      const dx = e.clientX - lastMousePos.x;
-      const dy = e.clientY - lastMousePos.y;
+      const dx = e.clientX - lastMousePosRef.current.x;
+      const dy = e.clientY - lastMousePosRef.current.y;
       
       // Apply smoothing (exponential moving average)
       smoothedDeltaRef.current.x = dx * panSmoothing + smoothedDeltaRef.current.x * (1 - panSmoothing);
@@ -612,8 +624,8 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       }
     }
 
-    setLastMousePos({ x: e.clientX, y: e.clientY });
-  }, [screenToMap, findPlotAt, dragging, lastMousePos, brushPainting, tool, brushAnnotationId, eraserActive, movingPlots, moveStartPos, vectorState]);
+    lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+  }, [screenToMap, findPlotAt, dragging, brushPainting, tool, brushAnnotationId, eraserActive, movingPlots, moveStartPos, vectorState, render]);
 
   // Handle click
   const handleClick = useCallback((e) => {
@@ -740,7 +752,7 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       if (e.button === 1) e.preventDefault();
       setDragging(true);
       setDragStart({ x: e.clientX, y: e.clientY });
-      setLastMousePos({ x: e.clientX, y: e.clientY });
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     } else if (tool === 'brush') {
       // Start brush painting
       const currentBrushAnnoId = window.currentBrushAnnotationId || null;
@@ -886,9 +898,16 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
     setOffY(newOffY);
   }, [scale, screenToMap]);
 
-  // Render on changes
+  // Render on changes via requestAnimationFrame to prevent redundant redraws
   useEffect(() => {
-    render();
+    if (drawRequestRef.current) cancelAnimationFrame(drawRequestRef.current);
+    drawRequestRef.current = requestAnimationFrame(() => {
+      drawRequestRef.current = null;
+      render();
+    });
+    return () => {
+      if (drawRequestRef.current) cancelAnimationFrame(drawRequestRef.current);
+    };
   }, [render]);
 
   // Add wheel event listener with passive: false to allow preventDefault

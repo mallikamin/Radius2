@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 export default function AnnotationEditor({ annotation, vectorState, onClose }) {
   const [selectedPlotIds, setSelectedPlotIds] = useState(new Set(annotation.plotIds || []));
@@ -6,19 +6,33 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
   const [color, setColor] = useState(annotation.color || '#6366f1');
   const [fontSize, setFontSize] = useState(annotation.fontSize || 12);
   const [rotation, setRotation] = useState(annotation.rotation || 0);
+  const [plotFilter, setPlotFilter] = useState('');
+  const [bulkInput, setBulkInput] = useState('');
 
   // Get all plots
   const allPlots = vectorState.plots || [];
-  const annotationPlots = allPlots.filter(p => annotation.plotIds?.includes(p.id));
-  const otherPlots = allPlots.filter(p => !annotation.plotIds?.includes(p.id));
+  const annotationPlots = allPlots.filter(p => selectedPlotIds.has(p.id));
+  const otherPlots = allPlots.filter(p => !selectedPlotIds.has(p.id));
+
+  // Filter other plots by search
+  const filteredOtherPlots = useMemo(() => {
+    if (!plotFilter.trim()) return otherPlots;
+    const term = plotFilter.trim().toUpperCase();
+    return otherPlots.filter(p => String(p.n || '').toUpperCase().includes(term));
+  }, [otherPlots, plotFilter]);
 
   const handleSave = () => {
+    const plotNums = allPlots
+      .filter(p => selectedPlotIds.has(p.id))
+      .map(p => p.n)
+      .filter((v, i, a) => a.indexOf(v) === i);
     vectorState.updateAnnotation(annotation.id, {
       note,
       color,
       fontSize: parseInt(fontSize),
       rotation: parseFloat(rotation) || 0,
-      plotIds: Array.from(selectedPlotIds)
+      plotIds: Array.from(selectedPlotIds),
+      plotNums
     });
     onClose();
   };
@@ -39,12 +53,12 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
       fontSize: parseInt(fontSize)
     };
     vectorState.addAnnotation(newAnno);
-    
+
     // Remove selected plots from current annotation
     vectorState.updateAnnotation(annotation.id, {
       plotIds: annotation.plotIds.filter(id => !selectedPlotIds.has(id))
     });
-    
+
     onClose();
   };
 
@@ -60,11 +74,48 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
     });
   };
 
+  // Parse comma-separated plot numbers/ranges and add them
+  const handleBulkAdd = () => {
+    if (!bulkInput.trim()) return;
+
+    const parts = bulkInput.split(',').map(s => s.trim()).filter(Boolean);
+    const plotNumsToAdd = new Set();
+
+    for (const part of parts) {
+      if (part.includes('-') && /^\d+-\d+$/.test(part)) {
+        // Range like "5-10"
+        const [start, end] = part.split('-').map(Number);
+        for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
+          plotNumsToAdd.add(String(i));
+        }
+      } else {
+        plotNumsToAdd.add(part);
+      }
+    }
+
+    // Match plot numbers to plot IDs
+    const newSelected = new Set(selectedPlotIds);
+    let added = 0;
+    allPlots.forEach(p => {
+      const pn = String(p.n || '').trim();
+      if (plotNumsToAdd.has(pn) && !newSelected.has(p.id)) {
+        newSelected.add(p.id);
+        added++;
+      }
+    });
+
+    setSelectedPlotIds(newSelected);
+    setBulkInput('');
+    if (added === 0) {
+      alert('No matching plots found. Check plot numbers.');
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 w-96 max-h-[80vh] overflow-y-auto">
         <h2 className="text-xl font-bold mb-4">Edit Annotation</h2>
-        
+
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">Note:</label>
@@ -129,30 +180,39 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
             </div>
           </div>
 
+          {/* Bulk add plots */}
+          <div>
+            <label className="block text-sm font-medium mb-1">Add plots by number:</label>
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={bulkInput}
+                onChange={(e) => setBulkInput(e.target.value)}
+                placeholder="e.g. 1,2,3,5-10"
+                className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleBulkAdd(); }}
+              />
+              <button
+                onClick={handleBulkAdd}
+                className="px-2 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+              >
+                Add
+              </button>
+            </div>
+            <div className="text-[10px] text-gray-400 mt-0.5">Comma-separated numbers or ranges</div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium mb-2">
               Plots ({selectedPlotIds.size} selected):
             </label>
-            
-            <div className="border border-gray-300 rounded p-2 max-h-48 overflow-y-auto">
+
+            <div className="border border-gray-300 rounded p-2">
+              {/* Current plots in annotation */}
               <div className="mb-2">
                 <strong className="text-xs text-gray-600">Current plots ({annotationPlots.length}):</strong>
-                {annotationPlots.map(plot => (
-                  <label key={plot.id} className="flex items-center gap-2 p-1 hover:bg-gray-100 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectedPlotIds.has(plot.id)}
-                      onChange={() => togglePlot(plot.id)}
-                    />
-                    <span className="text-xs">Plot {plot.n}</span>
-                  </label>
-                ))}
-              </div>
-              
-              {otherPlots.length > 0 && (
-                <div>
-                  <strong className="text-xs text-gray-600">Other plots ({otherPlots.length}):</strong>
-                  {otherPlots.slice(0, 20).map(plot => (
+                <div className="max-h-32 overflow-y-auto">
+                  {annotationPlots.map(plot => (
                     <label key={plot.id} className="flex items-center gap-2 p-1 hover:bg-gray-100 cursor-pointer">
                       <input
                         type="checkbox"
@@ -162,11 +222,37 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
                       <span className="text-xs">Plot {plot.n}</span>
                     </label>
                   ))}
-                  {otherPlots.length > 20 && (
-                    <div className="text-xs text-gray-500 p-1">
-                      +{otherPlots.length - 20} more plots
-                    </div>
-                  )}
+                </div>
+              </div>
+
+              {/* Other plots with search filter */}
+              {otherPlots.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <strong className="text-xs text-gray-600">Other plots ({otherPlots.length}):</strong>
+                    <input
+                      type="text"
+                      value={plotFilter}
+                      onChange={(e) => setPlotFilter(e.target.value)}
+                      placeholder="Filter..."
+                      className="flex-1 px-1 py-0.5 text-xs border border-gray-200 rounded"
+                    />
+                  </div>
+                  <div className="max-h-40 overflow-y-auto">
+                    {filteredOtherPlots.map(plot => (
+                      <label key={plot.id} className="flex items-center gap-2 p-1 hover:bg-gray-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedPlotIds.has(plot.id)}
+                          onChange={() => togglePlot(plot.id)}
+                        />
+                        <span className="text-xs">Plot {plot.n}</span>
+                      </label>
+                    ))}
+                    {filteredOtherPlots.length === 0 && plotFilter && (
+                      <div className="text-xs text-gray-400 p-1">No matches for "{plotFilter}"</div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -198,4 +284,3 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
     </div>
   );
 }
-

@@ -25,7 +25,9 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
     return 'user';
   };
   
-  const isAdmin = getUserRole() === 'admin';
+  const userRole = getUserRole();
+  const isAdmin = userRole === 'admin';
+  const canDelete = !['creator', 'viewer'].includes(userRole);
 
   const tools = [
     { id: 'select', label: 'Select', icon: '👆' },
@@ -111,36 +113,44 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
     }
   };
   
-  // Delete project (admin only)
+  // Delete project (admin = hard delete, non-admin = deletion request, creator = forbidden)
   const handleDeleteProject = async (projectId, projectName) => {
-    if (!isAdmin) {
-      alert('Only administrators can delete projects');
+    if (!canDelete) {
+      alert('Your role does not have permission to delete projects.');
       return;
     }
-    
-    if (!confirm(`Are you sure you want to delete "${projectName || 'this project'}"? This action cannot be undone.`)) {
+
+    const confirmMsg = isAdmin
+      ? `Are you sure you want to permanently delete "${projectName || 'this project'}"? This action cannot be undone.`
+      : `Request deletion of "${projectName || 'this project'}"? An admin will need to approve this.`;
+
+    if (!confirm(confirmMsg)) {
       return;
     }
-    
+
     try {
       const api = axios.create({ baseURL: '/api' });
       const token = localStorage.getItem('token');
       if (token) {
         api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       }
-      
-      await api.delete(`/vector/projects/${projectId}`);
-      alert('Project deleted successfully');
-      
-      // Reload project list
-      loadProjects();
-      
-      // If the deleted project was the current one, clear it
-      if (vectorState.currentProjectId === projectId) {
-        if (onNewProject) {
-          onNewProject();
+
+      const response = await api.delete(`/vector/projects/${projectId}`);
+
+      if (response.data?.pending) {
+        alert('Deletion request submitted. An admin will review and approve it.');
+      } else {
+        alert('Project deleted successfully.');
+        // If the deleted project was the current one, clear it
+        if (vectorState.currentProjectId === projectId) {
+          if (onNewProject) {
+            onNewProject();
+          }
         }
       }
+
+      // Reload project list
+      loadProjects();
     } catch (err) {
       console.error('Error deleting project:', err);
       const errorMessage = err.response?.data?.detail || err.message || 'Unknown error';
@@ -287,6 +297,23 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
         >
           💾 Save
         </button>
+
+        {vectorState.pdfImg && (
+          <button
+            onClick={() => {
+              if (window.replacePDF) {
+                window.replacePDF();
+              } else {
+                alert('Replace PDF not available. Please refresh the page.');
+              }
+            }}
+            className="px-3 py-1 text-xs bg-amber-600 hover:bg-amber-700 rounded font-medium"
+            style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
+            title="Replace map PDF (keeps annotations, shapes, inventory)"
+          >
+            🔄 Replace PDF
+          </button>
+        )}
 
         <button
           onClick={handleNewProject}
@@ -630,14 +657,14 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
                                     ✏️
                                   </button>
                                 )}
-                                {isAdmin && (
+                                {canDelete && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       handleDeleteProject(project.id, displayName);
                                     }}
                                     className="p-1 text-gray-400 hover:text-red-600"
-                                    title="Delete"
+                                    title={isAdmin ? "Delete project" : "Request deletion"}
                                   >
                                     ×
                                   </button>

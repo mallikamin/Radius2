@@ -217,19 +217,44 @@ export default function Sidebar({ vectorState }) {
               <button
                 onClick={() => {
                   const note = prompt('Annotation note:');
+                  if (!note) return;
                   const color = prompt('Color (hex):', '#6366f1');
-                  if (note) {
-                    vectorState.addAnnotation({
-                      id: Date.now(),
-                      note,
-                      cat: '',
-                      color: color || '#6366f1',
-                      plotIds: [],
-                      plotNums: [],
-                      rotation: 0,
-                      fontSize: 12
+                  const plotInput = prompt('Plot numbers (comma-separated, e.g. 1,2,3,5-10)\nLeave empty to add plots later:');
+
+                  // Parse plot numbers
+                  let plotIds = [];
+                  let plotNums = [];
+                  if (plotInput && plotInput.trim()) {
+                    const parts = plotInput.split(',').map(s => s.trim()).filter(Boolean);
+                    const numSet = new Set();
+                    for (const part of parts) {
+                      if (part.includes('-') && /^\d+-\d+$/.test(part)) {
+                        const [start, end] = part.split('-').map(Number);
+                        for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
+                          numSet.add(String(i));
+                        }
+                      } else {
+                        numSet.add(part);
+                      }
+                    }
+                    (vectorState.plots || []).forEach(p => {
+                      if (numSet.has(String(p.n || '').trim())) {
+                        plotIds.push(p.id);
+                        plotNums.push(p.n);
+                      }
                     });
                   }
+
+                  vectorState.addAnnotation({
+                    id: Date.now(),
+                    note,
+                    cat: '',
+                    color: color || '#6366f1',
+                    plotIds,
+                    plotNums: [...new Set(plotNums)],
+                    rotation: 0,
+                    fontSize: 12
+                  });
                 }}
                 className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
               >
