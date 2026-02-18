@@ -217,7 +217,7 @@ export function exportPlotDetailsToPDF(plotsToExport, vectorState) {
 }
 
 // Build export canvas with high resolution
-export function buildExportCanvasEnhanced(vectorState, mode = 'full', highlightItems = null, expScale = 2, includeLegend = true, legendPosition = 'bottom-right') {
+export function buildExportCanvasEnhanced(vectorState, mode = 'full', highlightItems = null, expScale = 2, includeLegend = true, legendPosition = 'bottom-right', displayMode = 'plot') {
   try {
     if (!vectorState.pdfImg) {
       throw new Error('PDF map not loaded. Please load a project file first.');
@@ -312,7 +312,7 @@ export function buildExportCanvasEnhanced(vectorState, mode = 'full', highlightI
     if (a || mode === 'full' || mode === 'proposal') {
       const fontSize = (a ? (a.fontSize || 12) : 10) * expScale;
       ctx.font = `bold ${fontSize}px Arial`;
-      const displayText = p.n;
+      const displayText = a ? (displayMode === 'note' ? (a.note || a.cat || '•') : p.n) : p.n;
       const textW = ctx.measureText(displayText).width;
       const bw = Math.max(textW + 6 * expScale, 16 * expScale);
       const bh = Math.max(fontSize + 4 * expScale, 12 * expScale);

@@ -15,7 +15,7 @@ import InventoryImportPanel from './InventoryImportPanel';
 import SettingsPanel from './SettingsPanel';
 import BranchesPanel from './BranchesPanel';
 
-export default function Sidebar({ vectorState }) {
+export default function Sidebar({ vectorState, displayMode = 'plot' }) {
   const [activeTab, setActiveTab] = useState('selection');
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportMode, setExportMode] = useState('full');
@@ -68,7 +68,7 @@ export default function Sidebar({ vectorState }) {
     try {
       // Get legend position from vectorState or default to bottom-right
       const legendPosition = vectorState.legend?.position || 'bottom-right';
-      canvas = buildExportCanvasEnhanced(vectorState, exportMode, highlightItems, 2, true, legendPosition);
+      canvas = buildExportCanvasEnhanced(vectorState, exportMode, highlightItems, 2, true, legendPosition, displayMode);
     } catch (err) {
       alert('Export error: ' + err.message);
       return;

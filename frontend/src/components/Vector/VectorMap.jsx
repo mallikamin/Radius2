@@ -838,7 +838,7 @@ export default function VectorMap() {
       />
 
       {/* Sidebar */}
-      <Sidebar vectorState={vectorState} />
+      <Sidebar vectorState={vectorState} displayMode={displayMode} />
 
       {/* Main canvas area */}
       <div 

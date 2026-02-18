@@ -5,6 +5,7 @@ export default function LegendPanel({ vectorState }) {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [showPositionMenu, setShowPositionMenu] = useState(false);
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -289,7 +290,40 @@ export default function LegendPanel({ vectorState }) {
             </span>
           )}
         </span>
-        <div className="flex gap-1">
+        <div className="flex gap-1 relative">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowPositionMenu(!showPositionMenu); }}
+            className="text-white hover:opacity-100 opacity-70 text-xs"
+            title="Legend Position"
+          >
+            📌
+          </button>
+          {showPositionMenu && (
+            <div
+              className="absolute top-6 right-0 bg-white border border-gray-300 rounded shadow-lg z-50 py-1 min-w-[120px]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {[
+                { value: 'top-left', label: 'Top Left' },
+                { value: 'top-right', label: 'Top Right' },
+                { value: 'bottom-left', label: 'Bottom Left' },
+                { value: 'bottom-right', label: 'Bottom Right' },
+              ].map(opt => (
+                <div
+                  key={opt.value}
+                  className={`px-3 py-1 text-xs cursor-pointer hover:bg-gray-100 ${
+                    vectorState.legend.position === opt.value ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'text-gray-700'
+                  }`}
+                  onClick={() => {
+                    vectorState.setLegend({ ...vectorState.legend, position: opt.value });
+                    setShowPositionMenu(false);
+                  }}
+                >
+                  {opt.label}
+                </div>
+              ))}
+            </div>
+          )}
           <button
             onClick={() => {
               // Refresh legend
