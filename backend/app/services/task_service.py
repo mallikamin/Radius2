@@ -1328,7 +1328,8 @@ class TaskService:
                     db, assignee.rep_id, "task_assigned",
                     f"New task: {title}",
                     f"Assigned by {creator.name if creator else 'System'}",
-                    category="task", entity_type="task", entity_id=task.task_id
+                    category="task", entity_type="task", entity_id=task.task_id,
+                    data={"task_id": task.task_id}
                 )
 
         db.commit()
@@ -1417,7 +1418,8 @@ class TaskService:
                 db, assignee.rep_id, "task_assigned",
                 f"New task: {task.title}",
                 f"Assigned by {creator.name if creator else 'System'}",
-                category="task", entity_type="task", entity_id=task.task_id
+                category="task", entity_type="task", entity_id=task.task_id,
+                data={"task_id": task.task_id}
             )
         elif pending_assignment:
             # Notify admins
@@ -1427,7 +1429,8 @@ class TaskService:
                     db, admin.rep_id, "pending_assignment",
                     f"Pending task: {task.title}",
                     f"Needs assignment. Original: {original_assignee_text}",
-                    category="task", entity_type="task", entity_id=task.task_id
+                    category="task", entity_type="task", entity_id=task.task_id,
+                    data={"task_id": task.task_id}
                 )
 
         db.commit()
@@ -1607,7 +1610,8 @@ class TaskService:
                 if rep:
                     create_notification(
                         db, rep.rep_id, notif_type, title, message,
-                        category="task", entity_type="task", entity_id=task.task_id
+                        category="task", entity_type="task", entity_id=task.task_id,
+                        data={"task_id": task.task_id}
                     )
 
     def complete_task(self, db: Session, task_id, user_id, notes: Optional[str] = None):

@@ -3,6 +3,7 @@ import axios from 'axios';
 import VectorMap from './components/Vector/VectorMap';
 import OrphanTrackingPanel from './components/OrphanTrackingPanel';
 import TasksView from './components/Tasks/TasksView';
+import EntityTaskWidget from './components/Tasks/EntityTaskWidget';
 import ChatWidget from './components/Voice/ChatWidget';
 import PhoneInput from './components/PhoneInput';
 import { fetchLookupValues, LOOKUP_KEYS } from './utils/lookupValues';
@@ -133,6 +134,7 @@ function downloadCSV(data, filename) {
 export default function App() {
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('projects');
+  const [taskDeepLink, setTaskDeepLink] = useState(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [toasts, setToasts] = useState([]);
@@ -229,6 +231,10 @@ export default function App() {
   const handleNotifClick = (n) => {
     markNotifRead(n.id);
     setShowNotifPanel(false);
+    const extractTaskId = (text) => {
+      const m = String(text || '').match(/\bTASK-\d+\b/i);
+      return m ? m[0].toUpperCase() : null;
+    };
     if (n.type === 'task_report') {
       // entity_type === "report", entity_id is the media record id
       // For personal reports: /tasks/daily-report/{rep_id}
@@ -236,8 +242,31 @@ export default function App() {
       // The notification data or entity_id may contain the rep_id
       const repId = n.data?.rep_id || user?.rep_id;
       if (repId) openAuthReport(`/tasks/daily-report/${repId}`);
-    } else if (n.entity_type === 'task' && n.entity_id) {
+      return;
+    }
+
+    const isTaskNotification =
+      ['task', 'subtask', 'micro_task'].includes(n.entity_type || '') ||
+      (n.category || '').toLowerCase() === 'task' ||
+      String(n.type || '').startsWith('task_') ||
+      String(n.type || '') === 'pending_assignment';
+
+    if (isTaskNotification) {
+      const parsedTaskId = extractTaskId(n.data?.task_id || n.entity_id || n.title || n.message);
+      const deepLink = {
+        taskId: n.data?.task_id || (n.entity_type === 'task' ? n.entity_id : null) || parsedTaskId,
+        subtaskId: n.data?.subtask_id || (n.entity_type === 'subtask' ? n.entity_id : null),
+        microTaskId: n.data?.micro_task_id || (n.entity_type === 'micro_task' ? n.entity_id : null),
+      };
+      // Micro-task notifications may only provide micro_task_id in entity_id.
+      if (!deepLink.taskId && n.entity_type === 'micro_task') {
+        deepLink.microTaskId = deepLink.microTaskId || n.entity_id;
+      }
+      setTaskDeepLink(deepLink);
       setActiveTab('tasks');
+      if (!deepLink.taskId && !deepLink.subtaskId && !deepLink.microTaskId) {
+        addToast('Notification', 'Opened Tasks. Could not resolve exact item from this notification.', 'info');
+      }
     }
   };
   const markAllRead = async () => {
@@ -486,7 +515,14 @@ export default function App() {
         {activeTab === 'customers' && <CustomersView />}
         {activeTab === 'campaigns' && <CampaignsView />}
         {activeTab === 'media' && <MediaView />}
-        {activeTab === 'tasks' && <TasksView api={api} user={user} addToast={addToast} setActiveTab={setActiveTab} />}
+        {activeTab === 'tasks' && <TasksView
+          api={api}
+          user={user}
+          addToast={addToast}
+          setActiveTab={setActiveTab}
+          deepLink={taskDeepLink}
+          onDeepLinkHandled={() => setTaskDeepLink(null)}
+        />}
         {activeTab === 'vector' && <VectorView />}
         {activeTab === 'settings' && <SettingsView />}
       </main>
@@ -662,6 +698,15 @@ function ProjectsView() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Inventory Units</label>
                 <div className="text-sm text-gray-900">{selectedProject.inventory?.length || 0}</div>
               </div>
+            </div>
+
+            <div className="border-t pt-4">
+              <EntityTaskWidget
+                api={api}
+                entityType="project"
+                entityId={selectedProject.id}
+                compact
+              />
             </div>
 
             {/* Media Attachments */}
@@ -984,6 +1029,13 @@ function SellModal({ item, onClose, onSuccess }) {
             <div><span className="text-gray-500">Block:</span> <span className="font-medium">{item.block || '—'}</span></div>
           </div>
         </div>
+
+        <EntityTaskWidget
+          api={api}
+          entityType="inventory"
+          entityId={item.id}
+          compact
+        />
 
         <div><label className="block text-xs font-medium text-gray-500 mb-1">Customer *</label>
           <select required value={form.customer_id} onChange={e => setForm({...form, customer_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
@@ -1532,6 +1584,15 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
               ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="border-t pt-4">
+          <EntityTaskWidget
+            api={api}
+            entityType="transaction"
+            entityId={txn.id}
+            compact
+          />
         </div>
 
         {/* Media Attachments */}
@@ -7159,6 +7220,16 @@ function CustomerDetailModal({ customer, onClose }) {
             </div>
           </div>
         )}
+
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Linked Tasks</h3>
+          <EntityTaskWidget
+            api={api}
+            entityType="customer"
+            entityId={customer.customer.id}
+            compact
+          />
+        </div>
 
         {/* Customer Documents */}
         <div>

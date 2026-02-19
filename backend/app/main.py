@@ -570,6 +570,7 @@ class TaskComment(Base):
     __tablename__ = "task_comments"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    micro_task_id = Column(UUID(as_uuid=True), ForeignKey("micro_tasks.id", ondelete="CASCADE"))
     author_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
@@ -584,6 +585,21 @@ class TaskActivity(Base):
     new_value = Column(String(200))
     details = Column(JSONB, default=dict)
     created_at = Column(DateTime, server_default=func.now())
+
+class MicroTask(Base):
+    __tablename__ = "micro_tasks"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(300), nullable=False)
+    is_completed = Column(Boolean, nullable=False, server_default=text("false"))
+    assignee_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="SET NULL"))
+    due_date = Column(Date)
+    sort_order = Column(Integer, nullable=False, server_default=text("0"))
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"), nullable=False)
+    completed_at = Column(DateTime(timezone=True))
+    completed_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class QueryHistory(Base):
     __tablename__ = "query_history"
@@ -8035,7 +8051,11 @@ def get_unread_notifications(db: Session = Depends(get_db),
         "notifications": [{
             "id": n.id, "notification_id": n.notification_id,
             "title": n.title, "message": n.message, "type": n.type,
-            "category": n.category, "data": n.data or {},
+            "category": n.category,
+            "entity_type": n.entity_type,
+            "entity_id": n.entity_id,
+            "is_read": bool(n.is_read),
+            "data": n.data or {},
             "created_at": str(n.created_at)
         } for n in notifs]
     }
@@ -9354,10 +9374,74 @@ async def get_task(
         "actor_name": people_names.get(a.actor_id, "Unknown"),
         "created_at": a.created_at.isoformat() if a.created_at else None,
     } for a in activities]
-    # Include subtasks
+    # Include subtasks with micro-tasks
     subtasks = db.query(Task).filter(Task.parent_task_id == task.id).order_by(Task.created_at).all()
     sub_cache = _build_rep_name_cache(db, subtasks)
-    result["subtasks"] = [_task_to_dict(s, db, sub_cache) for s in subtasks]
+    # Batch-load micro-tasks for all subtasks
+    sub_ids = [s.id for s in subtasks]
+    all_micro_tasks = []
+    if sub_ids:
+        all_micro_tasks = db.query(MicroTask).filter(MicroTask.task_id.in_(sub_ids)).order_by(MicroTask.sort_order, MicroTask.created_at).all()
+    # Build people name cache for micro-tasks
+    mt_people_ids = set()
+    for mt in all_micro_tasks:
+        if mt.assignee_id:
+            mt_people_ids.add(mt.assignee_id)
+        if mt.created_by:
+            mt_people_ids.add(mt.created_by)
+        if mt.completed_by:
+            mt_people_ids.add(mt.completed_by)
+    mt_name_cache = {}
+    if mt_people_ids:
+        mt_reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(mt_people_ids))).all()
+        mt_name_cache = {r.id: r.name for r in mt_reps}
+    # Group micro-tasks by subtask
+    mt_by_sub = {}
+    for mt in all_micro_tasks:
+        mt_by_sub.setdefault(mt.task_id, []).append(mt)
+    # Batch count comments per subtask and per micro-task
+    sub_comment_counts = {}
+    if sub_ids:
+        counts = db.query(TaskComment.task_id, func.count(TaskComment.id)).filter(
+            TaskComment.task_id.in_(sub_ids), TaskComment.micro_task_id == None
+        ).group_by(TaskComment.task_id).all()
+        sub_comment_counts = {tid: cnt for tid, cnt in counts}
+    # Latest activity per subtask => last modified metadata
+    sub_last_activity = {}
+    if sub_ids:
+        sub_activities = db.query(TaskActivity).filter(
+            TaskActivity.task_id.in_(sub_ids)
+        ).order_by(TaskActivity.created_at.desc()).all()
+        for a in sub_activities:
+            if a.task_id not in sub_last_activity:
+                sub_last_activity[a.task_id] = a
+    sub_last_actor_names = {}
+    sub_actor_ids = set(a.actor_id for a in sub_last_activity.values() if a and a.actor_id)
+    if sub_actor_ids:
+        sub_reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(sub_actor_ids))).all()
+        sub_last_actor_names = {r.id: r.name for r in sub_reps}
+    enriched_subtasks = []
+    for s in subtasks:
+        sd = _task_to_dict(s, db, sub_cache)
+        s_mts = mt_by_sub.get(s.id, [])
+        sd["micro_tasks"] = [_micro_task_to_dict(mt, db, mt_name_cache) for mt in s_mts]
+        sd["micro_task_progress"] = {
+            "total": len(s_mts),
+            "completed": sum(1 for mt in s_mts if mt.is_completed),
+        }
+        sd["comment_count"] = sub_comment_counts.get(s.id, 0)
+        sd["is_completed"] = s.status == "completed"
+        last_activity = sub_last_activity.get(s.id)
+        sd["last_modified_at"] = (
+            last_activity.created_at.isoformat() if last_activity and last_activity.created_at
+            else (s.updated_at.isoformat() if s.updated_at else None)
+        )
+        sd["last_modified_by_name"] = (
+            sub_last_actor_names.get(last_activity.actor_id) if last_activity and last_activity.actor_id
+            else sd.get("creator_name")
+        )
+        enriched_subtasks.append(sd)
+    result["subtasks"] = enriched_subtasks
     return result
 
 @app.put("/api/tasks/{task_id}")
@@ -9524,22 +9608,71 @@ async def add_task_comment(
 @app.get("/api/tasks/{task_id}/comments")
 async def get_task_comments(
     task_id: str,
+    scope: str = Query("task", regex="^(task|all)$"),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     try:
-        comments = _task_service.get_comments(db, task_id)
+        task = _task_service._find_task(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if scope == "all":
+            # Aggregate comments: this task + subtasks + micro-tasks
+            subtasks = db.query(Task).filter(Task.parent_task_id == task.id).all()
+            all_task_ids = [task.id] + [s.id for s in subtasks]
+            # Build title lookup for subtasks
+            subtask_titles = {s.id: s.title for s in subtasks}
+            # Get all micro-tasks under subtasks for title lookup
+            sub_ids = [s.id for s in subtasks]
+            micro_tasks_all = []
+            mt_titles = {}
+            mt_parent_map = {}  # micro_task_id -> subtask_id
+            if sub_ids:
+                micro_tasks_all = db.query(MicroTask).filter(MicroTask.task_id.in_(sub_ids)).all()
+                mt_titles = {mt.id: mt.title for mt in micro_tasks_all}
+                mt_parent_map = {mt.id: mt.task_id for mt in micro_tasks_all}
+            comments = db.query(TaskComment).filter(
+                TaskComment.task_id.in_(all_task_ids)
+            ).order_by(TaskComment.created_at.desc()).limit(200).all()
+        else:
+            comments = db.query(TaskComment).filter(
+                TaskComment.task_id == task.id, TaskComment.micro_task_id == None
+            ).order_by(TaskComment.created_at.desc()).limit(50).all()
         author_ids = set(c.author_id for c in comments if c.author_id)
         author_names = {}
         if author_ids:
             reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(author_ids))).all()
             author_names = {r.id: r.name for r in reps}
-        return [{
-            "id": str(c.id), "content": c.content,
-            "author_id": str(c.author_id),
-            "author_name": author_names.get(c.author_id, "Unknown"),
-            "created_at": c.created_at.isoformat() if c.created_at else None,
-        } for c in comments]
+        result = []
+        for c in comments:
+            entry = {
+                "id": str(c.id), "content": c.content,
+                "author_id": str(c.author_id),
+                "author_name": author_names.get(c.author_id, "Unknown"),
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+            if scope == "all":
+                # Tag with context
+                if c.micro_task_id:
+                    entry["context"] = {
+                        "type": "micro_task",
+                        "title": mt_titles.get(c.micro_task_id, ""),
+                        "parent_subtask_title": subtask_titles.get(mt_parent_map.get(c.micro_task_id), ""),
+                    }
+                elif c.task_id != task.id:
+                    entry["context"] = {
+                        "type": "subtask",
+                        "title": subtask_titles.get(c.task_id, ""),
+                        "parent_subtask_title": None,
+                    }
+                else:
+                    entry["context"] = {
+                        "type": "task",
+                        "title": task.title,
+                        "parent_subtask_title": None,
+                    }
+            result.append(entry)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -9595,6 +9728,388 @@ async def create_subtask(
         return _task_to_dict(subtask, db)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# ============================================
+# MICRO-TASK ENDPOINTS
+# ============================================
+
+def _micro_task_to_dict(mt, db, name_cache=None):
+    """Convert MicroTask model to dict with assignee/creator/completer names."""
+    assignee_name = None
+    creator_name = None
+    completed_by_name = None
+    if mt.assignee_id:
+        if name_cache is not None:
+            assignee_name = name_cache.get(mt.assignee_id)
+        else:
+            rep = db.query(CompanyRep).filter(CompanyRep.id == mt.assignee_id).first()
+            assignee_name = rep.name if rep else None
+    if mt.created_by:
+        if name_cache is not None:
+            creator_name = name_cache.get(mt.created_by)
+        else:
+            rep = db.query(CompanyRep).filter(CompanyRep.id == mt.created_by).first()
+            creator_name = rep.name if rep else None
+    if mt.completed_by:
+        if name_cache is not None:
+            completed_by_name = name_cache.get(mt.completed_by)
+        else:
+            rep = db.query(CompanyRep).filter(CompanyRep.id == mt.completed_by).first()
+            completed_by_name = rep.name if rep else None
+    comment_count = db.query(func.count(TaskComment.id)).filter(
+        TaskComment.micro_task_id == mt.id
+    ).scalar() or 0
+    return {
+        "id": str(mt.id),
+        "task_id": str(mt.task_id),
+        "title": mt.title,
+        "is_completed": mt.is_completed,
+        "assignee_id": str(mt.assignee_id) if mt.assignee_id else None,
+        "assignee_name": assignee_name,
+        "due_date": mt.due_date.isoformat() if mt.due_date else None,
+        "sort_order": mt.sort_order,
+        "created_by": str(mt.created_by),
+        "creator_name": creator_name,
+        "completed_at": mt.completed_at.isoformat() if mt.completed_at else None,
+        "completed_by": str(mt.completed_by) if mt.completed_by else None,
+        "completed_by_name": completed_by_name,
+        "comment_count": comment_count,
+        "created_at": mt.created_at.isoformat() if mt.created_at else None,
+        "updated_at": mt.updated_at.isoformat() if mt.updated_at else None,
+        "last_modified_at": mt.updated_at.isoformat() if mt.updated_at else (mt.created_at.isoformat() if mt.created_at else None),
+        "last_modified_by_name": completed_by_name or creator_name,
+    }
+
+@app.post("/api/tasks/{task_id}/micro-tasks")
+async def create_micro_task(
+    task_id: str,
+    title: str = Form(...),
+    assignee_id: Optional[str] = Form(None),
+    due_date: Optional[str] = Form(None),
+    sort_order: int = Form(0),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Create a micro-task on a subtask."""
+    task = _task_service._find_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.parent_task_id:
+        raise HTTPException(status_code=400, detail="Micro-tasks can only be added to subtasks (tasks with a parent)")
+    if not _check_task_access(task, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
+    parsed_due = date.fromisoformat(due_date) if due_date else None
+    parsed_assignee = uuid.UUID(assignee_id) if assignee_id else None
+    mt = MicroTask(
+        task_id=task.id,
+        title=title,
+        assignee_id=parsed_assignee,
+        due_date=parsed_due,
+        sort_order=sort_order,
+        created_by=current_user.id,
+    )
+    db.add(mt)
+    _task_service._log_activity(db, task.id, current_user.id, "micro_task_created", None, title[:100])
+    db.commit()
+    db.refresh(mt)
+    return _micro_task_to_dict(mt, db)
+
+@app.get("/api/tasks/{task_id}/micro-tasks")
+async def list_micro_tasks(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """List micro-tasks for a subtask."""
+    task = _task_service._find_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not _check_task_access(task, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
+    mts = db.query(MicroTask).filter(MicroTask.task_id == task.id).order_by(MicroTask.sort_order, MicroTask.created_at).all()
+    # Batch-fetch assignee/creator/completer names
+    people_ids = set()
+    for mt in mts:
+        if mt.assignee_id:
+            people_ids.add(mt.assignee_id)
+        if mt.created_by:
+            people_ids.add(mt.created_by)
+        if mt.completed_by:
+            people_ids.add(mt.completed_by)
+    name_cache = {}
+    if people_ids:
+        reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(people_ids))).all()
+        name_cache = {r.id: r.name for r in reps}
+    return [_micro_task_to_dict(mt, db, name_cache) for mt in mts]
+
+@app.put("/api/micro-tasks/reorder")
+async def reorder_micro_tasks(
+    items: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Batch reorder micro-tasks. Expects items as JSON: [{"id": "uuid", "sort_order": 0}, ...]"""
+    import json as json_mod
+    try:
+        parsed = json_mod.loads(items)
+    except (json_mod.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid JSON in items field")
+    if not isinstance(parsed, list):
+        raise HTTPException(status_code=400, detail="items must be a JSON array")
+    for item in parsed:
+        try:
+            mt_uuid = uuid.UUID(item["id"])
+        except (ValueError, KeyError):
+            continue
+        mt = db.query(MicroTask).filter(MicroTask.id == mt_uuid).first()
+        if mt:
+            mt.sort_order = int(item.get("sort_order", 0))
+            mt.updated_at = datetime.utcnow()
+    db.commit()
+    return {"detail": f"Reordered {len(parsed)} micro-tasks"}
+
+@app.put("/api/micro-tasks/{micro_task_id}")
+async def update_micro_task(
+    micro_task_id: str,
+    title: Optional[str] = Form(None),
+    is_completed: Optional[str] = Form(None),
+    assignee_id: Optional[str] = Form(None),
+    due_date: Optional[str] = Form(None),
+    sort_order: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Update a micro-task (title, toggle complete, assignee, due date, sort order)."""
+    try:
+        mt_uuid = uuid.UUID(micro_task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid micro-task ID")
+    mt = db.query(MicroTask).filter(MicroTask.id == mt_uuid).first()
+    if not mt:
+        raise HTTPException(status_code=404, detail="Micro-task not found")
+    # Access check via parent task
+    parent_task = db.query(Task).filter(Task.id == mt.task_id).first()
+    if not parent_task or not _check_task_access(parent_task, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if title is not None:
+        mt.title = title
+    if is_completed is not None:
+        was_completed = mt.is_completed
+        mt.is_completed = is_completed.lower() in ("true", "1", "yes")
+        if mt.is_completed and not was_completed:
+            mt.completed_at = datetime.utcnow()
+            mt.completed_by = current_user.id
+            _task_service._log_activity(db, mt.task_id, current_user.id, "micro_task_completed", None, mt.title[:100])
+        elif not mt.is_completed and was_completed:
+            mt.completed_at = None
+            mt.completed_by = None
+            _task_service._log_activity(db, mt.task_id, current_user.id, "micro_task_reopened", None, mt.title[:100])
+    if assignee_id is not None:
+        mt.assignee_id = uuid.UUID(assignee_id) if assignee_id else None
+    if due_date is not None:
+        mt.due_date = date.fromisoformat(due_date) if due_date else None
+    if sort_order is not None:
+        mt.sort_order = sort_order
+    mt.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(mt)
+    return _micro_task_to_dict(mt, db)
+
+@app.delete("/api/micro-tasks/{micro_task_id}")
+async def delete_micro_task(
+    micro_task_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Delete a micro-task."""
+    try:
+        mt_uuid = uuid.UUID(micro_task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid micro-task ID")
+    mt = db.query(MicroTask).filter(MicroTask.id == mt_uuid).first()
+    if not mt:
+        raise HTTPException(status_code=404, detail="Micro-task not found")
+    parent_task = db.query(Task).filter(Task.id == mt.task_id).first()
+    if not parent_task or not _check_task_access(parent_task, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
+    _task_service._log_activity(db, mt.task_id, current_user.id, "micro_task_deleted", mt.title[:100], None)
+    db.delete(mt)
+    db.commit()
+    return {"detail": "Micro-task deleted"}
+
+@app.post("/api/micro-tasks/{micro_task_id}/comments")
+async def add_micro_task_comment(
+    micro_task_id: str,
+    content: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Add a comment to a micro-task."""
+    if len(content) > 5000:
+        raise HTTPException(status_code=400, detail="Comment too long (max 5000 chars)")
+    try:
+        mt_uuid = uuid.UUID(micro_task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid micro-task ID")
+    mt = db.query(MicroTask).filter(MicroTask.id == mt_uuid).first()
+    if not mt:
+        raise HTTPException(status_code=404, detail="Micro-task not found")
+    parent_task = db.query(Task).filter(Task.id == mt.task_id).first()
+    if not parent_task or not _check_task_access(parent_task, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
+    comment = TaskComment(
+        task_id=mt.task_id,
+        micro_task_id=mt.id,
+        author_id=current_user.id,
+        content=content,
+    )
+    db.add(comment)
+    _task_service._log_activity(db, mt.task_id, current_user.id, "commented", None, f"[micro-task] {content[:80]}")
+    db.commit()
+    db.refresh(comment)
+    author = db.query(CompanyRep).filter(CompanyRep.id == comment.author_id).first()
+    return {
+        "id": str(comment.id), "content": comment.content,
+        "task_id": str(comment.task_id),
+        "micro_task_id": str(comment.micro_task_id),
+        "author_id": str(comment.author_id),
+        "author_name": author.name if author else "Unknown",
+        "created_at": comment.created_at.isoformat() if comment.created_at else None,
+    }
+
+@app.get("/api/micro-tasks/{micro_task_id}/comments")
+async def get_micro_task_comments(
+    micro_task_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get comments for a micro-task."""
+    try:
+        mt_uuid = uuid.UUID(micro_task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid micro-task ID")
+    mt = db.query(MicroTask).filter(MicroTask.id == mt_uuid).first()
+    if not mt:
+        raise HTTPException(status_code=404, detail="Micro-task not found")
+    parent_task = db.query(Task).filter(Task.id == mt.task_id).first()
+    if not parent_task or not _check_task_access(parent_task, current_user):
+        raise HTTPException(status_code=403, detail="Access denied")
+    comments = db.query(TaskComment).filter(
+        TaskComment.micro_task_id == mt.id
+    ).order_by(TaskComment.created_at.desc()).limit(50).all()
+    author_ids = set(c.author_id for c in comments if c.author_id)
+    author_names = {}
+    if author_ids:
+        reps = db.query(CompanyRep.id, CompanyRep.name).filter(CompanyRep.id.in_(list(author_ids))).all()
+        author_names = {r.id: r.name for r in reps}
+    return [{
+        "id": str(c.id), "content": c.content,
+        "task_id": str(c.task_id),
+        "micro_task_id": str(c.micro_task_id) if c.micro_task_id else None,
+        "author_id": str(c.author_id),
+        "author_name": author_names.get(c.author_id, "Unknown"),
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    } for c in comments]
+
+# ============================================
+# CROSS-TAB ENTITY TASK ENDPOINTS
+# ============================================
+
+def _entity_tasks_response(db, tasks, current_user):
+    """Build cross-tab task list with subtask/micro-task counts."""
+    name_cache = _build_rep_name_cache(db, tasks)
+    result = []
+    for t in tasks:
+        d = _task_to_dict(t, db, name_cache)
+        # Subtask counts
+        subtasks = db.query(Task).filter(Task.parent_task_id == t.id).all()
+        d["subtask_count"] = len(subtasks)
+        d["subtask_completed"] = sum(1 for s in subtasks if s.status == "completed")
+        # Micro-task counts across all subtasks
+        sub_ids = [s.id for s in subtasks]
+        if sub_ids:
+            mt_total = db.query(func.count(MicroTask.id)).filter(MicroTask.task_id.in_(sub_ids)).scalar() or 0
+            mt_done = db.query(func.count(MicroTask.id)).filter(MicroTask.task_id.in_(sub_ids), MicroTask.is_completed == True).scalar() or 0
+        else:
+            mt_total = 0
+            mt_done = 0
+        d["micro_task_count"] = mt_total
+        d["micro_task_completed"] = mt_done
+        # Comment count (all levels)
+        comment_count = db.query(func.count(TaskComment.id)).filter(TaskComment.task_id == t.id).scalar() or 0
+        if sub_ids:
+            comment_count += db.query(func.count(TaskComment.id)).filter(TaskComment.task_id.in_(sub_ids)).scalar() or 0
+        d["comment_count"] = comment_count
+        result.append(d)
+    return {"tasks": result, "total": len(result)}
+
+@app.get("/api/customers/{customer_id}/tasks")
+async def get_customer_tasks(
+    customer_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get tasks linked to a customer."""
+    try:
+        cust_uuid = uuid.UUID(customer_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid customer ID")
+    tasks = db.query(Task).filter(
+        Task.linked_customer_id == cust_uuid,
+        Task.parent_task_id == None
+    ).order_by(Task.created_at.desc()).all()
+    return _entity_tasks_response(db, tasks, current_user)
+
+@app.get("/api/projects/{project_id}/tasks")
+async def get_project_tasks(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get tasks linked to a project."""
+    try:
+        proj_uuid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    tasks = db.query(Task).filter(
+        Task.linked_project_id == proj_uuid,
+        Task.parent_task_id == None
+    ).order_by(Task.created_at.desc()).all()
+    return _entity_tasks_response(db, tasks, current_user)
+
+@app.get("/api/inventory/{inventory_id}/tasks")
+async def get_inventory_tasks(
+    inventory_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get tasks linked to an inventory item."""
+    try:
+        inv_uuid = uuid.UUID(inventory_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid inventory ID")
+    tasks = db.query(Task).filter(
+        Task.linked_inventory_id == inv_uuid,
+        Task.parent_task_id == None
+    ).order_by(Task.created_at.desc()).all()
+    return _entity_tasks_response(db, tasks, current_user)
+
+@app.get("/api/transactions/{transaction_id}/tasks")
+async def get_transaction_tasks(
+    transaction_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """Get tasks linked to a transaction."""
+    try:
+        txn_uuid = uuid.UUID(transaction_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid transaction ID")
+    tasks = db.query(Task).filter(
+        Task.linked_transaction_id == txn_uuid,
+        Task.parent_task_id == None
+    ).order_by(Task.created_at.desc()).all()
+    return _entity_tasks_response(db, tasks, current_user)
 
 # ============================================
 # VOICE QUERY ENDPOINTS

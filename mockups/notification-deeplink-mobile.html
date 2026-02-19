@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Notification Deep-Link Mobile Flow</title>
+  <style>
+    body { margin: 0; background: #eef2f8; font-family: "Segoe UI", Tahoma, sans-serif; color: #1b2433; }
+    .phone {
+      width: 390px; max-width: 100%; margin: 18px auto; background: #fff; border: 1px solid #dce4ef;
+      border-radius: 26px; overflow: hidden; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.15);
+    }
+    .top { padding: 14px 16px; border-bottom: 1px solid #e7edf6; font-size: 14px; font-weight: 700; }
+    .notif { padding: 12px 14px; border-bottom: 1px solid #edf2fa; }
+    .tag { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .4px; padding: 2px 8px; border-radius: 999px; background: #e9f2ff; color: #1f56a6; }
+    .tag.warn { background: #fff4e5; color: #9b5f00; }
+    .ttl { margin-top: 7px; font-size: 13px; font-weight: 700; }
+    .txt { margin-top: 4px; color: #5f6878; font-size: 12px; line-height: 1.35; }
+    .flow {
+      margin: 12px; border: 1px dashed #ccd8eb; border-radius: 14px; background: #fbfdff; padding: 12px;
+    }
+    .step { border: 1px solid #e4ebf7; border-radius: 10px; background: #fff; padding: 10px; margin-bottom: 8px; }
+    .step:last-child { margin-bottom: 0; }
+    .step .k { font-size: 10px; text-transform: uppercase; font-weight: 700; color: #6a7385; }
+    .step .v { margin-top: 4px; font-size: 13px; font-weight: 700; }
+    .focus { border: 2px solid #0f6fff; background: #f3f8ff; }
+  </style>
+</head>
+<body>
+  <div class="phone">
+    <div class="top">Mobile Notification Routing (Approval Mock)</div>
+
+    <div class="notif">
+      <span class="tag">MICRO-TASK</span>
+      <div class="ttl">“Prepare payment schedule PDF” completed</div>
+      <div class="txt">Expected mobile route: open Task Detail sheet, auto-expand parent subtask, focus micro-task row.</div>
+    </div>
+
+    <div class="notif">
+      <span class="tag">SUBTASK</span>
+      <div class="ttl">Subtask due in 1 day</div>
+      <div class="txt">Expected mobile route: open Task Detail sheet and scroll directly to subtask card.</div>
+    </div>
+
+    <div class="notif">
+      <span class="tag warn">DAY-END REPORT</span>
+      <div class="ttl">Daily report generated</div>
+      <div class="txt">Unchanged: opens report link only.</div>
+    </div>
+
+    <div class="flow">
+      <div class="step">
+        <div class="k">Step 1</div>
+        <div class="v">Tap notification</div>
+      </div>
+      <div class="step">
+        <div class="k">Step 2</div>
+        <div class="v">Navigate to target module</div>
+      </div>
+      <div class="step focus">
+        <div class="k">Step 3</div>
+        <div class="v">Open task detail + focus target item</div>
+      </div>
+      <div class="step">
+        <div class="k">Fallback</div>
+        <div class="v">If child missing, open parent task and show warning toast</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

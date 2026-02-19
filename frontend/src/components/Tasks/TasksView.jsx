@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import SubtaskCard from './SubtaskCard';
+import AddSubtaskForm from './AddSubtaskForm';
 
 const PRIORITY_STYLES = {
   urgent: 'bg-red-100 text-red-700 border-red-200',
@@ -21,7 +23,7 @@ const labelCls = "block text-xs font-medium text-gray-500 mb-1";
 // ============================================
 // MAIN TASKS VIEW
 // ============================================
-export default function TasksView({ api, user, addToast, setActiveTab }) {
+export default function TasksView({ api, user, addToast, setActiveTab, deepLink, onDeepLinkHandled }) {
   const [subTab, setSubTab] = useState('active');
   const [tasks, setTasks] = useState([]);
   const [myTasks, setMyTasks] = useState([]);
@@ -34,6 +36,7 @@ export default function TasksView({ api, user, addToast, setActiveTab }) {
   const [filters, setFilters] = useState({ status: '', priority: '', department: '', type: '' });
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(null);
+  const [detailFocus, setDetailFocus] = useState(null);
   const [detailData, setDetailData] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const searchTimerRef = useRef(null);
@@ -85,14 +88,69 @@ export default function TasksView({ api, user, addToast, setActiveTab }) {
   useEffect(() => { loadTasks(); }, [loadTasks]);
   useEffect(() => { if (subTab === 'my') loadMyTasks(); }, [subTab, loadMyTasks]);
   useEffect(() => { if (subTab === 'dashboard') loadSummary(); }, [subTab, loadSummary]);
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      loadTasks();
+      if (subTab === 'my') loadMyTasks();
+      if (subTab === 'dashboard') loadSummary();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [subTab, loadTasks, loadMyTasks, loadSummary]);
 
-  const openDetail = async (taskId) => {
-    setShowDetailModal(taskId); setDetailLoading(true); setDetailData(null);
-    try { const res = await api.get(`/tasks/${taskId}`); setDetailData(res.data); }
-    catch (e) { if (addToast) addToast('Error', 'Failed to load task details', 'error'); }
-    finally { setDetailLoading(false); }
+  const refreshDetail = useCallback(async (targetTaskId, { silent = true } = {}) => {
+    if (!targetTaskId) return;
+    if (!silent) setDetailLoading(true);
+    try {
+      const res = await api.get(`/tasks/${targetTaskId}`);
+      setDetailData(res.data);
+    } catch (e) {
+      if (!silent && addToast) addToast('Error', 'Failed to load task details', 'error');
+    } finally {
+      if (!silent) setDetailLoading(false);
+    }
+  }, [api, addToast]);
+
+  const openDetail = async (targetTaskId, focusTarget = null) => {
+    setShowDetailModal(targetTaskId);
+    setDetailFocus(focusTarget);
+    setDetailData(null);
+    await refreshDetail(targetTaskId, { silent: false });
   };
-  const closeDetail = () => { setShowDetailModal(null); setDetailData(null); };
+  const closeDetail = () => { setShowDetailModal(null); setDetailData(null); setDetailFocus(null); };
+
+  useEffect(() => {
+    const runDeepLink = async () => {
+      if (!deepLink) return;
+      const focusTarget = {
+        subtaskId: deepLink.subtaskId || null,
+        microTaskId: deepLink.microTaskId || null,
+      };
+      let targetTaskId = deepLink.taskId || null;
+      try {
+        // If only subtask/micro-task is provided, resolve parent task id first.
+        if (!targetTaskId && deepLink.subtaskId) {
+          const subRes = await api.get(`/tasks/${deepLink.subtaskId}`);
+          targetTaskId = subRes?.data?.parent_task_id || subRes?.data?.task?.parent_task_id || deepLink.subtaskId;
+        } else if (!targetTaskId && deepLink.microTaskId) {
+          const mtRes = await api.get(`/micro-tasks/${deepLink.microTaskId}/comments`).catch(() => null);
+          const parentSubtaskId = mtRes?.data?.[0]?.task_id || null;
+          if (parentSubtaskId) {
+            focusTarget.subtaskId = focusTarget.subtaskId || parentSubtaskId;
+            const subRes = await api.get(`/tasks/${parentSubtaskId}`);
+            targetTaskId = subRes?.data?.parent_task_id || subRes?.data?.task?.parent_task_id || parentSubtaskId;
+          }
+        }
+        if (targetTaskId) {
+          await openDetail(targetTaskId, focusTarget);
+        }
+      } finally {
+        if (onDeepLinkHandled) onDeepLinkHandled();
+      }
+    };
+    runDeepLink();
+  }, [deepLink, api, onDeepLinkHandled]);
 
   const quickComplete = async (taskId) => {
     try {
@@ -159,7 +217,14 @@ export default function TasksView({ api, user, addToast, setActiveTab }) {
         onClose={() => setShowCreateModal(false)} onCreated={() => { setShowCreateModal(false); loadTasks(); loadMyTasks(); }} />}
       {showDetailModal && <TaskDetailModal api={api} reps={reps} user={user} addToast={addToast}
         taskId={showDetailModal} data={detailData} loading={detailLoading} onClose={closeDetail}
-        onUpdated={() => { openDetail(showDetailModal); loadTasks(); loadMyTasks(); }}
+        focusTarget={detailFocus}
+        onUpdated={async (opts = {}) => {
+          await refreshDetail(showDetailModal, { silent: opts.silent !== false });
+          if (!opts.skipLists) {
+            loadTasks();
+            loadMyTasks();
+          }
+        }}
         onDeleted={() => { loadTasks(); loadMyTasks(); }} />}
     </div>
   );
@@ -896,16 +961,18 @@ function CreateTaskModal({ api, reps, addToast, onClose, onCreated }) {
 // ============================================
 // TASK DETAIL MODAL — Asana-style inline editing
 // ============================================
-function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onClose, onUpdated, onDeleted }) {
+function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onClose, onUpdated, onDeleted, focusTarget }) {
   const [commentText, setCommentText] = useState('');
+  const [commentScope, setCommentScope] = useState('task');
+  const [commentsData, setCommentsData] = useState([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingDesc, setEditingDesc] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
-  const [newSubtask, setNewSubtask] = useState('');
-  const [newSubtaskAssignee, setNewSubtaskAssignee] = useState('');
   const [activeTab, setActiveTab] = useState('comments');
+  const [showCompletedSubtasks, setShowCompletedSubtasks] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [attachLoading, setAttachLoading] = useState(false);
   const titleRef = useRef(null);
@@ -919,17 +986,54 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
 
   useEffect(() => { if (editingTitle && titleRef.current) titleRef.current.focus(); }, [editingTitle]);
 
-  // Polling: refresh task data every 30 seconds while modal is open
-  useEffect(() => {
-    if (!taskId) return;
-    const interval = setInterval(() => { onUpdated(); }, 30000);
-    return () => clearInterval(interval);
-  }, [taskId, onUpdated]);
+  // Disabled auto-refresh here to prevent flicker/context jumps during inline editing.
 
   const task = data?.task ?? data ?? {};
-  const comments = data?.comments ?? [];
+  const fallbackComments = data?.comments ?? [];
+  const comments = commentsData.length > 0 || commentScope === 'all' ? commentsData : fallbackComments;
   const activities = data?.activities ?? [];
   const subtasks = data?.subtasks ?? [];
+  const targetSubtaskId = focusTarget?.subtaskId || null;
+  const targetMicroTaskId = focusTarget?.microTaskId || null;
+
+  const loadComments = useCallback(async () => {
+    if (!taskId || loading) return;
+    setCommentsLoading(true);
+    try {
+      const res = await api.get(`/tasks/${taskId}/comments`, { params: { scope: commentScope } });
+      setCommentsData(res.data ?? []);
+    } catch {
+      setCommentsData(commentScope === 'task' ? (data?.comments ?? []) : []);
+    } finally {
+      setCommentsLoading(false);
+    }
+  }, [api, taskId, commentScope, loading, data]);
+
+  useEffect(() => {
+    setCommentsData(commentScope === 'task' ? (data?.comments ?? []) : []);
+  }, [data, commentScope]);
+
+  useEffect(() => { if (activeTab === 'comments') loadComments(); }, [activeTab, loadComments]);
+  useEffect(() => { setShowCompletedSubtasks(false); }, [taskId]);
+  useEffect(() => {
+    if (!focusTarget || loading || !subtasks.length) return;
+    const targetSub = targetSubtaskId
+      ? subtasks.find((s) => String(s.id) === String(targetSubtaskId))
+      : subtasks.find((s) => (s.micro_tasks || []).some((mt) => String(mt.id) === String(targetMicroTaskId)));
+    if (targetSub && isSubtaskCompleted(targetSub)) {
+      setShowCompletedSubtasks(true);
+    }
+    const targetId = targetMicroTaskId || targetSub?.id;
+    if (!targetId) return;
+    const selector = targetMicroTaskId
+      ? `[data-micro-task-id="${targetMicroTaskId}"]`
+      : `[data-subtask-card-id="${targetSub.id}"]`;
+    const t = setTimeout(() => {
+      const el = document.querySelector(selector);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [focusTarget, loading, subtasks, targetSubtaskId, targetMicroTaskId]);
 
   // Generic field update via PUT
   const updateField = async (field, value) => {
@@ -938,7 +1042,7 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
       const fd = new FormData();
       fd.append(field, value);
       await api.put(`/tasks/${taskId}`, fd);
-      onUpdated();
+      onUpdated({ silent: true });
     } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || `Failed to update ${field}`, 'error'); }
     finally { setSubmitting(false); }
   };
@@ -958,30 +1062,10 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
     try {
       const fd = new FormData(); fd.append('content', commentText.trim());
       await api.post(`/tasks/${taskId}/comments`, fd);
-      setCommentText(''); onUpdated();
+      setCommentText('');
+      await loadComments();
+      onUpdated({ silent: true, skipLists: true });
     } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Failed to add comment', 'error'); }
-    finally { setSubmitting(false); }
-  };
-
-  const addSubtask = async () => {
-    if (!newSubtask.trim()) return; setSubmitting(true);
-    try {
-      const fd = new FormData(); fd.append('title', newSubtask.trim());
-      if (newSubtaskAssignee) fd.append('assignee_id', newSubtaskAssignee);
-      await api.post(`/tasks/${taskId}/subtasks`, fd);
-      setNewSubtask(''); setNewSubtaskAssignee(''); onUpdated();
-    } catch (e) { if (addToast) addToast('Error', e.response?.data?.detail || 'Failed to create subtask', 'error'); }
-    finally { setSubmitting(false); }
-  };
-
-  const toggleSubtask = async (st) => {
-    const newStatus = st.status === 'completed' ? 'pending' : 'completed';
-    setSubmitting(true);
-    try {
-      const fd = new FormData(); fd.append('status', newStatus);
-      await api.put(`/tasks/${st.id}`, fd);
-      onUpdated();
-    } catch (e) { if (addToast) addToast('Error', 'Failed to update subtask', 'error'); }
     finally { setSubmitting(false); }
   };
 
@@ -1050,7 +1134,10 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
 
   const canDelete = user?.role === 'admin' || user?.role === 'cco' || task.created_by === user?.id;
   const canDeleteAttachment = user?.role === 'admin' || user?.role === 'cco';
-  const completedSubtasks = subtasks.filter(s => s.status === 'completed').length;
+  const isSubtaskCompleted = (s) => (typeof s?.is_completed === 'boolean' ? s.is_completed : s?.status === 'completed');
+  const activeSubtasks = subtasks.filter((s) => !isSubtaskCompleted(s));
+  const completedSubtasks = subtasks.filter((s) => isSubtaskCompleted(s));
+  const completedSubtaskCount = completedSubtasks.length;
 
   // Dropdown styles
   const propSelect = "w-full px-2 py-1.5 text-sm border-0 bg-transparent rounded-md hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-gray-900/10 cursor-pointer appearance-none";
@@ -1123,61 +1210,110 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-xs font-medium text-gray-400 uppercase">
-                      Subtasks {subtasks.length > 0 && <span className="text-gray-300 ml-1">{completedSubtasks}/{subtasks.length}</span>}
+                      Subtasks {subtasks.length > 0 && <span className="text-gray-300 ml-1">{completedSubtaskCount}/{subtasks.length}</span>}
                     </div>
                   </div>
                   {subtasks.length > 0 && (
                     <div className="mb-2">
                       <div className="w-full h-1 bg-gray-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${subtasks.length > 0 ? (completedSubtasks / subtasks.length * 100) : 0}%` }} />
+                        <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${subtasks.length > 0 ? (completedSubtaskCount / subtasks.length * 100) : 0}%` }} />
                       </div>
                     </div>
                   )}
-                  <div className="space-y-0.5 mb-2">
-                    {subtasks.map((st, i) => (
-                      <div key={st.id ?? i} className="flex items-center gap-2.5 py-1.5 px-2 rounded-md hover:bg-gray-50 group transition-colors">
-                        <button onClick={() => toggleSubtask(st)} disabled={submitting}
-                          className={`w-[18px] h-[18px] rounded border-2 flex-shrink-0 flex items-center justify-center transition-all ${st.status === 'completed' ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 hover:border-gray-400'}`}>
-                          {st.status === 'completed' && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-                        </button>
-                        <span className={`text-sm flex-1 ${st.status === 'completed' ? 'line-through text-gray-400' : 'text-gray-700'}`}>{st.title ?? 'Subtask'}</span>
-                        <span className="text-[10px] text-gray-400 group-hover:hidden">{st.assignee_name ?? 'Unassigned'}</span>
-                        <select className="hidden group-hover:inline-block w-28 text-[10px] text-gray-500 bg-white border border-gray-200 rounded px-1 py-0.5 cursor-pointer focus:outline-none"
-                          value={st.assignee_id ?? ''} onChange={e => {
-                            const fd = new FormData(); fd.append('assignee_id', e.target.value);
-                            api.put(`/tasks/${st.id}`, fd).then(() => onUpdated()).catch(() => { if (addToast) addToast('Error', 'Failed to reassign subtask', 'error'); });
-                          }}>
-                          <option value="">Unassigned</option>
-                          {(reps ?? []).map(r => <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>)}
-                        </select>
-                      </div>
-                    ))}
+                  <div className="mb-3">
+                    <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                      Active ({activeSubtasks.length})
+                    </div>
+                    <div className="space-y-2">
+                      {activeSubtasks.length === 0 && <div className="text-xs text-gray-400 px-1 py-1">No active subtasks</div>}
+                      {activeSubtasks.map((st, i) => (
+                        <SubtaskCard
+                          key={st.id ?? `a-${i}`}
+                          subtask={st}
+                          forceExpanded={String(st.id) === String(targetSubtaskId) || (targetMicroTaskId && (st.micro_tasks || []).some((mt) => String(mt.id) === String(targetMicroTaskId)))}
+                          highlightMicroTaskId={targetMicroTaskId}
+                          api={api}
+                          reps={reps}
+                          addToast={addToast}
+                          onChanged={() => onUpdated({ silent: true, skipLists: true })}
+                        />
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <input type="text" placeholder="Add a subtask..." value={newSubtask} onChange={e => setNewSubtask(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSubtask(); } }}
-                      className="flex-1 px-3 py-1.5 text-sm border border-dashed border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-solid" />
-                    <select value={newSubtaskAssignee} onChange={e => setNewSubtaskAssignee(e.target.value)}
-                      className="w-32 px-2 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10 bg-white text-gray-600">
-                      <option value="">Assignee</option>
-                      {(reps ?? []).map(r => <option key={r.id} value={r.id}>{r.name ?? r.rep_id}</option>)}
-                    </select>
-                    {newSubtask.trim() && (
-                      <button onClick={addSubtask} disabled={submitting}
-                        className="px-3 py-1.5 text-xs bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">Add</button>
+
+                  <div className="mb-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowCompletedSubtasks((v) => !v)}
+                      className="w-full flex items-center justify-between text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5 px-1 py-1 rounded hover:bg-gray-50"
+                    >
+                      <span>Completed ({completedSubtasks.length})</span>
+                      <svg className={`w-4 h-4 transition-transform ${showCompletedSubtasks ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {showCompletedSubtasks && (
+                      <div className="space-y-2">
+                        {completedSubtasks.length === 0 && <div className="text-xs text-gray-400 px-1 py-1">No completed subtasks</div>}
+                        {completedSubtasks.map((st, i) => (
+                          <SubtaskCard
+                            key={st.id ?? `c-${i}`}
+                            subtask={st}
+                            forceExpanded={String(st.id) === String(targetSubtaskId) || (targetMicroTaskId && (st.micro_tasks || []).some((mt) => String(mt.id) === String(targetMicroTaskId)))}
+                            highlightMicroTaskId={targetMicroTaskId}
+                            api={api}
+                            reps={reps}
+                            addToast={addToast}
+                            onChanged={() => onUpdated({ silent: true, skipLists: true })}
+                          />
+                        ))}
+                      </div>
                     )}
+                  </div>
+
+                  <div>
+                    {subtasks.length === 0 && (
+                      <div className="text-xs text-gray-400 mb-2 px-1">No subtasks yet</div>
+                    )}
+                  </div>
+                  <div className="mt-2">
+                    <AddSubtaskForm
+                      taskId={taskId}
+                      api={api}
+                      reps={reps}
+                      addToast={addToast}
+                      onCreated={() => onUpdated({ silent: true })}
+                    />
                   </div>
                 </div>
 
                 {/* Tabbed: Comments / Activity / Attachments */}
                 <div>
-                  <div className="flex gap-1 border-b mb-3">
+                  <div className="flex gap-1 border-b mb-3 items-center">
                     {[{ id: 'comments', label: `Comments (${comments.length})` }, { id: 'activity', label: 'Activity' }, { id: 'attachments', label: `Attachments (${attachments.length})` }].map(tab => (
                       <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                         className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${activeTab === tab.id ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
                         {tab.label}
                       </button>
                     ))}
+                    {activeTab === 'comments' && (
+                      <div className="ml-auto flex bg-gray-100 rounded-lg p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setCommentScope('task')}
+                          className={`text-[11px] px-2.5 py-1 rounded-md ${commentScope === 'task' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                          This task
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCommentScope('all')}
+                          className={`text-[11px] px-2.5 py-1 rounded-md ${commentScope === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                          All comments
+                        </button>
+                      </div>
+                    )}
                   </div>
                   {activeTab === 'comments' && (
                     <div>
@@ -1188,6 +1324,7 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
                         <button onClick={addComment} disabled={!commentText.trim() || submitting}
                           className="px-3 py-2 text-xs font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">Post</button>
                       </div>
+                      {commentsLoading && <div className="text-xs text-gray-400 text-center py-2">Loading comments...</div>}
                       {comments.length > 0 ? (
                         <div className="space-y-2 max-h-56 overflow-y-auto">
                           {comments.map((c, i) => (
@@ -1196,6 +1333,15 @@ function TaskDetailModal({ api, reps, user, addToast, taskId, data, loading, onC
                                 <span className="text-xs font-medium text-gray-700">{c.author_name ?? c.rep_name ?? 'User'}</span>
                                 <span className="text-[10px] text-gray-400">{fmtDateTime(c.created_at)}</span>
                               </div>
+                              {c.context && (
+                                <div className="text-[10px] text-blue-600 mb-1">
+                                  {c.context.type === 'micro_task'
+                                    ? `on micro-task: ${c.context.title || 'item'}${c.context.parent_subtask_title ? ` (${c.context.parent_subtask_title})` : ''}`
+                                    : c.context.type === 'subtask'
+                                      ? `on subtask: ${c.context.title || 'item'}`
+                                      : 'on this task'}
+                                </div>
+                              )}
                               <div className="text-sm text-gray-600">{c.content ?? c.text ?? ''}</div>
                             </div>
                           ))}

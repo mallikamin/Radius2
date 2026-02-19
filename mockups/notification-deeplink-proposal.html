@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Notification Deep-Link Proposal</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #121826;
+      --muted: #5b6475;
+      --line: #e3e8f0;
+      --accent: #0f6fff;
+      --accent-soft: #eaf2ff;
+      --ok: #0f9d58;
+      --warn: #d97706;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(120deg, #f6f9ff 0%, #f3f5f9 100%);
+    }
+    .wrap { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 6px 18px rgba(18, 24, 38, 0.05);
+    }
+    .h {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .notif {
+      padding: 12px 14px;
+      border-bottom: 1px solid #edf1f7;
+      cursor: pointer;
+    }
+    .notif:hover { background: #f9fbff; }
+    .notif:last-child { border-bottom: 0; }
+    .meta {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-bottom: 8px;
+      background: var(--accent-soft);
+      color: #1e4ea8;
+      font-weight: 600;
+    }
+    .meta.warn { background: #fff6e8; color: #9a5d00; }
+    .meta.ok { background: #e9fbf1; color: #0b7a45; }
+    .title { font-size: 13px; font-weight: 700; margin-bottom: 5px; }
+    .desc { font-size: 12px; color: var(--muted); line-height: 1.4; }
+    .layout {
+      padding: 16px;
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 14px;
+    }
+    .surface {
+      border: 1px dashed #cfd8e6;
+      border-radius: 12px;
+      background: #fcfdff;
+      min-height: 440px;
+      padding: 14px;
+    }
+    .module {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      margin-bottom: 10px;
+    }
+    .module .tt { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+    .module .sm { font-size: 12px; color: var(--muted); }
+    .focus {
+      margin-top: 10px;
+      border: 2px solid var(--accent);
+      border-radius: 10px;
+      background: #f7fbff;
+      padding: 10px;
+      animation: pulse 1.2s ease-out 1;
+    }
+    .focus .k { font-size: 11px; color: #1e4ea8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+    .focus .v { margin-top: 4px; font-size: 13px; font-weight: 700; }
+    .rules {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+      margin-bottom: 8px;
+    }
+    .rules .r { font-size: 12px; color: #2d3750; line-height: 1.35; margin: 6px 0; }
+    .legend { font-size: 11px; color: var(--muted); margin-top: 10px; }
+    @keyframes pulse {
+      from { box-shadow: 0 0 0 0 rgba(15,111,255,0.35); }
+      to { box-shadow: 0 0 0 10px rgba(15,111,255,0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="grid">
+      <section class="card">
+        <div class="h">Notifications (Click to Route)</div>
+
+        <article class="notif">
+          <div class="meta">TASK</div>
+          <div class="title">Task updated: TASK-00021</div>
+          <div class="desc">Click opens Tasks module and Task Detail modal for TASK-00021.</div>
+        </article>
+
+        <article class="notif">
+          <div class="meta">SUBTASK</div>
+          <div class="title">Subtask due soon: TASK-00022</div>
+          <div class="desc">Click opens parent Task Detail, auto-expands target subtask card, scrolls into view.</div>
+        </article>
+
+        <article class="notif">
+          <div class="meta">MICRO-TASK</div>
+          <div class="title">Micro-task completed: “Prepare payment schedule PDF”</div>
+          <div class="desc">Click opens parent Task Detail, expands subtask, highlights target micro-task row.</div>
+        </article>
+
+        <article class="notif">
+          <div class="meta warn">DAY-END REPORT</div>
+          <div class="title">Daily report ready</div>
+          <div class="desc">Unchanged behavior: notification opens report link directly (no module routing change).</div>
+        </article>
+
+        <article class="notif">
+          <div class="meta ok">CUSTOMER-LINKED TASK</div>
+          <div class="title">Customer follow-up assigned</div>
+          <div class="desc">Click opens Customer detail + Linked Tasks pane, then task modal.</div>
+        </article>
+      </section>
+
+      <section class="card">
+        <div class="h">Route Outcome Preview (Proposed)</div>
+        <div class="layout">
+          <div class="surface">
+            <div class="module">
+              <div class="tt">Tasks Module</div>
+              <div class="sm">Task Detail modal is the landing surface for task/subtask/micro-task notifications.</div>
+            </div>
+            <div class="module">
+              <div class="tt">Task Detail: TASK-00021</div>
+              <div class="sm">Sections: Active Subtasks, Completed Subtasks, Comments scope toggle, Attachments, Activity.</div>
+            </div>
+            <div class="focus">
+              <div class="k">Focused by Notification</div>
+              <div class="v">Subtask: “Call customer office”</div>
+              <div class="sm">Expanded automatically and scrolled into view.</div>
+            </div>
+            <div class="focus" style="margin-top: 8px;">
+              <div class="k">Focused by Notification</div>
+              <div class="v">Micro-task: “Prepare payment schedule PDF”</div>
+              <div class="sm">Highlighted for 2s; no forced jump afterward.</div>
+            </div>
+          </div>
+
+          <aside>
+            <div class="rules">
+              <div class="r"><strong>Rule 1:</strong> Day-end report notifications keep existing link behavior unchanged.</div>
+              <div class="r"><strong>Rule 2:</strong> Task notifications open task modal directly.</div>
+              <div class="r"><strong>Rule 3:</strong> Subtask notifications open parent task modal + expand target subtask.</div>
+              <div class="r"><strong>Rule 4:</strong> Micro-task notifications open parent task modal + expand subtask + focus row.</div>
+              <div class="r"><strong>Rule 5:</strong> If target entity no longer exists, open closest parent and show warning toast.</div>
+            </div>
+            <div class="rules">
+              <div class="r"><strong>Payload requirement:</strong> notification data should include target IDs:
+                <code>task_id</code>, optional <code>subtask_id</code>, optional <code>micro_task_id</code>, optional <code>entity_type/entity_id</code>.
+              </div>
+            </div>
+            <div class="legend">Approval note: this file is UI-only proposal. No routing code changes are applied until you approve.</div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </div>
+</body>
+</html>
