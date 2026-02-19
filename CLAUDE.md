@@ -1,6 +1,19 @@
-# Radius CRM v3 (ORBIT)
+# Radius CRM v3 (ORBIT) — Analytics Branch
 
 > Full-featured Real Estate CRM with inventory, transactions, buybacks, and vector mapping.
+
+## Agent Onboarding (READ FIRST)
+
+Before making any changes, read these files:
+- **`ERROR_LOG.md`** — Known errors and fixes. Avoid repeating past mistakes.
+- **`HANDOFF_NOTES.md`** — Cross-agent handoff context from last session.
+- **`PAUSE_CHECKPOINT_*.md`** — Latest session state (if exists).
+
+When you fix a new error, **append it to `ERROR_LOG.md`** with: date, error, context, root cause, fix, rule.
+
+**Worktree note**: This is the `prod/18thFeb` branch. Main worktree at `C:\Users\Malik\Desktop\radius2`. Cross-cutting fixes should be synced to both ERROR_LOG.md files.
+
+---
 
 ## !!! CRITICAL: Docker Volume Safety — READ BEFORE ANY docker-compose CHANGES !!!
 
