@@ -212,15 +212,13 @@ micro_task_id = Column(PG_UUID(as_uuid=True), ForeignKey('micro_tasks.id', ondel
   }
   ```
 
-### 4d. Modified: Subtask Creation
+### 4d. Subtask Creation — Already Enhanced
 
-**`POST /api/tasks/{task_id}/subtasks` — Enhanced request:**
+**`POST /api/tasks/{task_id}/subtasks` already accepts:**
+`FormData { title (required), description, assignee_id, priority, due_date }`
 
-Current: `FormData { title }` (that's it)
-
-New: `JSON { title, description?, assignee_id?, priority?, due_date?, department? }`
-
-Switch from FormData to JSON body. All new fields are optional (backward compatible).
+No changes needed to this endpoint — it already supports all fields via FormData.
+The frontend AddSubtaskForm just needs to send all fields (currently only sends title).
 
 ---
 
@@ -416,70 +414,76 @@ Replace the current single text input with a proper form:
 ## 8. Agent Assignments
 
 ### TARS (Backend — Claude Code)
-1. Database migration SQL (`scripts/phase9_task_subtask.sql`)
-2. `MicroTask` ORM model + `TaskComment` alteration
-3. New API endpoints (micro-tasks CRUD, micro-task comments)
-4. Cross-tab entity task endpoints (4 new GET endpoints)
-5. Enhanced subtask creation endpoint (JSON body)
-6. "All Comments" aggregation query
-7. Task detail response enhancement (include micro-tasks, progress counts)
-8. Activity logging for micro-task actions
+All backend work happens in `backend/app/main.py` (monolithic) and `backend/app/services/task_service.py`:
+1. Database migration: `backend/migrations/phase9_micro_tasks.sql`
+2. `MicroTask` ORM model in `main.py` (after TaskActivity, line ~586)
+3. `TaskComment` alteration: add `micro_task_id` FK in `main.py`
+4. Micro-task CRUD endpoints in `main.py` (7 endpoints)
+5. Enhanced task detail response (micro_tasks array + progress counts)
+6. "All Comments" aggregation query (`scope=all` param)
+7. Cross-tab entity task endpoints (4 new GET endpoints in `main.py`)
+8. Activity logging for micro-task actions in `task_service.py`
+9. Backend tests: `backend/tests/test_micro_tasks.py`
 
 ### Codex (Frontend — OpenAI Codex)
-1. `SubtaskCard` component (expandable, full-featured)
-2. `MicroTaskList` + `MicroTaskItem` components
-3. `SubtaskComments` component (reuse pattern)
-4. Enhanced `AddSubtaskForm` (replace text input)
-5. Comment scope toggle ("This task" / "All comments")
-6. `EntityTaskWidget` (reusable cross-tab component)
-7. Integration into `CustomersPage`, `TransactionsPage`, `ProjectsPage`, `InventoryPage`
-8. Sync logic in Zustand `dataStore`
+All new components go in `frontend/src/components/Tasks/`. Cross-tab integration goes in `App.jsx`:
+1. `SubtaskCard.jsx` — expandable card with micro-tasks + comments
+2. `MicroTaskList.jsx` + `MicroTaskItem.jsx` — checklist components
+3. `AddSubtaskForm.jsx` — full form (sends all FormData fields)
+4. `SubtaskComments.jsx` — per-subtask/micro-task comment thread
+5. Comment scope toggle in TaskDetailModal ("This task" / "All comments")
+6. `EntityTaskWidget.jsx` — compact cross-tab widget
+7. Integration into `App.jsx` entity detail sections (NOT separate page files)
+8. Task sync: re-fetch on mutation + visibility-based refresh (no Zustand needed — use existing pattern)
 
 ### Cursor (UI/UX Templates — first task)
-1. HTML mockup templates for all new UI components (see `mockups/` directory)
-2. Color palette, spacing, component sizing consistent with existing TasksView.jsx
-3. Interactive states: hover, expanded, loading, empty states
-4. Responsive considerations (modal on mobile)
-5. Review mockups with Malik before Codex implements
+1. Review + refine `mockups/task-detail-enhanced.html`
+2. Add: loading skeletons, empty states, error states, mobile considerations
+3. Verify visual consistency with existing `TasksView.jsx` patterns
+4. Design QA after Codex implementation
 
 ---
 
 ## 9. Implementation Phases
 
-### Phase A: Schema + Backend Core (TARS)
-1. Write + apply migration SQL
-2. Add MicroTask model
-3. Micro-task CRUD endpoints
-4. Enhanced subtask creation (JSON body with all fields)
-5. Task detail response with micro-tasks embedded
-6. Test with curl
+### Phase A: Schema + Backend Core (TARS) — PARALLEL with Phase B
+1. Write migration: `backend/migrations/phase9_micro_tasks.sql`
+2. Apply migration to local dev DB, verify with psql
+3. Add `MicroTask` model to `backend/app/main.py` (after line 586, after TaskActivity)
+4. Add `micro_task_id` column to `TaskComment` model in `main.py`
+5. Add micro-task CRUD endpoints to `main.py` (POST, GET, PUT, DELETE, comments)
+6. Enhance `GET /api/tasks/{task_id}` response with micro_tasks array + progress counts
+7. Add `GET /api/tasks/{task_id}/comments?scope=all` aggregation
+8. Add 4 cross-tab endpoints to `main.py`: GET `/api/{entity}/{id}/tasks`
+9. Test all endpoints with curl
+10. Add backend tests for micro-task CRUD + comment aggregation
 
-### Phase B: UI/UX Templates (Cursor)
-1. HTML mockup: Enhanced TaskDetailModal with subtask cards
-2. HTML mockup: Micro-task list with inline comments
-3. HTML mockup: "All Comments" aggregate view
-4. HTML mockup: EntityTaskWidget for cross-tab
-5. HTML mockup: Enhanced subtask creation form
-6. Review session with Malik
+### Phase B: UI/UX Templates (Cursor) — PARALLEL with Phase A
+1. Review existing `mockups/task-detail-enhanced.html` in browser
+2. Refine mockups: add loading skeletons, empty states, error states
+3. Verify visual consistency with `TasksView.jsx` patterns
+4. Review with Malik before Codex starts
 
-### Phase C: Frontend Implementation (Codex)
-1. SubtaskCard + MicroTaskList components (reference Cursor mockups)
-2. AddSubtaskForm upgrade
-3. Comment scope toggle
-4. EntityTaskWidget component
-5. Cross-tab integration (4 pages)
-6. Sync logic
+### Phase C: Frontend Implementation (Codex) — after A + B
+1. Create new components in `frontend/src/components/Tasks/`:
+   SubtaskCard, MicroTaskList, MicroTaskItem, AddSubtaskForm, SubtaskComments
+2. Upgrade TaskDetailModal in `TasksView.jsx` with new components
+3. Add comment scope toggle ("This task" / "All comments")
+4. Create `EntityTaskWidget.jsx` in `frontend/src/components/Tasks/`
+5. Integrate EntityTaskWidget into entity detail sections in `App.jsx`
+   (customers tab, transactions tab, projects tab, inventory tab)
+6. Add task sync logic (re-fetch on mutation, visibility-based refresh)
 
-### Phase D: Cross-Tab + Polish (All)
-1. TARS: Cross-tab entity endpoints (4 GET endpoints)
-2. Codex: Wire EntityTaskWidget to entity pages
-3. Cursor: Review final UI against mockups
-4. All: End-to-end testing
+### Phase D: Integration Test + Polish (All)
+1. TARS: End-to-end curl test of full scenario (task → subtask → micro-tasks → comments → cross-tab)
+2. Codex: Frontend smoke test (all views render, mutations sync)
+3. Cursor: Design QA — compare implemented UI to mockups
+4. TARS: Run backend tests, verify no regressions
 
 ### Phase E: Deploy to DigitalOcean
 1. Merge to production branch
-2. Run migration on DO server
-3. Verify all endpoints
+2. Run migration on DO server (test on local copy first)
+3. Rebuild containers, verify all endpoints
 4. Frontend build + deploy
 
 ---
@@ -499,28 +503,20 @@ Replace the current single text input with a proper form:
 ## 11. Files to Create/Modify
 
 ### New Files
-- `scripts/phase9_task_subtask.sql` — Migration
-- `backend/app/models/micro_task.py` or extend `tasks.py` — MicroTask model
-- `backend/app/routes/micro_tasks.py` — Micro-task CRUD + comments
-- `frontend/src/components/Tasks/SubtaskCard.jsx`
-- `frontend/src/components/Tasks/MicroTaskList.jsx`
-- `frontend/src/components/Tasks/MicroTaskItem.jsx`
-- `frontend/src/components/Tasks/AddSubtaskForm.jsx`
-- `frontend/src/components/Tasks/SubtaskComments.jsx`
-- `frontend/src/components/Tasks/EntityTaskWidget.jsx`
-- `mockups/task-detail-enhanced.html`
-- `mockups/entity-task-widget.html`
+- `backend/migrations/phase9_micro_tasks.sql` — Migration (CREATE TABLE + ALTER)
+- `frontend/src/components/Tasks/SubtaskCard.jsx` — Expandable subtask card
+- `frontend/src/components/Tasks/MicroTaskList.jsx` — Micro-task checklist container
+- `frontend/src/components/Tasks/MicroTaskItem.jsx` — Single micro-task row
+- `frontend/src/components/Tasks/AddSubtaskForm.jsx` — Full subtask creation form
+- `frontend/src/components/Tasks/SubtaskComments.jsx` — Per-subtask comment thread
+- `frontend/src/components/Tasks/EntityTaskWidget.jsx` — Cross-tab linked tasks widget
+- `backend/tests/test_micro_tasks.py` — Backend tests for micro-task CRUD
 
 ### Modified Files
-- `backend/app/models/tasks.py` — Add MicroTask model, alter TaskComment
-- `backend/app/routes/tasks.py` — Enhanced subtask creation, task detail response, comment scope
-- `backend/app/services/task_service.py` — Micro-task activity logging, cross-tab queries
-- `frontend/src/components/Tasks/TasksView.jsx` — Major TaskDetailModal upgrade
-- `frontend/src/pages/CustomersPage.jsx` — Add EntityTaskWidget
-- `frontend/src/pages/TransactionsPage.jsx` — Add EntityTaskWidget
-- `frontend/src/pages/ProjectsPage.jsx` — Add EntityTaskWidget
-- `frontend/src/pages/InventoryPage.jsx` — Add EntityTaskWidget
-- `frontend/src/stores/dataStore.js` — Add taskVersion counter
+- `backend/app/main.py` — Add MicroTask model (after line 586), add micro_task_id to TaskComment, add micro-task endpoints, add cross-tab entity endpoints, enhance task detail response
+- `backend/app/services/task_service.py` — Micro-task activity logging, comment aggregation queries
+- `frontend/src/components/Tasks/TasksView.jsx` — Major TaskDetailModal upgrade (SubtaskCard integration, comment scope toggle)
+- `frontend/src/App.jsx` — Add EntityTaskWidget to customer/transaction/project/inventory detail sections
 
 ---
 
