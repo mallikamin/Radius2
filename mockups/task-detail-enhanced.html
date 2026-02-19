@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orbit CRM - Enhanced Task Detail Mockup</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; }
+    .section-title { background: #111827; color: #fff; padding: 10px 20px; font-size: 14px; font-weight: 600; letter-spacing: 0.5px; border-radius: 8px 8px 0 0; }
+    .mockup-panel { border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 40px; overflow: hidden; }
+    .subtask-card { transition: all 0.15s ease; }
+    .micro-comment-popover { display: none; }
+    .micro-comment-popover.open { display: block; }
+  </style>
+</head>
+<body class="bg-gray-100 p-8">
+
+  <div class="max-w-7xl mx-auto">
+    <div class="mb-8">
+      <h1 class="text-2xl font-bold text-gray-900">Orbit CRM - Enhanced Task Detail UI Reference</h1>
+      <p class="text-sm text-gray-500 mt-1">Visual mockup for Cursor agent. All components use the Orbit design system: gray-900 buttons, gray-50/100 backgrounds, rounded-lg, text-sm, minimal shadows.</p>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SECTION 1: Enhanced Task Detail Modal                        -->
+    <!-- ============================================================ -->
+    <div class="mockup-panel">
+      <div class="section-title">SECTION 1: Enhanced Task Detail Modal</div>
+      <div class="bg-white">
+        <!-- Modal Header -->
+        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded">TASK-00123</span>
+            <h2 class="text-lg font-semibold text-gray-900">Follow up with Mr. Khan about Block-B payment</h2>
+          </div>
+          <button class="text-gray-400 hover:text-gray-600">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div class="flex">
+          <!-- LEFT PANEL (70%) -->
+          <div class="w-[70%] border-r border-gray-200 p-6 space-y-6">
+
+            <!-- Description -->
+            <div>
+              <p class="text-sm text-gray-700 leading-relaxed">Customer Mr. Khan (Greenfield Phase 3, Block-B, Plot 12) has an outstanding balance of PKR 2,450,000. Broker Faisal confirmed the customer is willing to discuss a partial payment plan. Follow up before the Feb 25 deadline.</p>
+              <div class="mt-2 flex items-center gap-2">
+                <span class="inline-flex items-center gap-1.5 text-xs font-medium bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101"/><path stroke-linecap="round" stroke-linejoin="round" d="M10.172 13.828a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.102 1.101"/></svg>
+                  Mr. Khan - Greenfield Phase 3
+                </span>
+                <span class="inline-flex items-center gap-1.5 text-xs font-medium bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+                  Block-B, Plot 12
+                </span>
+              </div>
+            </div>
+
+            <!-- Subtasks Section -->
+            <div>
+              <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-semibold text-gray-900">Subtasks (1/3 completed)</h3>
+                <div class="w-24 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                  <div class="w-1/3 h-full bg-green-500 rounded-full"></div>
+                </div>
+              </div>
+
+              <div class="space-y-2">
+
+                <!-- Subtask 1: EXPANDED -->
+                <div class="subtask-card border border-gray-200 rounded-lg overflow-hidden" id="subtask-1">
+                  <div class="flex items-center gap-3 px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100" onclick="toggleSubtask('subtask-1')">
+                    <input type="checkbox" class="w-4 h-4 rounded border-gray-300 text-green-500 focus:ring-green-500" onclick="event.stopPropagation()">
+                    <span class="text-sm font-medium text-gray-900 flex-1">Call customer office</span>
+                    <span class="inline-flex items-center text-xs font-medium bg-orange-100 text-orange-700 px-2 py-0.5 rounded">High</span>
+                    <span class="inline-flex items-center gap-1 text-xs text-gray-500">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 00-16 0"/></svg>
+                      Hassan
+                    </span>
+                    <span class="inline-flex items-center gap-1 text-xs text-red-500 font-medium">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                      Feb 22 (overdue)
+                    </span>
+                    <svg class="w-4 h-4 text-gray-400 subtask-chevron transition-transform rotate-180" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                  </div>
+
+                  <div class="subtask-body px-4 pb-4 border-t border-gray-100">
+                    <!-- Micro-tasks -->
+                    <div class="pt-3 space-y-1.5">
+                      <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Micro-tasks</p>
+
+                      <!-- Micro-task 1: checked -->
+                      <div class="flex items-center gap-2.5 py-1.5 px-2 rounded hover:bg-gray-50 group relative">
+                        <input type="checkbox" checked class="w-3.5 h-3.5 rounded border-gray-300 text-green-500 focus:ring-green-500" onclick="toggleMicro(this)">
+                        <span class="text-sm text-gray-500 line-through flex-1">Check outstanding balance</span>
+                        <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Sarosh</span>
+                        <button class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600" onclick="toggleMicroComment('mc-1')">
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                        </button>
+                      </div>
+
+                      <!-- Micro-task 2: unchecked -->
+                      <div class="flex items-center gap-2.5 py-1.5 px-2 rounded hover:bg-gray-50 group">
+                        <input type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-green-500 focus:ring-green-500" onclick="toggleMicro(this)">
+                        <span class="text-sm text-gray-700 flex-1">Prepare payment schedule PDF</span>
+                        <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Sarosh</span>
+                        <span class="text-xs text-gray-400">Feb 21</span>
+                        <button class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600" onclick="toggleMicroComment('mc-2')">
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                        </button>
+                      </div>
+
+                      <!-- Micro-task 3: unchecked -->
+                      <div class="flex items-center gap-2.5 py-1.5 px-2 rounded hover:bg-gray-50 group">
+                        <input type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-green-500 focus:ring-green-500" onclick="toggleMicro(this)">
+                        <span class="text-sm text-gray-700 flex-1">Schedule the call</span>
+                        <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Hassan</span>
+                        <span class="text-xs text-gray-400">Feb 22</span>
+                        <button class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600" onclick="toggleMicroComment('mc-3')">
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                        </button>
+                      </div>
+
+                      <!-- Add micro-task input -->
+                      <div class="flex items-center gap-2.5 py-1.5 px-2">
+                        <svg class="w-3.5 h-3.5 text-gray-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                        <input type="text" placeholder="Add micro-task..." class="text-sm text-gray-400 placeholder-gray-300 bg-transparent border-none outline-none flex-1">
+                      </div>
+                    </div>
+
+                    <!-- Subtask Comments -->
+                    <div class="mt-4 pt-3 border-t border-gray-100">
+                      <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Comments</p>
+                      <div class="space-y-3">
+                        <div class="flex gap-2.5">
+                          <div class="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-semibold flex-shrink-0">H</div>
+                          <div>
+                            <div class="flex items-center gap-2">
+                              <span class="text-xs font-semibold text-gray-900">Hassan</span>
+                              <span class="text-xs text-gray-400">2 hours ago</span>
+                            </div>
+                            <p class="text-sm text-gray-600 mt-0.5">Called Mr. Khan's office, secretary said he's available after 3pm tomorrow. Will try again then.</p>
+                          </div>
+                        </div>
+                        <div class="flex gap-2.5">
+                          <div class="w-6 h-6 rounded-full bg-purple-100 text-purple-700 flex items-center justify-center text-xs font-semibold flex-shrink-0">S</div>
+                          <div>
+                            <div class="flex items-center gap-2">
+                              <span class="text-xs font-semibold text-gray-900">Sarosh</span>
+                              <span class="text-xs text-gray-400">1 hour ago</span>
+                            </div>
+                            <p class="text-sm text-gray-600 mt-0.5">Payment schedule ready. 3 installments over 90 days. PDF attached to the documents tab.</p>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="mt-3 flex gap-2">
+                        <input type="text" placeholder="Write a comment..." class="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300">
+                        <button class="bg-gray-900 text-white text-sm px-3 py-2 rounded-lg hover:bg-gray-800">Post</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Subtask 2: COLLAPSED -->
+                <div class="subtask-card border border-gray-200 rounded-lg overflow-hidden" id="subtask-2">
+                  <div class="flex items-center gap-3 px-4 py-3 bg-white cursor-pointer hover:bg-gray-50" onclick="toggleSubtask('subtask-2')">
+                    <input type="checkbox" class="w-4 h-4 rounded border-gray-300 text-green-500 focus:ring-green-500" onclick="event.stopPropagation()">
+                    <span class="text-sm font-medium text-gray-900 flex-1">Process partial payment if agreed</span>
+                    <div class="flex items-center gap-1 text-xs text-gray-400">
+                      <div class="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden"><div class="w-0 h-full bg-green-500 rounded-full"></div></div>
+                      <span>0/3</span>
+                    </div>
+                    <span class="inline-flex items-center text-xs font-medium bg-gray-100 text-gray-600 px-2 py-0.5 rounded">Medium</span>
+                    <span class="inline-flex items-center gap-1 text-xs text-gray-500">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 00-16 0"/></svg>
+                      Sarosh
+                    </span>
+                    <span class="text-xs text-gray-400">Feb 24</span>
+                    <svg class="w-4 h-4 text-gray-400 subtask-chevron transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                  </div>
+                  <div class="subtask-body px-4 pb-4 border-t border-gray-100 hidden"></div>
+                </div>
+
+                <!-- Subtask 3: COLLAPSED -->
+                <div class="subtask-card border border-gray-200 rounded-lg overflow-hidden" id="subtask-3">
+                  <div class="flex items-center gap-3 px-4 py-3 bg-white cursor-pointer hover:bg-gray-50" onclick="toggleSubtask('subtask-3')">
+                    <input type="checkbox" class="w-4 h-4 rounded border-gray-300 text-green-500 focus:ring-green-500" onclick="event.stopPropagation()">
+                    <span class="text-sm font-medium text-gray-900 flex-1">Update broker about status</span>
+                    <span class="inline-flex items-center text-xs font-medium bg-gray-100 text-gray-600 px-2 py-0.5 rounded">Low</span>
+                    <span class="inline-flex items-center gap-1 text-xs text-gray-500">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 00-16 0"/></svg>
+                      Faisal
+                    </span>
+                    <span class="text-xs text-gray-400">Feb 25</span>
+                    <svg class="w-4 h-4 text-gray-400 subtask-chevron transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                  </div>
+                  <div class="subtask-body px-4 pb-4 border-t border-gray-100 hidden"></div>
+                </div>
+              </div>
+
+              <!-- Add Subtask (collapsed) -->
+              <button onclick="toggleAddSubtask()" id="add-subtask-btn" class="mt-3 flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 px-1">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                Add subtask
+              </button>
+              <div id="add-subtask-form" class="hidden mt-3 border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
+                <input type="text" placeholder="Subtask title *" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-gray-300">
+                <div class="grid grid-cols-3 gap-3">
+                  <select class="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300">
+                    <option>Assign to...</option><option>Hassan</option><option>Sarosh</option><option>Faisal</option>
+                  </select>
+                  <input type="date" class="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300">
+                  <select class="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300">
+                    <option>Priority</option><option>Low</option><option>Medium</option><option>High</option><option>Urgent</option>
+                  </select>
+                </div>
+                <div class="flex justify-end gap-2">
+                  <button onclick="toggleAddSubtask()" class="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5">Cancel</button>
+                  <button class="bg-gray-900 text-white text-sm px-4 py-1.5 rounded-lg hover:bg-gray-800">Create</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Comments / Activity Tabs -->
+            <div class="border-t border-gray-200 pt-4">
+              <div class="flex items-center gap-4 mb-4">
+                <button onclick="switchTab('comments')" id="tab-comments" class="text-sm font-semibold text-gray-900 border-b-2 border-gray-900 pb-1">Comments</button>
+                <button onclick="switchTab('activity')" id="tab-activity" class="text-sm text-gray-400 hover:text-gray-600 pb-1">Activity</button>
+                <!-- Scope toggle (only visible on comments tab) -->
+                <div class="ml-auto flex bg-gray-100 rounded-lg p-0.5" id="scope-toggle">
+                  <button onclick="switchScope('this')" id="scope-this" class="text-xs font-medium px-3 py-1 rounded-md bg-white text-gray-900 shadow-sm">This task</button>
+                  <button onclick="switchScope('all')" id="scope-all" class="text-xs font-medium px-3 py-1 rounded-md text-gray-500 hover:text-gray-700">All comments</button>
+                </div>
+              </div>
+
+              <!-- Comments panel -->
+              <div id="panel-comments" class="space-y-4">
+                <div class="flex gap-3">
+                  <div class="w-7 h-7 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-semibold flex-shrink-0">F</div>
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm font-semibold text-gray-900">Faisal</span>
+                      <span class="text-xs text-gray-400">Yesterday at 4:30 PM</span>
+                      <span id="comment-context-1" class="hidden text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">on: Call customer office</span>
+                    </div>
+                    <p class="text-sm text-gray-600 mt-1">Spoke to broker Irfan, he confirmed Mr. Khan prefers installment plan over lump sum. Proceed with the 3-part schedule.</p>
+                  </div>
+                </div>
+                <div class="flex gap-3">
+                  <div class="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-semibold flex-shrink-0">H</div>
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm font-semibold text-gray-900">Hassan</span>
+                      <span class="text-xs text-gray-400">Today at 10:15 AM</span>
+                      <span id="comment-context-2" class="hidden text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">on: Main task</span>
+                    </div>
+                    <p class="text-sm text-gray-600 mt-1">Will attempt the call today at 3pm as suggested. Sarosh, can you have the payment schedule ready by then?</p>
+                  </div>
+                </div>
+                <div class="flex gap-2 mt-3">
+                  <input type="text" placeholder="Write a comment..." class="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300">
+                  <button class="bg-gray-900 text-white text-sm px-4 py-2 rounded-lg hover:bg-gray-800">Post</button>
+                </div>
+              </div>
+
+              <!-- Activity panel -->
+              <div id="panel-activity" class="hidden space-y-3">
+                <div class="flex items-start gap-3">
+                  <div class="w-1.5 h-1.5 rounded-full bg-gray-300 mt-2 flex-shrink-0"></div>
+                  <div>
+                    <p class="text-sm text-gray-600"><span class="font-medium text-gray-900">Hassan</span> changed status from <span class="font-medium">Pending</span> to <span class="font-medium">In Progress</span></p>
+                    <span class="text-xs text-gray-400">Today at 9:00 AM</span>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <div class="w-1.5 h-1.5 rounded-full bg-gray-300 mt-2 flex-shrink-0"></div>
+                  <div>
+                    <p class="text-sm text-gray-600"><span class="font-medium text-gray-900">Sarosh</span> completed micro-task <span class="font-medium">"Check outstanding balance"</span></p>
+                    <span class="text-xs text-gray-400">Yesterday at 6:12 PM</span>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <div class="w-1.5 h-1.5 rounded-full bg-gray-300 mt-2 flex-shrink-0"></div>
+                  <div>
+                    <p class="text-sm text-gray-600"><span class="font-medium text-gray-900">Faisal</span> added subtask <span class="font-medium">"Update broker about status"</span></p>
+                    <span class="text-xs text-gray-400">Yesterday at 2:45 PM</span>
+                  </div>
+                </div>
+                <div class="flex items-start gap-3">
+                  <div class="w-1.5 h-1.5 rounded-full bg-gray-300 mt-2 flex-shrink-0"></div>
+                  <div>
+                    <p class="text-sm text-gray-600"><span class="font-medium text-gray-900">System</span> created task from lead follow-up rule</p>
+                    <span class="text-xs text-gray-400">Feb 18 at 8:00 AM</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT SIDEBAR (30%) -->
+          <div class="w-[30%] p-5 space-y-5 bg-gray-50">
+            <div>
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">Status</label>
+              <select class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-gray-300">
+                <option>Pending</option><option selected>In Progress</option><option>Completed</option><option>On Hold</option><option>Cancelled</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">Assignee</label>
+              <div class="flex items-center gap-2 text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-2">
+                <div class="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-semibold">H</div>
+                Hassan
+              </div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">Due Date</label>
+              <div class="text-sm text-red-500 font-medium bg-white border border-gray-200 rounded-lg px-3 py-2">
+                Feb 25, 2026 (3 days left)
+              </div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">Priority</label>
+              <span class="inline-flex items-center text-xs font-medium bg-orange-100 text-orange-700 px-2.5 py-1 rounded">High</span>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">Department</label>
+              <span class="text-sm text-gray-700">Sales</span>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">Type</label>
+              <span class="text-sm text-gray-700">Follow-up</span>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">Created by</label>
+              <div class="flex items-center gap-2 text-sm text-gray-700">
+                <div class="w-5 h-5 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-[10px] font-semibold">F</div>
+                Faisal
+              </div>
+            </div>
+            <div class="pt-3 border-t border-gray-200">
+              <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">Linked Entity</label>
+              <a href="#" class="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 00-16 0"/></svg>
+                Mr. Khan
+              </a>
+              <p class="text-xs text-gray-400 mt-1">Greenfield Phase 3 - Block-B, Plot 12</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SECTION 2: Micro-Task Inline Comment Popover                 -->
+    <!-- ============================================================ -->
+    <div class="mockup-panel">
+      <div class="section-title">SECTION 2: Micro-Task Inline Comment Popover</div>
+      <div class="bg-white p-6">
+        <p class="text-xs text-gray-400 mb-4">Click the chat icon on a micro-task to see this popover. Shown here in its open state.</p>
+        <div class="max-w-lg">
+          <!-- The micro-task row -->
+          <div class="flex items-center gap-2.5 py-1.5 px-2 bg-blue-50 rounded">
+            <input type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-green-500 focus:ring-green-500">
+            <span class="text-sm text-gray-700 flex-1">Prepare payment schedule PDF</span>
+            <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Sarosh</span>
+            <span class="text-xs text-gray-400">Feb 21</span>
+            <button class="text-blue-500">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+            </button>
+          </div>
+          <!-- Popover -->
+          <div class="ml-8 mt-1 bg-white border border-gray-200 rounded-lg shadow-sm p-3 max-w-sm">
+            <div class="space-y-2.5">
+              <div class="flex gap-2">
+                <div class="w-5 h-5 rounded-full bg-purple-100 text-purple-700 flex items-center justify-center text-[9px] font-semibold flex-shrink-0 mt-0.5">S</div>
+                <div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-semibold text-gray-900">Sarosh</span>
+                    <span class="text-[10px] text-gray-400">3 hours ago</span>
+                  </div>
+                  <p class="text-xs text-gray-600">Using the standard 90-day installment template. Adding PKR breakdown per month.</p>
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <div class="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[9px] font-semibold flex-shrink-0 mt-0.5">H</div>
+                <div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-semibold text-gray-900">Hassan</span>
+                    <span class="text-[10px] text-gray-400">1 hour ago</span>
+                  </div>
+                  <p class="text-xs text-gray-600">Perfect. Make sure to include the penalty clause for late payments.</p>
+                </div>
+              </div>
+            </div>
+            <div class="mt-2.5 flex gap-1.5">
+              <input type="text" placeholder="Write a comment..." class="flex-1 text-xs border border-gray-200 rounded px-2 py-1.5 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-300">
+              <button class="bg-gray-900 text-white text-xs px-2.5 py-1.5 rounded hover:bg-gray-800">Post</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SECTION 3: Entity Task Widget (Cross-Tab)                    -->
+    <!-- ============================================================ -->
+    <div class="mockup-panel">
+      <div class="section-title">SECTION 3: Entity Task Widget (for Customer/Project/Transaction Detail Pages)</div>
+      <div class="bg-white p-6">
+        <div class="max-w-xl border border-gray-200 rounded-lg overflow-hidden">
+          <!-- Widget Header -->
+          <div class="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-200">
+            <div class="flex items-center gap-2">
+              <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+              <span class="text-sm font-semibold text-gray-900">Linked Tasks (3)</span>
+            </div>
+            <button class="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-900 bg-white border border-gray-200 rounded-lg px-2.5 py-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+              Add Task
+            </button>
+          </div>
+
+          <!-- Task Cards -->
+          <div class="divide-y divide-gray-100">
+            <!-- Card 1: In progress -->
+            <div class="px-4 py-3 hover:bg-gray-50 cursor-pointer">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                  <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                  <span class="text-xs font-mono text-gray-400">TASK-00123</span>
+                  <span class="text-sm text-gray-900">Follow up about Block-B payment</span>
+                </div>
+                <span class="inline-flex items-center text-xs font-medium bg-orange-100 text-orange-700 px-2 py-0.5 rounded">High</span>
+              </div>
+              <div class="flex items-center gap-4 mt-1.5 ml-[18px]">
+                <span class="text-xs text-gray-500">Hassan</span>
+                <span class="text-xs text-red-500">Due Feb 25</span>
+                <div class="flex items-center gap-1 text-xs text-gray-400">
+                  <div class="w-12 h-1 bg-gray-200 rounded-full overflow-hidden"><div class="w-1/3 h-full bg-green-500 rounded-full"></div></div>
+                  1/3
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 2: Completed -->
+            <div class="px-4 py-3 hover:bg-gray-50 cursor-pointer">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                  <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                  <span class="text-xs font-mono text-gray-400">TASK-00156</span>
+                  <span class="text-sm text-gray-400 line-through">Verify CNIC documents for transfer</span>
+                </div>
+                <span class="inline-flex items-center text-xs font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded">Done</span>
+              </div>
+              <div class="flex items-center gap-4 mt-1.5 ml-[18px]">
+                <span class="text-xs text-gray-400">Sarosh</span>
+                <span class="text-xs text-gray-400">Completed Feb 15</span>
+              </div>
+            </div>
+
+            <!-- Card 3: Pending -->
+            <div class="px-4 py-3 hover:bg-gray-50 cursor-pointer">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                  <span class="w-2 h-2 rounded-full bg-yellow-500"></span>
+                  <span class="text-xs font-mono text-gray-400">TASK-00189</span>
+                  <span class="text-sm text-gray-900">Schedule site visit for Block-B</span>
+                </div>
+                <span class="inline-flex items-center text-xs font-medium bg-gray-100 text-gray-600 px-2 py-0.5 rounded">Medium</span>
+              </div>
+              <div class="flex items-center gap-4 mt-1.5 ml-[18px]">
+                <span class="text-xs text-gray-500">Faisal</span>
+                <span class="text-xs text-gray-400">Due Mar 1</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="px-4 py-2.5 border-t border-gray-200 bg-gray-50">
+            <a href="#" class="text-xs text-blue-600 hover:text-blue-800 font-medium">View all in Tasks tab &rarr;</a>
+          </div>
+        </div>
+
+        <!-- Quick-Add Form -->
+        <div class="max-w-xl mt-4 border border-dashed border-gray-300 rounded-lg p-4 bg-gray-50">
+          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Quick-Add Task</p>
+          <input type="text" placeholder="Task title..." class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white mb-3 focus:outline-none focus:ring-1 focus:ring-gray-300">
+          <div class="grid grid-cols-3 gap-3 mb-3">
+            <select class="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300">
+              <option>Assign to...</option><option>Hassan</option><option>Sarosh</option><option>Faisal</option>
+            </select>
+            <input type="date" class="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300">
+            <div class="flex items-center gap-3 text-xs text-gray-600">
+              <label class="flex items-center gap-1 cursor-pointer"><input type="radio" name="qp" class="text-gray-900"> Low</label>
+              <label class="flex items-center gap-1 cursor-pointer"><input type="radio" name="qp" class="text-gray-900"> Med</label>
+              <label class="flex items-center gap-1 cursor-pointer"><input type="radio" name="qp" class="text-gray-900" checked> High</label>
+            </div>
+          </div>
+          <div class="flex justify-end">
+            <button class="bg-gray-900 text-white text-sm px-4 py-2 rounded-lg hover:bg-gray-800">Create Task</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SECTION 4: Enhanced Subtask Creation Form                    -->
+    <!-- ============================================================ -->
+    <div class="mockup-panel">
+      <div class="section-title">SECTION 4: Enhanced Subtask Creation Form</div>
+      <div class="bg-white p-6">
+        <p class="text-xs text-gray-400 mb-4">Replaces the current plain text input. Shown inline below the subtask list.</p>
+        <div class="max-w-lg border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
+          <input type="text" placeholder="Subtask title *" value="Send revised payment schedule to Mr. Khan" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-gray-300">
+          <div class="grid grid-cols-3 gap-3">
+            <select class="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-300">
+              <option>Assign to...</option><option selected>Sarosh</option><option>Hassan</option><option>Faisal</option>
+            </select>
+            <input type="date" value="2026-02-24" class="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-300">
+            <select class="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-300">
+              <option>Priority</option><option>Low</option><option selected>Medium</option><option>High</option><option>Urgent</option>
+            </select>
+          </div>
+          <!-- Description toggle -->
+          <div>
+            <button onclick="document.getElementById('desc-area').classList.toggle('hidden')" class="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+              Add description (optional)
+            </button>
+            <textarea id="desc-area" class="hidden w-full mt-2 text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-gray-300 resize-none" rows="3" placeholder="Add details or notes..."></textarea>
+          </div>
+          <div class="flex justify-end gap-2 pt-1">
+            <button class="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5">Cancel</button>
+            <button class="bg-gray-900 text-white text-sm px-4 py-1.5 rounded-lg hover:bg-gray-800">Create Subtask</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SECTION 5: Before/After Comparison                           -->
+    <!-- ============================================================ -->
+    <div class="mockup-panel">
+      <div class="section-title">SECTION 5: Existing Component Reference (BEFORE vs AFTER)</div>
+      <div class="bg-white p-6">
+        <div class="grid grid-cols-2 gap-8">
+          <!-- BEFORE -->
+          <div>
+            <div class="bg-red-50 text-red-800 text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-t-lg text-center">Before (Current)</div>
+            <div class="border border-red-200 rounded-b-lg p-4 space-y-2 bg-white">
+              <h4 class="text-sm font-semibold text-gray-900 mb-3">Subtasks (1/3)</h4>
+              <label class="flex items-center gap-2 text-sm text-gray-500 line-through">
+                <input type="checkbox" checked class="w-4 h-4 rounded border-gray-300"> Check outstanding balance
+              </label>
+              <label class="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" class="w-4 h-4 rounded border-gray-300"> Prepare payment schedule PDF
+              </label>
+              <label class="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" class="w-4 h-4 rounded border-gray-300"> Schedule the call
+              </label>
+              <div class="pt-2">
+                <input type="text" placeholder="Add subtask..." class="w-full text-sm border border-gray-200 rounded px-2 py-1.5 focus:outline-none">
+              </div>
+              <div class="pt-3 mt-3 border-t border-gray-100">
+                <p class="text-xs text-gray-400 text-center">No assignees, no due dates, no priority,<br>no nested tasks, no comments, no progress tracking</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- AFTER -->
+          <div>
+            <div class="bg-green-50 text-green-800 text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-t-lg text-center">After (Enhanced)</div>
+            <div class="border border-green-200 rounded-b-lg p-4 bg-white">
+              <div class="flex items-center justify-between mb-3">
+                <h4 class="text-sm font-semibold text-gray-900">Subtasks (1/3)</h4>
+                <div class="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden"><div class="w-1/3 h-full bg-green-500 rounded-full"></div></div>
+              </div>
+
+              <!-- Mini subtask card -->
+              <div class="border border-gray-200 rounded-lg mb-2 overflow-hidden">
+                <div class="flex items-center gap-2 px-3 py-2 bg-gray-50">
+                  <input type="checkbox" checked class="w-3.5 h-3.5 rounded border-gray-300 text-green-500">
+                  <span class="text-xs text-gray-400 line-through flex-1">Check outstanding balance</span>
+                  <span class="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">Sarosh</span>
+                </div>
+              </div>
+              <div class="border border-blue-200 rounded-lg mb-2 overflow-hidden bg-blue-50/30">
+                <div class="flex items-center gap-2 px-3 py-2">
+                  <input type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-green-500">
+                  <span class="text-xs text-gray-900 font-medium flex-1">Call customer office</span>
+                  <span class="text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">High</span>
+                  <span class="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Hassan</span>
+                  <span class="text-[10px] text-red-500">Feb 22</span>
+                </div>
+                <div class="px-3 pb-2 pt-1 border-t border-blue-100">
+                  <div class="flex items-center gap-1 text-[10px] text-gray-400">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                    1/3 micro-tasks
+                    <span class="mx-1">|</span>
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                    2 comments
+                  </div>
+                </div>
+              </div>
+              <div class="border border-gray-200 rounded-lg mb-2 overflow-hidden">
+                <div class="flex items-center gap-2 px-3 py-2">
+                  <input type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-green-500">
+                  <span class="text-xs text-gray-700 flex-1">Process partial payment</span>
+                  <span class="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Med</span>
+                  <span class="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Sarosh</span>
+                  <div class="flex items-center gap-0.5 text-[10px] text-gray-400">
+                    <div class="w-8 h-1 bg-gray-200 rounded-full"></div>0/3
+                  </div>
+                </div>
+              </div>
+
+              <div class="pt-3 mt-2 border-t border-gray-100">
+                <p class="text-xs text-green-600 text-center font-medium">Assignees, due dates, priority badges, micro-tasks,<br>per-subtask comments, progress bars, expandable cards</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="text-center text-xs text-gray-400 py-6">
+      Orbit CRM - Enhanced Task Detail Mockup - Generated Feb 19, 2026
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- JAVASCRIPT: Interactivity                                     -->
+  <!-- ============================================================ -->
+  <script>
+    // Toggle subtask expanded/collapsed
+    function toggleSubtask(id) {
+      const card = document.getElementById(id);
+      const body = card.querySelector('.subtask-body');
+      const chevron = card.querySelector('.subtask-chevron');
+      const header = card.querySelector('div:first-child');
+
+      if (body.classList.contains('hidden')) {
+        body.classList.remove('hidden');
+        chevron.classList.add('rotate-180');
+        header.classList.add('bg-gray-50');
+        header.classList.remove('bg-white');
+      } else {
+        body.classList.add('hidden');
+        chevron.classList.remove('rotate-180');
+        header.classList.remove('bg-gray-50');
+        header.classList.add('bg-white');
+      }
+    }
+
+    // Toggle micro-task checkbox styling
+    function toggleMicro(checkbox) {
+      const label = checkbox.parentElement.querySelector('span');
+      if (checkbox.checked) {
+        label.classList.add('line-through', 'text-gray-500');
+        label.classList.remove('text-gray-700');
+      } else {
+        label.classList.remove('line-through', 'text-gray-500');
+        label.classList.add('text-gray-700');
+      }
+    }
+
+    // Toggle add subtask form
+    function toggleAddSubtask() {
+      const form = document.getElementById('add-subtask-form');
+      const btn = document.getElementById('add-subtask-btn');
+      form.classList.toggle('hidden');
+      btn.classList.toggle('hidden');
+    }
+
+    // Switch between Comments and Activity tabs
+    function switchTab(tab) {
+      const tabComments = document.getElementById('tab-comments');
+      const tabActivity = document.getElementById('tab-activity');
+      const panelComments = document.getElementById('panel-comments');
+      const panelActivity = document.getElementById('panel-activity');
+      const scopeToggle = document.getElementById('scope-toggle');
+
+      if (tab === 'comments') {
+        tabComments.classList.add('font-semibold', 'text-gray-900', 'border-b-2', 'border-gray-900');
+        tabComments.classList.remove('text-gray-400');
+        tabActivity.classList.remove('font-semibold', 'text-gray-900', 'border-b-2', 'border-gray-900');
+        tabActivity.classList.add('text-gray-400');
+        panelComments.classList.remove('hidden');
+        panelActivity.classList.add('hidden');
+        scopeToggle.classList.remove('hidden');
+      } else {
+        tabActivity.classList.add('font-semibold', 'text-gray-900', 'border-b-2', 'border-gray-900');
+        tabActivity.classList.remove('text-gray-400');
+        tabComments.classList.remove('font-semibold', 'text-gray-900', 'border-b-2', 'border-gray-900');
+        tabComments.classList.add('text-gray-400');
+        panelActivity.classList.remove('hidden');
+        panelComments.classList.add('hidden');
+        scopeToggle.classList.add('hidden');
+      }
+    }
+
+    // Switch comment scope between "This task" and "All comments"
+    function switchScope(scope) {
+      const btnThis = document.getElementById('scope-this');
+      const btnAll = document.getElementById('scope-all');
+      const ctx1 = document.getElementById('comment-context-1');
+      const ctx2 = document.getElementById('comment-context-2');
+
+      if (scope === 'this') {
+        btnThis.classList.add('bg-white', 'text-gray-900', 'shadow-sm');
+        btnThis.classList.remove('text-gray-500');
+        btnAll.classList.remove('bg-white', 'text-gray-900', 'shadow-sm');
+        btnAll.classList.add('text-gray-500');
+        ctx1.classList.add('hidden');
+        ctx2.classList.add('hidden');
+      } else {
+        btnAll.classList.add('bg-white', 'text-gray-900', 'shadow-sm');
+        btnAll.classList.remove('text-gray-500');
+        btnThis.classList.remove('bg-white', 'text-gray-900', 'shadow-sm');
+        btnThis.classList.add('text-gray-500');
+        ctx1.classList.remove('hidden');
+        ctx2.classList.remove('hidden');
+      }
+    }
+
+    // Toggle micro-task comment popover (for Section 1 demo)
+    function toggleMicroComment(id) {
+      // Placeholder for the Section 1 micro-task comment toggle
+      // In the real app this would open/close a popover
+      alert('Micro-task comment popover toggled. See Section 2 for the visual reference.');
+    }
+  </script>
+
+</body>
+</html>
