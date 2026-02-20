@@ -17,6 +17,50 @@ const emptyEnhancedLead = {
   additional_mobiles: ['', '', '', ''], country_code: '+92'
 };
 
+const INTERACTION_TYPE_OPTIONS = [
+  { value: 'call', label: 'Call' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'meeting', label: 'Meeting' }
+];
+
+const INTERACTION_STATUS_OPTIONS = {
+  call: [
+    { value: 'Connected', label: 'Connected' },
+    { value: 'Attempted', label: 'Attempted' }
+  ],
+  whatsapp: [
+    { value: 'WhatsApp Call', label: 'WhatsApp Call' },
+    { value: 'WhatsApp Message', label: 'WhatsApp Message' }
+  ],
+  meeting: [
+    { value: 'Arrange', label: 'Arrange' },
+    { value: 'Done @ Site Office', label: 'Done @ Site Office' },
+    { value: 'Done @ Client Office', label: 'Done @ Client Office' },
+    { value: 'Done @ Head Office/Inhouse', label: 'Done @ Head Office/Inhouse' }
+  ]
+};
+
+const getInteractionStatusOptions = (interactionType) =>
+  INTERACTION_STATUS_OPTIONS[interactionType] || [];
+
+const getDefaultInteractionStatus = (interactionType) =>
+  getInteractionStatusOptions(interactionType)[0]?.value || '';
+
+const formatInteractionType = (interactionType, status) => {
+  if (interactionType === 'whatsapp' && status) return status;
+  if (interactionType === 'meeting' && status) return `Meeting - ${status}`;
+  if (interactionType === 'call') return 'Call';
+  return interactionType || '-';
+};
+
+const getTemperatureBadgeClass = (temperature) => {
+  const value = String(temperature || '').toLowerCase();
+  if (value === 'hot') return 'bg-red-100 text-red-700';
+  if (value === 'mild') return 'bg-amber-100 text-amber-700';
+  if (value === 'cold') return 'bg-blue-100 text-blue-700';
+  return 'bg-gray-100 text-gray-600';
+};
+
 // ============================================
 // AUTHENTICATION - LOGIN VIEW
 // ============================================
@@ -307,6 +351,7 @@ export default function App() {
     if (!user) return false;
     const role = user.role || 'user';
     const repType = user.rep_type || null;
+    const repId = user.rep_id || '';
     
     // Admin can access everything
     if (role === 'admin') return true;
@@ -314,10 +359,12 @@ export default function App() {
     // Role-based access rules
     const roleAccess = {
       admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
+      director: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
       cco: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
+      coo: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
       manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'tasks', 'media', 'vector'],
       creator: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector'],
-      user: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'interactions', 'customers', 'tasks', 'media', 'vector'],
+      user: ['customers', 'tasks', 'interactions', 'dashboard', 'transactions', 'receipts'],
       viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'tasks', 'media', 'vector']
     };
     
@@ -330,7 +377,7 @@ export default function App() {
       return !blocked.includes(tabId);
     }
     if (repType === 'indirect_rep') {
-      const blocked = ['receipts'];
+      const blocked = ['payments'];
       return !blocked.includes(tabId);
     }
     return true;
@@ -1540,6 +1587,9 @@ function NewTransactionModal({ onClose, onSuccess }) {
 // ============================================
 function TransactionDetailModal({ txn, onClose, onUpdate }) {
   const [installments, setInstallments] = useState(txn.installments || []);
+  const customerName = txn.customer_name || txn.customer?.name || '—';
+  const brokerName = txn.broker_name || txn.broker?.name || '—';
+  const projectName = txn.project_name || txn.project?.name || '—';
 
   const updateInstallment = async (inst, field, value) => {
     try {
@@ -1554,9 +1604,9 @@ function TransactionDetailModal({ txn, onClose, onUpdate }) {
     <Modal title={`Transaction ${txn.transaction_id}`} onClose={onClose} wide>
       <div className="space-y-6">
         <div className="grid grid-cols-2 gap-6">
-          <div><div className="text-xs text-gray-400">Customer</div><div className="font-medium">{txn.customer_name}</div></div>
-          <div><div className="text-xs text-gray-400">Broker</div><div className="font-medium">{txn.broker_name || '—'}</div></div>
-          <div><div className="text-xs text-gray-400">Project / Unit</div><div className="font-medium">{txn.project_name} - {txn.unit_number}</div></div>
+          <div><div className="text-xs text-gray-400">Customer</div><div className="font-medium">{customerName}</div></div>
+          <div><div className="text-xs text-gray-400">Broker</div><div className="font-medium">{brokerName}</div></div>
+          <div><div className="text-xs text-gray-400">Project / Unit</div><div className="font-medium">{projectName} - {txn.unit_number}</div></div>
           <div><div className="text-xs text-gray-400">Total Value</div><div className="font-semibold text-lg">{formatCurrency(txn.total_value)}</div></div>
         </div>
 
@@ -1615,6 +1665,7 @@ function CustomersView() {
   const [subTab, setSubTab] = useState('pipeline');
   const role = getUserRole();
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
+  const canViewBrokerSubTab = role !== 'viewer';
 
   // Unified search
   const [searchQuery, setSearchQuery] = useState('');
@@ -1694,27 +1745,29 @@ function CustomersView() {
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
         <button onClick={() => setSubTab('pipeline')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${subTab === 'pipeline' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
-          Pipeline
+          Leads
         </button>
         <button onClick={() => setSubTab('customers')}
           className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${subTab === 'customers' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
           Customers
         </button>
-        <button onClick={() => setSubTab('brokers')}
-          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${subTab === 'brokers' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
-          Brokers
-        </button>
+        {canViewBrokerSubTab && (
+          <button onClick={() => setSubTab('brokers')}
+            className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${subTab === 'brokers' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+            Brokers
+          </button>
+        )}
       </div>
 
       {subTab === 'pipeline' && <PipelineView />}
       {subTab === 'customers' && <CustomerTableView />}
-      {subTab === 'brokers' && <BrokersView />}
+      {canViewBrokerSubTab && subTab === 'brokers' && <BrokersView />}
     </div>
   );
 }
 
 // ============================================
-// PIPELINE VIEW (Lead Pipeline)
+// LEADS VIEW (Lead Pipeline)
 // ============================================
 function PipelineView() {
   const [pipelineData, setPipelineData] = useState(null);
@@ -1733,6 +1786,8 @@ function PipelineView() {
   const [showLeadDetail, setShowLeadDetail] = useState(null);
   const [logTarget, setLogTarget] = useState(null);
   const [showAddLeadModal, setShowAddLeadModal] = useState(false);
+  const [leadSubView, setLeadSubView] = useState('main');
+  const [leadFollowupMap, setLeadFollowupMap] = useState({});
   const [newLeadForm, setNewLeadForm] = useState(emptyEnhancedLead);
   const role = getUserRole();
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
@@ -1742,8 +1797,25 @@ function PipelineView() {
     try {
       const params = new URLSearchParams();
       if (repFilter) params.append('rep_id', repFilter);
-      const res = await api.get(`/leads/pipeline?${params}`);
+      const [res, intRes] = await Promise.all([
+        api.get(`/leads/pipeline?${params}`),
+        api.get('/interactions', { params: { limit: 500 } }).catch(() => ({ data: [] }))
+      ]);
       setPipelineData(res.data);
+      const nextMap = {};
+      (intRes.data || []).forEach((interaction) => {
+        if (!interaction?.lead_id) return;
+        const leadKey = interaction.lead_id;
+        const prev = nextMap[leadKey] || {};
+        const currentCreated = interaction.created_at ? new Date(interaction.created_at).getTime() : 0;
+        const prevCreated = prev.lastInteractionAt ? new Date(prev.lastInteractionAt).getTime() : 0;
+        const isNewer = currentCreated >= prevCreated;
+        nextMap[leadKey] = {
+          lastInteractionAt: isNewer ? interaction.created_at : prev.lastInteractionAt,
+          nextFollowUp: isNewer ? interaction.next_follow_up : prev.nextFollowUp
+        };
+      });
+      setLeadFollowupMap(nextMap);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -1808,7 +1880,21 @@ function PipelineView() {
 
   const allStages = pipelineData?.pipeline || [];
   const allLeads = allStages.flatMap(s => s.leads);
-  const displayLeads = activeStage === 'all' ? allLeads : (allStages.find(s => s.stage === activeStage)?.leads || []);
+  const stageLeads = activeStage === 'all' ? allLeads : (allStages.find(s => s.stage === activeStage)?.leads || []);
+  const todayISO = new Date().toISOString().split('T')[0];
+  const pendingLeads = stageLeads.filter(lead => {
+    const nextFollowUp = leadFollowupMap[lead.lead_id]?.nextFollowUp;
+    return nextFollowUp && nextFollowUp >= todayISO;
+  });
+  const overdueLeads = stageLeads.filter(lead => {
+    const nextFollowUp = leadFollowupMap[lead.lead_id]?.nextFollowUp;
+    return nextFollowUp && nextFollowUp < todayISO;
+  });
+  const displayLeads = leadSubView === 'pending'
+    ? pendingLeads
+    : leadSubView === 'overdue'
+      ? overdueLeads
+      : stageLeads;
 
   return (
     <div className="space-y-4">
@@ -1854,76 +1940,112 @@ function PipelineView() {
         ))}
       </div>
 
-      {/* Lead cards */}
-      {loading ? <Loader /> : displayLeads.length === 0 ? <Empty msg="No leads in this stage" /> : (
-        <div className="space-y-2">
-          {displayLeads.map(lead => {
-            const stageInfo = allStages.find(s => s.stage === lead.pipeline_stage);
-            const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
-            return (
-              <div key={lead.id} className="bg-white rounded-xl border p-4 hover:shadow-sm transition-shadow">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    {isAdminLike && (
-                      <input type="checkbox" checked={selectedLeads.includes(lead.id)}
-                        onChange={e => setSelectedLeads(prev => e.target.checked ? [...prev, lead.id] : prev.filter(x => x !== lead.id))}
-                        className="mt-1 rounded" />
-                    )}
-                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setShowLeadDetail(lead)}>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">{lead.name}</span>
-                        <span className="text-xs font-mono text-gray-400">{lead.lead_id}</span>
-                        {lead.status === 'converted' && <span className="px-1.5 py-0.5 text-xs bg-green-200 text-green-800 rounded-full font-semibold">Won</span>}
-                        {lead.status === 'lost' && <span className="px-1.5 py-0.5 text-xs bg-red-200 text-red-800 rounded-full font-semibold">Lost</span>}
-                        {lead.is_stale && lead.status !== 'converted' && lead.status !== 'lost' && <span className="px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full">Stale</span>}
-                        {lead.converted_customer_id && lead.status !== 'converted' && <span className="px-1.5 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">Customer</span>}
-                        {lead.converted_broker_id && lead.status !== 'converted' && <span className="px-1.5 py-0.5 text-xs bg-purple-100 text-purple-700 rounded-full">Broker</span>}
-                      </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 flex-wrap">
-                        {contactNumbers.length > 0 && <span>{contactNumbers.join(' | ')}</span>}
-                        {(lead.source || lead.campaign_name) && (
-                          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded font-medium">
-                            {lead.source || lead.campaign_name}{lead.source_details ? ` — ${lead.source_details}` : lead.campaign_source ? ` (${lead.campaign_source})` : ''}
-                          </span>
-                        )}
-                        {lead.assigned_rep && <span>Rep: {lead.assigned_rep}</span>}
-                        {lead.days_since_contact !== null && <span>{lead.days_since_contact}d ago</span>}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => setLogTarget({
-                        id: lead.id,
-                        entity_type: 'lead',
-                        name: lead.name,
-                        mobile: lead.mobile,
-                        additional_mobiles: lead.additional_mobiles || [],
-                        defaultRepId: lead.assigned_rep_id || ''
-                      })}
-                      className="py-1 px-2 text-xs border rounded-lg hover:bg-blue-50 text-blue-600"
-                      title="Log Interaction"
-                    >
-                      Log
-                    </button>
-                    <select value={lead.pipeline_stage} onChange={e => handleStageChange(lead.id, e.target.value)}
-                      className="px-2 py-1 text-xs border rounded-lg bg-white"
-                      style={{ borderColor: stageInfo?.color || '#d1d5db' }}>
-                      {allStages.map(s => <option key={s.stage} value={s.stage}>{s.stage}</option>)}
-                    </select>
-                    {role === 'admin' && (
-                      <button onClick={() => { if (confirm(`Delete lead "${lead.name}"?`)) api.delete(`/leads/${lead.id}`).then(() => loadPipeline()).catch(e => window.showToast?.('Error', e.response?.data?.detail || 'Delete failed', 'error')); }}
-                        className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete lead">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+      <div className="grid grid-cols-1 lg:grid-cols-[220px,1fr] gap-4">
+        <div className="bg-white rounded-xl border p-2 h-fit">
+          {[
+            { id: 'main', label: 'Main Leads', count: stageLeads.length },
+            { id: 'pending', label: 'Pending Follow-ups', count: pendingLeads.length },
+            { id: 'overdue', label: 'Overdue Follow-ups', count: overdueLeads.length }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setLeadSubView(tab.id)}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md mb-1 last:mb-0 ${
+                leadSubView === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <span>{tab.label}</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded ${leadSubView === tab.id ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-700'}`}>{tab.count}</span>
+            </button>
+          ))}
         </div>
-      )}
+        {loading ? <Loader /> : displayLeads.length === 0 ? <Empty msg="No leads found for selected view" /> : (
+          <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  {isAdminLike && <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Select</th>}
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Lead ID</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Lead Name</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Last Interaction</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Source</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Allocated To</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {displayLeads.map(lead => {
+                  const stageInfo = allStages.find(s => s.stage === lead.pipeline_stage);
+                  const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
+                  const lastInteractionAt = leadFollowupMap[lead.lead_id]?.lastInteractionAt;
+                  const lastInteractionText = lastInteractionAt
+                    ? new Date(lastInteractionAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+                    : lead.days_since_contact !== null
+                      ? `${lead.days_since_contact}d ago`
+                      : 'No interaction';
+                  return (
+                    <tr key={lead.id} className="hover:bg-gray-50">
+                      {isAdminLike && (
+                        <td className="px-4 py-3">
+                          <input type="checkbox" checked={selectedLeads.includes(lead.id)}
+                            onChange={e => setSelectedLeads(prev => e.target.checked ? [...prev, lead.id] : prev.filter(x => x !== lead.id))}
+                            className="rounded" />
+                        </td>
+                      )}
+                      <td className="px-4 py-3 text-sm font-mono text-gray-600">{lead.lead_id}</td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => setShowLeadDetail(lead)} className="text-left">
+                          <div className="text-sm font-medium text-gray-900 hover:text-blue-600">{lead.name}</div>
+                          <div className="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
+                            {contactNumbers.length > 0 && <span>{contactNumbers.join(' | ')}</span>}
+                            {lead.temperature && (
+                              <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-medium ${getTemperatureBadgeClass(lead.temperature)}`}>
+                                {lead.temperature}
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{lastInteractionText}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{lead.source || lead.campaign_name || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{lead.assigned_rep || 'Unassigned'}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            onClick={() => setLogTarget({
+                              id: lead.id,
+                              entity_type: 'lead',
+                              name: lead.name,
+                              mobile: lead.mobile,
+                              additional_mobiles: lead.additional_mobiles || [],
+                              temperature: lead.temperature,
+                              defaultRepId: lead.assigned_rep_id || ''
+                            })}
+                            className="py-1 px-2 text-xs border rounded-lg hover:bg-blue-50 text-blue-600"
+                          >
+                            Log
+                          </button>
+                          <select value={lead.pipeline_stage} onChange={e => handleStageChange(lead.id, e.target.value)}
+                            className="px-2 py-1 text-xs border rounded-lg bg-white"
+                            style={{ borderColor: stageInfo?.color || '#d1d5db' }}>
+                            {allStages.map(s => <option key={s.stage} value={s.stage}>{s.stage}</option>)}
+                          </select>
+                          {role === 'admin' && (
+                            <button onClick={() => { if (confirm(`Delete lead "${lead.name}"?`)) api.delete(`/leads/${lead.id}`).then(() => loadPipeline()).catch(e => window.showToast?.('Error', e.response?.data?.detail || 'Delete failed', 'error')); }}
+                              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete lead">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Lead Detail Modal */}
       {logTarget && (
@@ -2013,10 +2135,11 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
   const [interactions, setInteractions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showLogForm, setShowLogForm] = useState(false);
-  const [logForm, setLogForm] = useState({ interaction_type: 'call', notes: '', next_follow_up: '', contact_number: '' });
+  const [logForm, setLogForm] = useState({ interaction_type: 'call', status: getDefaultInteractionStatus('call'), notes: '', next_follow_up: '', contact_number: '' });
   const [currentStage, setCurrentStage] = useState(lead.pipeline_stage);
   const role = getUserRole();
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
+  const canRunSyncActions = ['admin', 'director', 'cco', 'coo', 'manager'].includes(role);
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
 
@@ -2046,11 +2169,12 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
         company_rep_id: currentUser.id,
         lead_id: lead.lead_id,
         interaction_type: logForm.interaction_type,
+        status: logForm.status || null,
         notes: logForm.notes,
         contact_number: logForm.contact_number || null,
         next_follow_up: logForm.next_follow_up || null
       });
-      setShowLogForm(false); setLogForm({ interaction_type: 'call', notes: '', next_follow_up: '', contact_number: '' });
+      setShowLogForm(false); setLogForm({ interaction_type: 'call', status: getDefaultInteractionStatus('call'), notes: '', next_follow_up: '', contact_number: '' });
       loadInteractions();
       if (window.showToast) window.showToast('Logged', 'Interaction recorded', 'success');
     } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
@@ -2077,6 +2201,17 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
     } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
   };
 
+  const handleRequestCustomerSync = async () => {
+    const reason = prompt('Why do you want to sync this lead to Customer DB?');
+    if (reason === null) return;
+    try {
+      await api.post(`/leads/${lead.id}/request-customer-sync`, { reason });
+      if (window.showToast) window.showToast('Requested', 'Customer sync request submitted for approval', 'success');
+    } catch (e) {
+      if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error');
+    }
+  };
+
   return (
     <Modal title={`Lead: ${lead.name}`} onClose={onClose} wide>
       <div className="space-y-5">
@@ -2087,12 +2222,13 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
           <div><span className="text-xs text-gray-500 block">Email</span>{lead.email || 'N/A'}</div>
           <div><span className="text-xs text-gray-500 block">Campaign</span>{lead.campaign_name || 'Direct'}</div>
           <div><span className="text-xs text-gray-500 block">Assigned Rep</span>{lead.assigned_rep || 'Unassigned'}</div>
+          <div><span className="text-xs text-gray-500 block">Temperature</span>{lead.temperature ? <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getTemperatureBadgeClass(lead.temperature)}`}>{lead.temperature}</span> : 'N/A'}</div>
           <div><span className="text-xs text-gray-500 block">Created</span>{new Date(lead.created_at).toLocaleDateString()}</div>
         </div>
 
-        {/* Pipeline stage selector */}
+        {/* Lead stage selector */}
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-2">Pipeline Stage</label>
+          <label className="block text-xs font-medium text-gray-500 mb-2">Lead Stage</label>
           <div className="flex gap-1 flex-wrap">
             {stages.map(s => (
               <button key={s.stage} onClick={() => handleStageChange(s.stage)}
@@ -2110,22 +2246,28 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
             className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800">
             Log Interaction
           </button>
-          {lead.converted_customer_id ? (
+          {canRunSyncActions && lead.converted_customer_id ? (
             <span className="px-3 py-1.5 text-sm bg-green-50 text-green-700 rounded-lg border border-green-200">Synced to Customer DB</span>
-          ) : (
+          ) : canRunSyncActions ? (
             <button onClick={() => handleConvert('customer')}
               className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">
               Sync to Customer DB
             </button>
+          ) : null}
+          {!canRunSyncActions && !lead.converted_customer_id && role !== 'viewer' && (
+            <button onClick={handleRequestCustomerSync}
+              className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
+              Request Sync to Customer
+            </button>
           )}
-          {lead.converted_broker_id ? (
+          {canRunSyncActions && lead.converted_broker_id ? (
             <span className="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 rounded-lg border border-purple-200">Synced to Broker DB</span>
-          ) : (
+          ) : canRunSyncActions ? (
             <button onClick={() => handleConvert('broker')}
               className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700">
               Sync to Broker DB
             </button>
-          )}
+          ) : null}
           {role !== 'viewer' && lead.assigned_rep_id !== currentUser.rep_id && (
             <button onClick={handleRequestAssignment}
               className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
@@ -2137,14 +2279,17 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
         {/* Log interaction form */}
         {showLogForm && (
           <form onSubmit={handleLogInteraction} className="bg-blue-50 p-4 rounded-lg space-y-3">
-            <div className="flex gap-3">
-              <select value={logForm.interaction_type} onChange={e => setLogForm({...logForm, interaction_type: e.target.value})}
+            <div className="grid grid-cols-2 gap-3">
+              <select value={logForm.interaction_type} onChange={e => setLogForm({...logForm, interaction_type: e.target.value, status: getDefaultInteractionStatus(e.target.value)})}
                 className="px-3 py-2 text-sm border rounded-lg bg-white">
-                <option value="call">Call</option>
-                <option value="message">Message</option>
-                <option value="whatsapp">WhatsApp</option>
-                <option value="meeting">Meeting</option>
+                {INTERACTION_TYPE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
+              <select value={logForm.status} onChange={e => setLogForm({...logForm, status: e.target.value})}
+                className="px-3 py-2 text-sm border rounded-lg bg-white">
+                {getInteractionStatusOptions(logForm.interaction_type).map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+            <div>
               <input type="date" value={logForm.next_follow_up} onChange={e => setLogForm({...logForm, next_follow_up: e.target.value})}
                 className="px-3 py-2 text-sm border rounded-lg" placeholder="Follow-up date" />
             </div>
@@ -2181,7 +2326,7 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
                     i.interaction_type === 'whatsapp' ? 'bg-emerald-100 text-emerald-700' :
                     i.interaction_type === 'meeting' ? 'bg-blue-100 text-blue-700' :
                     'bg-gray-100 text-gray-700'
-                  }`}>{i.interaction_type}</span>
+                  }`}>{formatInteractionType(i.interaction_type, i.status)}</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-gray-700">{i.notes || 'No notes'}</div>
                     <div className="text-xs text-gray-400 mt-0.5">
@@ -2223,6 +2368,8 @@ function CustomerTableView() {
   const [importResult, setImportResult] = useState(null);
   const [showDetail, setShowDetail] = useState(null);
   const [logTarget, setLogTarget] = useState(null); // for quick interaction logging
+  const role = getUserRole();
+  const canCreateCustomers = role !== 'user';
 
   useEffect(() => { loadCustomers(); }, []);
   const loadCustomers = async () => {
@@ -2242,6 +2389,10 @@ function CustomerTableView() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!canCreateCustomers && !editing) {
+      if (window.showToast) window.showToast('Access Restricted', 'Sales reps can add leads only.', 'warning');
+      return;
+    }
     try {
       const payload = {
         ...form,
@@ -2302,6 +2453,7 @@ function CustomerTableView() {
   };
 
   const handleImport = async () => {
+    if (!canCreateCustomers) return;
     if (!importFile) return;
     const fd = new FormData(); fd.append('file', importFile);
     try { const res = await api.post('/customers/bulk-import', fd); setImportResult(res.data); setImportFile(null); loadCustomers(); }
@@ -2322,8 +2474,12 @@ function CustomerTableView() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">{customers.length} customers</p>
-        <button onClick={() => { setEditing(null); setForm(emptyCustomerForm); setShowModal(true); }}
-          className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Customer</button>
+        {canCreateCustomers ? (
+          <button onClick={() => { setEditing(null); setForm(emptyCustomerForm); setShowModal(true); }}
+            className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Add Customer</button>
+        ) : (
+          <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">Sales reps can add leads only</span>
+        )}
       </div>
 
       {loading ? <Loader /> : customers.length === 0 ? <Empty msg="No customers" /> : (
@@ -2365,7 +2521,9 @@ function CustomerTableView() {
         </div>
       )}
 
-      <BulkImport entity="customers" onImport={handleImport} importFile={importFile} setImportFile={setImportFile} importResult={importResult} />
+      {canCreateCustomers && (
+        <BulkImport entity="customers" onImport={handleImport} importFile={importFile} setImportFile={setImportFile} importResult={importResult} />
+      )}
 
       {showModal && (
         <Modal title={editing ? 'Edit Customer' : 'Add Customer'} onClose={() => setShowModal(false)}>
@@ -3095,7 +3253,7 @@ function InteractionsView() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({
-    company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '', contact_number: ''
+    company_rep_id: '', interaction_type: 'call', status: getDefaultInteractionStatus('call'), notes: '', next_follow_up: '', contact_number: ''
   });
   const [selectedEntityType, setSelectedEntityType] = useState('customer');
   const [selectedEntity, setSelectedEntity] = useState(null);
@@ -3139,7 +3297,7 @@ function InteractionsView() {
       await api.post('/interactions', payload);
       if (window.showToast) window.showToast('Interaction Logged', `${form.interaction_type} with ${selectedEntity.name} recorded`, 'success');
       setShowModal(false);
-      setForm({ company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '', contact_number: '' });
+      setForm({ company_rep_id: '', interaction_type: 'call', status: getDefaultInteractionStatus('call'), notes: '', next_follow_up: '', contact_number: '' });
       setSelectedEntity(null);
       setSelectedEntityType('customer');
       loadData();
@@ -3152,7 +3310,14 @@ function InteractionsView() {
         <div><h2 className="text-2xl font-semibold text-gray-900">Interactions</h2>
           <p className="text-sm text-gray-500 mt-1">Track rep communications</p></div>
         <button onClick={() => {
-          setForm(f => ({ ...f, company_rep_id: currentUser.id || '', contact_number: '' }));
+          setForm({
+            company_rep_id: currentUser.id || '',
+            interaction_type: 'call',
+            status: getDefaultInteractionStatus('call'),
+            notes: '',
+            next_follow_up: '',
+            contact_number: ''
+          });
           setSelectedEntity(null);
           setSelectedEntityType('customer');
           setShowModal(true);
@@ -3164,7 +3329,7 @@ function InteractionsView() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <SummaryCard label="Total Interactions" value={summary.total_interactions} />
             <SummaryCard label="Total Calls" value={summary.total_calls} />
-            <SummaryCard label="Messages" value={summary.total_messages} />
+            <SummaryCard label="Legacy Messages" value={summary.total_messages} />
             <SummaryCard label="WhatsApp" value={summary.total_whatsapp} />
           </div>
           <div className="grid grid-cols-3 gap-4">
@@ -3213,8 +3378,9 @@ function InteractionsView() {
                   <td className="px-6 py-4 text-center">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       i.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
-                      i.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' : 'bg-gray-100'
-                    }`}>{i.interaction_type}</span>
+                      i.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' :
+                      i.interaction_type === 'meeting' ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100'
+                    }`}>{formatInteractionType(i.interaction_type, i.status)}</span>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">{i.status || '-'}</td>
                   <td className="px-6 py-4 text-sm">{i.next_follow_up || '-'}</td>
@@ -3249,6 +3415,11 @@ function InteractionsView() {
               }}
               showTypeSelector={true}
             />
+            {selectedEntity?.temperature && (
+              <div className="text-xs text-gray-600">
+                Temperature: <span className={`px-2 py-0.5 rounded-full font-medium ${getTemperatureBadgeClass(selectedEntity.temperature)}`}>{selectedEntity.temperature}</span>
+              </div>
+            )}
 
             {interactionContactOptions.length > 1 && (
               <div>
@@ -3263,15 +3434,15 @@ function InteractionsView() {
 
             <div className="grid grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
-                <select required value={form.interaction_type} onChange={e => setForm({...form, interaction_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="call">Call</option>
-                  <option value="message">Message</option>
-                  <option value="whatsapp">WhatsApp</option>
-                  <option value="meeting">Meeting</option>
-                  <option value="site_visit">Site Visit</option>
+                <select required value={form.interaction_type} onChange={e => setForm({...form, interaction_type: e.target.value, status: getDefaultInteractionStatus(e.target.value)})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  {INTERACTION_TYPE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </div>
-              <Input label="Status" value={form.status} onChange={e => setForm({...form, status: e.target.value})} placeholder="e.g., Interested, Not available" />
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+                <select value={form.status} onChange={e => setForm({...form, status: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                  {getInteractionStatusOptions(form.interaction_type).map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
             </div>
             <Input label="Notes" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} />
             <Input label="Next Follow-up" type="date" value={form.next_follow_up} onChange={e => setForm({...form, next_follow_up: e.target.value})} />
@@ -3741,6 +3912,7 @@ function CampaignAnalytics() {
   const [funnelView, setFunnelView] = useState('bar');
   const [campaignFilter, setCampaignFilter] = useState('');
   const [campaigns, setCampaigns] = useState([]);
+  const [drilldownFilters, setDrilldownFilters] = useState(null);
 
   useEffect(() => { loadAnalytics(); }, []);
 
@@ -3815,7 +3987,8 @@ function CampaignAnalytics() {
               {funnelData.map((s, i) => {
                 const widthPct = Math.max(20, (s.count / funnelMax) * 100);
                 return (
-                  <div key={s.stage} className="relative flex items-center justify-center text-white text-sm font-medium rounded-md transition-all"
+                  <div key={s.stage} onClick={() => s.count > 0 && setDrilldownFilters({ stage: s.stage, campaign_id: campaignFilter || undefined })}
+                    className="relative flex items-center justify-center text-white text-sm font-medium rounded-md transition-all cursor-pointer hover:opacity-90"
                     style={{ width: `${widthPct}%`, height: '44px', backgroundColor: s.color || '#6B7280', minWidth: '120px' }}>
                     <span>{s.stage}: {s.count}</span>
                     {i > 0 && <span className="absolute -top-3 right-2 text-xs text-gray-500">{s.pct_of_previous}% from prev</span>}
@@ -3829,7 +4002,8 @@ function CampaignAnalytics() {
           {funnelView === 'bar' && (
             <div className="space-y-3">
               {funnelData.map(s => (
-                <div key={s.stage} className="flex items-center gap-3">
+                <div key={s.stage} className="flex items-center gap-3 cursor-pointer hover:bg-gray-50 rounded-lg p-1 -m-1 transition-colors"
+                  onClick={() => s.count > 0 && setDrilldownFilters({ stage: s.stage, campaign_id: campaignFilter || undefined })}>
                   <div className="w-28 text-sm font-medium text-gray-700 text-right">{s.stage}</div>
                   <div className="flex-1 h-9 bg-gray-100 rounded-lg overflow-hidden relative">
                     <div className="h-full rounded-lg transition-all" style={{ width: `${s.pct_of_total}%`, backgroundColor: s.color || '#6B7280', minWidth: s.count > 0 ? '24px' : '0' }} />
@@ -3845,7 +4019,9 @@ function CampaignAnalytics() {
             <div className="flex gap-2 overflow-x-auto pb-2">
               {funnelData.map((s, i) => (
                 <div key={s.stage} className="flex items-center gap-2 flex-shrink-0">
-                  <div className="border rounded-xl p-4 min-w-[120px] text-center" style={{ borderColor: s.color || '#6B7280' }}>
+                  <div onClick={() => s.count > 0 && setDrilldownFilters({ stage: s.stage, campaign_id: campaignFilter || undefined })}
+                    className="border rounded-xl p-4 min-w-[120px] text-center cursor-pointer hover:shadow-md transition-shadow"
+                    style={{ borderColor: s.color || '#6B7280' }}>
                     <div className="text-2xl font-bold" style={{ color: s.color || '#6B7280' }}>{s.count}</div>
                     <div className="text-xs font-medium text-gray-700 mt-1">{s.stage}</div>
                     <div className="text-xs text-gray-400 mt-0.5">{s.pct_of_total}%</div>
@@ -3881,15 +4057,19 @@ function CampaignAnalytics() {
                 {repData.reps.map(r => (
                   <tr key={r.rep_id} className="border-b hover:bg-gray-50">
                     <td className="p-2">
-                      <button onClick={() => { if (window.setActiveTab) window.setActiveTab('interactions'); }} className="text-left hover:text-blue-600">
+                      <button onClick={() => setDrilldownFilters({ rep_id: r.rep_id, campaign_id: campaignFilter || undefined })} className="text-left hover:text-blue-600">
                         <div className="font-medium">{r.name}</div>
                         <div className="text-xs text-gray-500">{r.rep_id}</div>
                       </button>
                     </td>
-                    <td className="text-right p-2 font-medium">{r.total_assigned}</td>
-                    <td className="text-right p-2"><span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['0_7d'] > 0 ? 'bg-green-100 text-green-800' : 'text-gray-400'}`}>{r.not_attempted['0_7d']}</span></td>
-                    <td className="text-right p-2"><span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['7_14d'] > 0 ? 'bg-yellow-100 text-yellow-800' : 'text-gray-400'}`}>{r.not_attempted['7_14d']}</span></td>
-                    <td className="text-right p-2"><span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['14d_plus'] > 0 ? 'bg-red-100 text-red-800' : 'text-gray-400'}`}>{r.not_attempted['14d_plus']}</span></td>
+                    <td className="text-right p-2 font-medium cursor-pointer hover:text-blue-600"
+                      onClick={() => r.total_assigned > 0 && setDrilldownFilters({ rep_id: r.rep_id, campaign_id: campaignFilter || undefined })}>{r.total_assigned}</td>
+                    <td className="text-right p-2 cursor-pointer" onClick={() => r.not_attempted['0_7d'] > 0 && setDrilldownFilters({ rep_id: r.rep_id, aging_bucket: '0_7d', campaign_id: campaignFilter || undefined })}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['0_7d'] > 0 ? 'bg-green-100 text-green-800 hover:ring-2 hover:ring-green-300' : 'text-gray-400'}`}>{r.not_attempted['0_7d']}</span></td>
+                    <td className="text-right p-2 cursor-pointer" onClick={() => r.not_attempted['7_14d'] > 0 && setDrilldownFilters({ rep_id: r.rep_id, aging_bucket: '7_14d', campaign_id: campaignFilter || undefined })}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['7_14d'] > 0 ? 'bg-yellow-100 text-yellow-800 hover:ring-2 hover:ring-yellow-300' : 'text-gray-400'}`}>{r.not_attempted['7_14d']}</span></td>
+                    <td className="text-right p-2 cursor-pointer" onClick={() => r.not_attempted['14d_plus'] > 0 && setDrilldownFilters({ rep_id: r.rep_id, aging_bucket: '14d_plus', campaign_id: campaignFilter || undefined })}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['14d_plus'] > 0 ? 'bg-red-100 text-red-800 hover:ring-2 hover:ring-red-300' : 'text-gray-400'}`}>{r.not_attempted['14d_plus']}</span></td>
                     <td className="text-right p-2"><span className={r.pending_followups > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}>{r.pending_followups}</span></td>
                     <td className="text-right p-2">{r.interactions?.total || 0}</td>
                   </tr>
@@ -4014,6 +4194,11 @@ function CampaignAnalytics() {
             </table>
           </div>
         </div>
+      )}
+
+      {/* Drilldown Modal */}
+      {drilldownFilters && (
+        <AnalyticsLeadDrilldown filters={drilldownFilters} onClose={() => setDrilldownFilters(null)} />
       )}
     </div>
   );
@@ -4577,6 +4762,9 @@ function TasksDashboardMini() {
 }
 
 function DashboardView() {
+  const role = getUserRole();
+  const isSalesRoleView = ['user', 'manager'].includes(role);
+  const isGlobalRoleView = ['admin', 'director', 'cco', 'coo', 'creator', 'viewer'].includes(role);
   const [summary, setSummary] = useState(null);
   const [customerStats, setCustomerStats] = useState([]);
   const [projectStats, setProjectStats] = useState([]);
@@ -4596,6 +4784,8 @@ function DashboardView() {
   const [revenueTrends, setRevenueTrends] = useState([]);
   const [campaignMetrics, setCampaignMetrics] = useState(null);
   const [campaignMetricsLoading, setCampaignMetricsLoading] = useState(false);
+  const [salesKpis, setSalesKpis] = useState(null);
+  const [dashDrilldownFilters, setDashDrilldownFilters] = useState(null);
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
@@ -4622,6 +4812,8 @@ function DashboardView() {
       setTxnSummary(txnSumRes.data);
       setReceiptSummary(rcptSumRes.data);
       setRevenueTrends(trendRes.data || []);
+      const salesRes = await api.get('/dashboard/sales-kpis').catch(() => ({ data: null }));
+      setSalesKpis(salesRes.data);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -4668,6 +4860,41 @@ function DashboardView() {
   // Revenue trends max for scaling
   const trendMax = revenueTrends.length > 0 ? Math.max(...revenueTrends.map(d => Math.max(d.receipts || 0, d.payments || 0)), 1) : 1;
 
+  if (!isGlobalRoleView && !isSalesRoleView) {
+    return <div className="text-center py-12 text-gray-400">No dashboard view configured for role: {role}</div>;
+  }
+
+  if (loading) return <Loader />;
+
+  if (isSalesRoleView) {
+    const tokensValue = salesKpis?.tokens ?? 'N/A';
+    const partialDownPaymentsValue = salesKpis?.partial_down_payments ?? 'N/A';
+    const closedWonValue = salesKpis?.closed_won_cases ?? 'N/A';
+    const achievedRevenueValue = salesKpis?.achieved_revenue ?? summary?.financials?.total_received ?? 'N/A';
+    const soldUnits = salesKpis?.project_units_sold;
+    const targetUnits = salesKpis?.project_units_target;
+    const unitTargetDisplay = (soldUnits !== undefined && targetUnits !== undefined) ? `${soldUnits}/${targetUnits}` : 'N/A';
+    const unitTargetSub = salesKpis?.project_units_target_achievement_pct !== undefined
+      ? `${salesKpis.project_units_target_achievement_pct}% achieved`
+      : 'Awaiting target endpoint data';
+
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">Analytics Engine</h2>
+          <p className="text-sm text-gray-500 mt-1">Role-scoped sales dashboard</p>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <SummaryCard label="Tokens" value={typeof tokensValue === 'number' ? formatCurrency(tokensValue) : tokensValue} sub={salesKpis ? undefined : 'Fallback mode'} />
+          <SummaryCard label="Partial Down Payments" value={typeof partialDownPaymentsValue === 'number' ? formatCurrency(partialDownPaymentsValue) : partialDownPaymentsValue} sub={salesKpis ? undefined : 'Fallback mode'} />
+          <SummaryCard label="Closed Won Cases" value={closedWonValue} />
+          <SummaryCard label="Achieved Revenue" value={typeof achievedRevenueValue === 'number' ? formatCurrency(achievedRevenueValue) : achievedRevenueValue} />
+          <SummaryCard label="Project Unit/Target" value={unitTargetDisplay} sub={unitTargetSub} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -4685,7 +4912,7 @@ function DashboardView() {
         ))}
       </div>
 
-      {loading ? <Loader /> : summary && (
+      {summary && (
         <>
           {/* ====== OVERVIEW TAB ====== */}
           {dashSubTab === 'overview' && (
@@ -4996,7 +5223,8 @@ function DashboardView() {
                       <h3 className="text-lg font-semibold mb-4">Conversion Funnel</h3>
                       <div className="space-y-2">
                         {campaignMetrics.funnel.filter(s => s.count > 0).map((s, i) => (
-                          <div key={s.stage} className="flex items-center gap-3">
+                          <div key={s.stage} className="flex items-center gap-3 cursor-pointer hover:bg-gray-50 rounded-lg p-1 -m-1 transition-colors"
+                            onClick={() => s.count > 0 && setDashDrilldownFilters({ stage: s.stage })}>
                             <div className="w-28 text-sm font-medium text-gray-700 text-right">{s.stage}</div>
                             <div className="flex-1 h-8 bg-gray-100 rounded-lg overflow-hidden relative">
                               <div className="h-full rounded-lg transition-all" style={{ width: `${s.pct_of_total}%`, backgroundColor: s.color || '#6B7280', minWidth: s.count > 0 ? '20px' : '0' }} />
@@ -5060,6 +5288,9 @@ function DashboardView() {
       )}
       {selectedBroker && brokerDetails && (
         <BrokerDetailModal broker={brokerDetails} onClose={() => { setSelectedBroker(null); setBrokerDetails(null); }} />
+      )}
+      {dashDrilldownFilters && (
+        <AnalyticsLeadDrilldown filters={dashDrilldownFilters} onClose={() => setDashDrilldownFilters(null)} />
       )}
     </div>
   );
@@ -6061,6 +6292,13 @@ function SettingsView() {
   const [deletionRequests, setDeletionRequests] = useState([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [delReqFilter, setDelReqFilter] = useState('pending');
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const canReviewLeadSyncRequests =
+    ['admin', 'cco', 'director', 'coo'].includes(currentUser.role) ||
+    ['REP-0014', 'REP-0015', 'REP-0008'].includes(currentUser.rep_id);
+  const canViewOrgNotifications =
+    ['admin', 'cco', 'director', 'coo'].includes(currentUser.role) ||
+    ['REP-0014', 'REP-0015', 'REP-0008'].includes(currentUser.rep_id);
 
   useEffect(() => { loadReps(); loadPendingCount(); }, []);
   useEffect(() => { if (settingsTab === 'deletion-requests') loadDeletionRequests(); }, [settingsTab, delReqFilter]);
@@ -6170,7 +6408,7 @@ function SettingsView() {
             </button>
             <button onClick={() => setSettingsTab('pipeline-stages')}
               className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'pipeline-stages' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-              Pipeline Stages
+              Lead Stages
             </button>
             <button onClick={() => setSettingsTab('lead-assignments')}
               className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'lead-assignments' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
@@ -6185,6 +6423,18 @@ function SettingsView() {
               Lookup Values
             </button>
           </>
+        )}
+        {canReviewLeadSyncRequests && (
+          <button onClick={() => setSettingsTab('lead-sync-requests')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'lead-sync-requests' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            Lead Sync Requests
+          </button>
+        )}
+        {canViewOrgNotifications && (
+          <button onClick={() => setSettingsTab('notifications')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${settingsTab === 'notifications' ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            Notifications
+          </button>
         )}
       </div>
 
@@ -6277,6 +6527,8 @@ function SettingsView() {
       {settingsTab === 'lead-assignments' && <LeadAssignmentsSettings />}
       {settingsTab === 'search-audit' && <SearchAuditSettings />}
       {settingsTab === 'lookup-values' && <LookupValuesSettings />}
+      {settingsTab === 'lead-sync-requests' && canReviewLeadSyncRequests && <LeadSyncRequestsSettings />}
+      {settingsTab === 'notifications' && canViewOrgNotifications && <OrgNotificationsSettings />}
 
       {settingsTab === 'reps' && (
       <div className="bg-white rounded-2xl shadow-sm border p-6">
@@ -6364,6 +6616,313 @@ function SettingsView() {
           </Modal>
         )}
       </div>
+      )}
+    </div>
+  );
+}
+
+function LeadSyncRequestsSettings() {
+  const [requests, setRequests] = useState([]);
+  const [statusFilter, setStatusFilter] = useState('pending');
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState([]);
+  const [bulkLeadIds, setBulkLeadIds] = useState('');
+  const [bulkSyncing, setBulkSyncing] = useState(false);
+
+  const loadRequests = async () => {
+    setLoading(true);
+    try {
+      const query = statusFilter ? `?status=${statusFilter}` : '';
+      const res = await api.get(`/lead-sync-requests${query}`);
+      setRequests(res.data || []);
+      setSelected([]);
+    } catch (e) {
+      if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed to load sync requests', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadRequests(); }, [statusFilter]);
+
+  const handleReview = async (req, action) => {
+    try {
+      await api.post(`/lead-sync-requests/${req.id || req.request_id}/review`, { action });
+      if (window.showToast) window.showToast('Success', `Request ${action}d`, 'success');
+      loadRequests();
+    } catch (e) {
+      if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Action failed', 'error');
+    }
+  };
+
+  const handleBulkReview = async (action) => {
+    if (!selected.length) return;
+    try {
+      await api.post('/lead-sync-requests/bulk-review', { request_ids: selected, action });
+      if (window.showToast) window.showToast('Success', `Bulk ${action} completed`, 'success');
+      loadRequests();
+    } catch (e) {
+      if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Bulk review failed', 'error');
+    }
+  };
+
+  const handleBulkDirectSync = async () => {
+    const leadIds = (bulkLeadIds || '')
+      .split(/[\n,\s]+/)
+      .map(x => x.trim())
+      .filter(Boolean);
+    if (!leadIds.length) return;
+    setBulkSyncing(true);
+    try {
+      const res = await api.post('/leads/bulk-sync-customers', { lead_ids: leadIds });
+      if (window.showToast) {
+        window.showToast(
+          'Bulk Sync Complete',
+          `${res.data.synced || 0} synced, ${res.data.linked_existing || 0} linked existing, ${res.data.failed || 0} failed`,
+          'success'
+        );
+      }
+      setBulkLeadIds('');
+      loadRequests();
+    } catch (e) {
+      if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Bulk customer sync failed', 'error');
+    } finally {
+      setBulkSyncing(false);
+    }
+  };
+
+  const toggleSelect = (id) => {
+    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const pendingRows = requests.filter(r => r.status === 'pending');
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border p-6 space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Lead Sync Requests</h3>
+          <p className="text-sm text-gray-500">Approve/reject rep requests and run direct bulk sync from leads to customers.</p>
+        </div>
+        <div className="flex gap-2">
+          {['pending', 'approved', 'rejected', ''].map(status => (
+            <button
+              key={status || 'all'}
+              onClick={() => setStatusFilter(status)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg ${
+                statusFilter === status ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {status === '' ? 'All' : status.charAt(0).toUpperCase() + status.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+        <div className="text-sm font-medium text-emerald-900 mb-2">Direct Bulk Sync (Admin/Approver Utility)</div>
+        <p className="text-xs text-emerald-800 mb-3">Paste Lead IDs (example: LEAD-0001, LEAD-0002). This syncs immediately without waiting for requests.</p>
+        <div className="flex gap-2">
+          <textarea
+            value={bulkLeadIds}
+            onChange={e => setBulkLeadIds(e.target.value)}
+            placeholder="LEAD-0001, LEAD-0002"
+            rows={2}
+            className="flex-1 px-3 py-2 text-sm border rounded-lg bg-white"
+          />
+          <button
+            onClick={handleBulkDirectSync}
+            disabled={bulkSyncing}
+            className="px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {bulkSyncing ? 'Syncing...' : 'Bulk Sync Leads'}
+          </button>
+        </div>
+      </div>
+
+      {statusFilter === 'pending' && pendingRows.length > 0 && (
+        <div className="flex gap-2">
+          <button onClick={() => setSelected(pendingRows.map(r => r.id || r.request_id))}
+            className="px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50">
+            Select All Pending
+          </button>
+          <button onClick={() => handleBulkReview('approve')}
+            disabled={!selected.length}
+            className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50">
+            Bulk Approve
+          </button>
+          <button onClick={() => handleBulkReview('reject')}
+            disabled={!selected.length}
+            className="px-3 py-1.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50">
+            Bulk Reject
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <Loader />
+      ) : requests.length === 0 ? (
+        <div className="text-center py-8 text-gray-400">No {statusFilter || ''} lead sync requests</div>
+      ) : (
+        <div className="divide-y">
+          {requests.map(req => {
+            const rowId = req.id || req.request_id;
+            return (
+              <div key={rowId} className="py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-mono text-gray-400">{req.request_id}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs ${
+                        req.status === 'pending' ? 'bg-yellow-50 text-yellow-700' :
+                        req.status === 'approved' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                      }`}>{req.status}</span>
+                    </div>
+                    <div className="font-medium text-gray-900">{req.lead_code} - {req.lead_name}</div>
+                    <div className="text-sm text-gray-500">
+                      Requested by {req.requester_name || req.requester_rep_id} {req.created_at ? `on ${new Date(req.created_at).toLocaleString()}` : ''}
+                    </div>
+                    {req.reason && <div className="text-sm text-gray-600 mt-1 bg-gray-50 p-2 rounded">Reason: {req.reason}</div>}
+                    {req.status !== 'pending' && (
+                      <div className="text-xs text-gray-400 mt-2">
+                        Reviewed by {req.reviewer_name || req.reviewer_rep_id || 'N/A'} {req.reviewed_at ? `on ${new Date(req.reviewed_at).toLocaleString()}` : ''}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {req.status === 'pending' && (
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(rowId)}
+                        onChange={() => toggleSelect(rowId)}
+                        className="h-4 w-4"
+                      />
+                    )}
+                    {req.status === 'pending' && (
+                      <>
+                        <button onClick={() => handleReview(req, 'approve')}
+                          className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700">
+                          Approve
+                        </button>
+                        <button onClick={() => handleReview(req, 'reject')}
+                          className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">
+                          Reject
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OrgNotificationsSettings() {
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [repFilter, setRepFilter] = useState('');
+  const [reps, setReps] = useState([]);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState('');
+
+  const loadReps = async () => {
+    try {
+      const res = await api.get('/company-reps');
+      setReps(res.data || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const loadFeed = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', '300');
+      if (repFilter) params.set('rep_id', repFilter);
+      if (unreadOnly) params.set('unread_only', 'true');
+      if (categoryFilter) params.set('category', categoryFilter);
+      const res = await api.get(`/notifications/org-feed?${params.toString()}`);
+      setItems(res.data.items || []);
+      setTotal(res.data.total || 0);
+    } catch (e) {
+      if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed to load notifications', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadReps(); }, []);
+  useEffect(() => { loadFeed(); }, [repFilter, unreadOnly, categoryFilter]);
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Organization Notifications</h3>
+          <p className="text-sm text-gray-500">Complete notifications list across users for admin/director leadership review.</p>
+        </div>
+        <button onClick={loadFeed} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">Refresh</button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <select value={repFilter} onChange={e => setRepFilter(e.target.value)} className="px-3 py-2 text-sm border rounded-lg bg-white">
+          <option value="">All recipients</option>
+          {reps.map(r => <option key={r.rep_id || r.id} value={r.rep_id}>{r.name} ({r.rep_id})</option>)}
+        </select>
+        <input value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+          placeholder="Category filter (e.g. sync_request)"
+          className="px-3 py-2 text-sm border rounded-lg" />
+        <label className="flex items-center gap-2 text-sm text-gray-700">
+          <input type="checkbox" checked={unreadOnly} onChange={e => setUnreadOnly(e.target.checked)} />
+          Unread only
+        </label>
+        <div className="text-sm text-gray-500 flex items-center justify-end">Showing {items.length} of {total}</div>
+      </div>
+
+      {loading ? (
+        <Loader />
+      ) : items.length === 0 ? (
+        <div className="text-center py-8 text-gray-400">No notifications found for selected filters</div>
+      ) : (
+        <div className="overflow-x-auto border rounded-lg">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-gray-600">
+              <tr>
+                <th className="px-3 py-2 text-left">Time</th>
+                <th className="px-3 py-2 text-left">Recipient</th>
+                <th className="px-3 py-2 text-left">Title</th>
+                <th className="px-3 py-2 text-left">Message</th>
+                <th className="px-3 py-2 text-left">Category</th>
+                <th className="px-3 py-2 text-left">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {items.map(n => (
+                <tr key={n.id} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 text-xs">{new Date(n.created_at).toLocaleString()}</td>
+                  <td className="px-3 py-2 text-xs">
+                    <div className="font-medium">{n.recipient_name || '-'}</div>
+                    <div className="text-gray-500">{n.recipient_rep_id}</div>
+                  </td>
+                  <td className="px-3 py-2">{n.title}</td>
+                  <td className="px-3 py-2 text-gray-600 max-w-md">{n.message || '-'}</td>
+                  <td className="px-3 py-2 text-xs">{n.category || '-'}</td>
+                  <td className="px-3 py-2">
+                    <span className={`px-2 py-0.5 rounded-full text-xs ${n.is_read ? 'bg-gray-100 text-gray-600' : 'bg-blue-50 text-blue-700'}`}>
+                      {n.is_read ? 'Read' : 'Unread'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -6755,7 +7314,7 @@ function PipelineStagesSettings() {
     <div className="bg-white rounded-2xl shadow-sm border p-6">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-lg font-semibold text-gray-900">Pipeline Stages</h3>
+          <h3 className="text-lg font-semibold text-gray-900">Lead Stages</h3>
           <p className="text-sm text-gray-500">Configure lead pipeline stages</p>
         </div>
         <button onClick={() => setShowForm(!showForm)} className="bg-gray-900 text-white px-4 py-2 text-sm rounded-lg hover:bg-gray-800">
@@ -7046,11 +7605,18 @@ function CustomerDetailModal({ customer, onClose }) {
   const installments = customer.installments || { overdue: [], future: [], paid: [] };
   const receipts = Array.isArray(customer.receipts) ? customer.receipts : [];
   const interactions = Array.isArray(customer.interactions) ? customer.interactions : [];
+  const transactionProgress = Array.isArray(customer.transaction_progress) ? customer.transaction_progress : [];
   const financials = {
     total_sale: customer.financials?.total_sale || 0,
     total_received: customer.financials?.total_received || 0,
     total_overdue: customer.financials?.total_overdue ?? customer.financials?.overdue ?? 0,
     future_receivable: customer.financials?.future_receivable || 0,
+  };
+  const getClassificationBadge = (cls) => {
+    if (cls === 'TOKEN_MONEY') return 'bg-amber-100 text-amber-700';
+    if (cls === 'PARTIAL_DOWN_PAYMENT') return 'bg-blue-100 text-blue-700';
+    if (cls === 'DOWN_PAYMENT_COMPLETED') return 'bg-emerald-100 text-emerald-700';
+    return 'bg-gray-100 text-gray-600';
   };
 
   return (
@@ -7105,6 +7671,64 @@ function CustomerDetailModal({ customer, onClose }) {
             </div>
           </div>
         </div>
+
+        {/* Compact Unit Progress (additive block; keeps existing modal sections) */}
+        {transactionProgress.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Unit Progress Snapshot</h3>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left p-2 font-semibold">Unit</th>
+                    <th className="text-left p-2 font-semibold">Project</th>
+                    <th className="text-left p-2 font-semibold">Down Payment Stage</th>
+                    <th className="text-right p-2 font-semibold">Installments</th>
+                    <th className="text-right p-2 font-semibold">Paid %</th>
+                    <th className="text-right p-2 font-semibold">Paid / Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transactionProgress.map((tp, idx) => (
+                    <tr key={tp.transaction_uuid || idx} className="border-t hover:bg-gray-50">
+                      <td className="p-2">
+                        <div className="font-medium">{tp.unit_number || 'N/A'}</div>
+                        <div className="text-xs text-gray-500">{tp.transaction_id || '-'}</div>
+                      </td>
+                      <td className="p-2">{tp.project_name || 'N/A'}</td>
+                      <td className="p-2">
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${getClassificationBadge(tp.classification)}`}>
+                          {tp.classification === 'TOKEN_MONEY' ? 'Token Money'
+                            : tp.classification === 'PARTIAL_DOWN_PAYMENT' ? 'Partial Down Payment'
+                            : tp.classification === 'DOWN_PAYMENT_COMPLETED' ? 'Down Payment Completed'
+                            : 'Unknown'}
+                        </span>
+                        {tp.classification_error && (
+                          <div className="text-xs text-red-600 mt-1">Classification unavailable</div>
+                        )}
+                      </td>
+                      <td className="text-right p-2">
+                        <div className="font-medium">
+                          {tp.installments_paid || 0} Paid / {tp.installments_overdue || 0} Overdue / {tp.installments_pending || 0} Pending
+                        </div>
+                        <div className="text-xs text-gray-500">Total: {tp.installments_total || 0}</div>
+                      </td>
+                      <td className="text-right p-2">
+                        <div className="font-medium">{Number(tp.paid_percent || 0).toFixed(2)}%</div>
+                        {tp.threshold_percent !== null && tp.threshold_percent !== undefined && (
+                          <div className="text-xs text-gray-500">x: {Number(tp.threshold_percent).toFixed(2)}%</div>
+                        )}
+                      </td>
+                      <td className="text-right p-2 font-medium">
+                        {formatCurrency(tp.cumulative_paid || 0)} / {formatCurrency(tp.total_value || 0)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Overdue Installments */}
         {installments.overdue.length > 0 && (
@@ -7401,6 +8025,167 @@ function BrokerDetailModal({ broker, onClose }) {
 }
 
 // ============================================
+// ANALYTICS LEAD DRILLDOWN MODAL
+// ============================================
+function AnalyticsLeadDrilldown({ filters, onClose }) {
+  const [leads, setLeads] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [sortCol, setSortCol] = useState('lead_id');
+  const [sortDir, setSortDir] = useState('asc');
+
+  useEffect(() => {
+    if (filters) loadDrilldown();
+  }, [filters]);
+
+  const loadDrilldown = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (filters.stage) params.set('stage', filters.stage);
+      if (filters.aging_bucket) params.set('aging_bucket', filters.aging_bucket);
+      if (filters.rep_id) params.set('rep_id', filters.rep_id);
+      if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
+      if (filters.source) params.set('source', filters.source);
+      const res = await api.get(`/analytics/leads/drilldown?${params}`);
+      setLeads(res.data.leads || []);
+      setTotal(res.data.total || 0);
+    } catch (e) {
+      console.error('Drilldown error:', e);
+      setError('Unable to load lead details. The analytics drilldown service may be temporarily unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExport = async (format) => {
+    try {
+      const params = new URLSearchParams();
+      if (filters.stage) params.set('stage', filters.stage);
+      if (filters.aging_bucket) params.set('aging_bucket', filters.aging_bucket);
+      if (filters.rep_id) params.set('rep_id', filters.rep_id);
+      if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
+      if (filters.source) params.set('source', filters.source);
+      params.set('export_format', format);
+      const res = await api.get(`/analytics/leads/drilldown?${params}`, { responseType: 'blob' });
+      const ext = format === 'csv' ? 'csv' : 'xlsx';
+      const blob = new Blob([res.data]);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `leads_drilldown.${ext}`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      window.showToast?.('Export', `Downloaded ${format.toUpperCase()} successfully`, 'success');
+    } catch (e) {
+      console.error('Export error:', e);
+      window.showToast?.('Export Error', 'Failed to export data', 'error');
+    }
+  };
+
+  const sorted = [...leads].sort((a, b) => {
+    const av = a[sortCol] ?? '', bv = b[sortCol] ?? '';
+    if (typeof av === 'number') return sortDir === 'asc' ? av - bv : bv - av;
+    return sortDir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+
+  const toggleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+
+  const filterLabel = [
+    filters.stage && `Stage: ${filters.stage}`,
+    filters.aging_bucket && `Aging: ${filters.aging_bucket.replace(/_/g, ' ').replace('d plus', 'd+')}`,
+    filters.rep_id && `Rep: ${filters.rep_id}`,
+    filters.campaign_id && `Campaign: ${filters.campaign_id}`,
+    filters.source && `Source: ${filters.source}`,
+  ].filter(Boolean).join(' | ') || 'All Leads';
+
+  const tempColors = { hot: 'bg-red-100 text-red-700', mild: 'bg-yellow-100 text-yellow-700', cold: 'bg-blue-100 text-blue-700' };
+  const SortIcon = ({ col }) => sortCol === col ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : '';
+
+  return (
+    <Modal title="Lead Drilldown" onClose={onClose} wide>
+      <div className="space-y-4">
+        {/* Filter pills + Export */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-500">Filters:</span>
+            <span className="px-2 py-1 bg-gray-100 rounded text-xs font-medium">{filterLabel}</span>
+            <span className="text-sm text-gray-400">({total} leads)</span>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => handleExport('csv')}
+              className="px-3 py-1.5 text-xs font-medium border rounded-lg hover:bg-gray-50 transition-colors">
+              Export CSV
+            </button>
+            <button onClick={() => handleExport('excel')}
+              className="px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">
+              Export Excel
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        {loading ? <Loader /> : error ? (
+          <div className="text-center py-8">
+            <div className="text-gray-400 text-sm mb-2">{error}</div>
+            <button onClick={loadDrilldown} className="text-xs text-blue-600 hover:underline">Retry</button>
+          </div>
+        ) : leads.length === 0 ? (
+          <Empty message="No leads match the selected filters" />
+        ) : (
+          <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white z-10">
+                <tr className="border-b">
+                  {[
+                    { key: 'lead_id', label: 'Lead ID' },
+                    { key: 'name', label: 'Name' },
+                    { key: 'mobile', label: 'Mobile' },
+                    { key: 'pipeline_stage', label: 'Stage' },
+                    { key: 'status', label: 'Status' },
+                    { key: 'source', label: 'Source' },
+                    { key: 'assigned_rep', label: 'Rep' },
+                    { key: 'temperature', label: 'Temp' },
+                    { key: 'days_since_creation', label: 'Age (days)' },
+                    { key: 'campaign', label: 'Campaign' },
+                  ].map(c => (
+                    <th key={c.key} onClick={() => toggleSort(c.key)}
+                      className="text-left p-2 font-semibold text-gray-700 cursor-pointer hover:text-gray-900 select-none whitespace-nowrap">
+                      {c.label}<SortIcon col={c.key} />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(l => (
+                  <tr key={l.lead_id} className="border-b hover:bg-gray-50">
+                    <td className="p-2 font-mono text-xs">{l.lead_id}</td>
+                    <td className="p-2 font-medium">{l.name}</td>
+                    <td className="p-2 text-gray-600">{l.mobile}</td>
+                    <td className="p-2"><span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100">{l.pipeline_stage}</span></td>
+                    <td className="p-2 capitalize">{l.status}</td>
+                    <td className="p-2 capitalize text-gray-600">{l.source}</td>
+                    <td className="p-2">{l.assigned_rep}</td>
+                    <td className="p-2">{l.temperature && <span className={`px-2 py-0.5 rounded text-xs font-medium ${tempColors[l.temperature] || 'bg-gray-100'}`}>{l.temperature}</span>}</td>
+                    <td className="p-2 text-right">{l.days_since_creation ?? '-'}</td>
+                    <td className="p-2 text-gray-600 text-xs">{l.campaign}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ============================================
 // SHARED COMPONENTS
 // ============================================
 
@@ -7594,7 +8379,7 @@ function EntitySearchSelect({ value, onChange, entityType, onEntityTypeChange, d
 function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
   const [reps, setReps] = useState([]);
   const [form, setForm] = useState({
-    company_rep_id: '', interaction_type: 'call', status: '', notes: '', next_follow_up: '', contact_number: ''
+    company_rep_id: '', interaction_type: 'call', status: getDefaultInteractionStatus('call'), notes: '', next_follow_up: '', contact_number: ''
   });
   const [submitting, setSubmitting] = useState(false);
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
@@ -7644,6 +8429,7 @@ function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
         }`}>{entity.entity_type}</span>
         <span className="text-sm font-medium">{entity.name}</span>
         {contactOptions.length > 0 && <span className="text-sm text-gray-400">| {contactOptions.join(' | ')}</span>}
+        {entity.temperature && <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getTemperatureBadgeClass(entity.temperature)}`}>{entity.temperature}</span>}
       </div>
       <form onSubmit={handleSubmit} className="space-y-3">
         {canChangeRep ? (
@@ -7658,15 +8444,15 @@ function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
         )}
         <div className="grid grid-cols-2 gap-3">
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
-            <select required value={form.interaction_type} onChange={e => setForm({...form, interaction_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
-              <option value="call">Call</option>
-              <option value="message">Message</option>
-              <option value="whatsapp">WhatsApp</option>
-              <option value="meeting">Meeting</option>
-              <option value="site_visit">Site Visit</option>
+            <select required value={form.interaction_type} onChange={e => setForm({...form, interaction_type: e.target.value, status: getDefaultInteractionStatus(e.target.value)})} className="w-full border rounded-lg px-3 py-2 text-sm">
+              {INTERACTION_TYPE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
-          <Input label="Status" value={form.status} onChange={e => setForm({...form, status: e.target.value})} placeholder="e.g., Interested" />
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <select value={form.status} onChange={e => setForm({...form, status: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+              {getInteractionStatusOptions(form.interaction_type).map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
         </div>
         {contactOptions.length > 1 && (
           <div>
@@ -8507,3 +9293,4 @@ function AnnotationEditor({ annotation, plots, onSave, onClose }) {
     </div>
   );
 }
+

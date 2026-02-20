@@ -27,6 +27,7 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 _interaction_target_indexes_ready = False
+CUSTOMER_SYNC_APPROVER_REP_IDS = ["REP-0014", "REP-0015", "REP-0008"]  # Iram Riaz, Imran Younas, Syed Faisal
 
 # ============================================
 # DATABASE SETUP
@@ -83,6 +84,7 @@ class Customer(Base):
     country_code = Column(String(5), default="+92")
     notes = Column(Text)
     assigned_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    temperature = Column(String(10))  # hot | mild | cold
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -179,6 +181,7 @@ class Transaction(Base):
     status = Column(String(20), default="active")
     notes = Column(Text)
     booking_date = Column(Date, default=date.today)
+    payment_plan_version_id = Column(UUID(as_uuid=True), ForeignKey("project_payment_plan_versions.id", ondelete="SET NULL"))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -252,6 +255,7 @@ class Lead(Base):
     city = Column(Text)
     country_code = Column(String(5), default="+92")
     lead_metadata = Column("metadata", JSONB, default=dict)
+    temperature = Column(String(10))  # hot | mild | cold
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -637,6 +641,68 @@ class QueryFeedback(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 # ============================================
+# PAYMENT PLANS, TARGETS & TEMPERATURE MODELS
+# ============================================
+
+class ProjectPaymentPlan(Base):
+    __tablename__ = "project_payment_plans"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plan_id = Column(String(20), unique=True, nullable=False)           # PPL-XXXX
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    is_default = Column(Boolean, default=False, nullable=False)
+    is_locked = Column(Boolean, default=False, nullable=False)
+    locked_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="SET NULL"))
+    locked_at = Column(DateTime(timezone=True))
+    lock_reason = Column(Text)
+    status = Column(String(20), default="active", nullable=False)       # active | archived
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class ProjectPaymentPlanVersion(Base):
+    __tablename__ = "project_payment_plan_versions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("project_payment_plans.id", ondelete="CASCADE"), nullable=False)
+    version_number = Column(Integer, default=1, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    installments = Column(JSONB, default=[], nullable=False)            # [{number, label, percentage, month_offset}]
+    num_installments = Column(Integer, default=4, nullable=False)
+    installment_cycle = Column(String(20), default="bi-annual")         # hint field
+    notes = Column(Text)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class ProjectInventoryPaymentOverride(Base):
+    __tablename__ = "project_inventory_payment_overrides"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    inventory_id = Column(UUID(as_uuid=True), ForeignKey("inventory.id", ondelete="CASCADE"), unique=True, nullable=False)
+    override_type = Column(String(20), default="plan_version", nullable=False)  # plan_version | custom
+    plan_version_id = Column(UUID(as_uuid=True), ForeignKey("project_payment_plan_versions.id", ondelete="SET NULL"))
+    custom_installments = Column(JSONB)                                 # same format as version installments
+    custom_num_installments = Column(Integer)
+    custom_installment_cycle = Column(String(20))
+    notes = Column(Text)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class MonthlyRepTarget(Base):
+    __tablename__ = "monthly_rep_targets"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="CASCADE"), nullable=False)
+    target_month = Column(Integer, nullable=False)
+    target_year = Column(Integer, nullable=False)
+    revenue_target = Column(Numeric(15, 2), default=0, nullable=False)
+    transaction_target = Column(Integer, default=0, nullable=False)
+    lead_target = Column(Integer, default=0, nullable=False)
+    notes = Column(Text)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+# ============================================
 # HELPER FUNCTIONS
 # ============================================
 def normalize_mobile(mobile):
@@ -680,6 +746,72 @@ def create_notification(db, user_rep_id, notif_type, title, message, category=No
     )
     db.add(n)
     return n
+
+def _is_customer_sync_approver(user: "CompanyRep") -> bool:
+    if not user:
+        return False
+    if user.role in ["admin", "cco", "director", "coo"]:
+        return True
+    return user.rep_id in CUSTOMER_SYNC_APPROVER_REP_IDS
+
+def _ensure_lead_sync_requests_table(db: Session):
+    """Create lead_sync_requests table lazily if migration hasn't been applied yet."""
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS lead_sync_requests (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            request_id VARCHAR(20) UNIQUE NOT NULL,
+            lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+            requested_by UUID NOT NULL REFERENCES company_reps(id) ON DELETE CASCADE,
+            reason TEXT,
+            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            reviewed_by UUID REFERENCES company_reps(id) ON DELETE SET NULL,
+            reviewed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_lead_sync_requests_lead_id ON lead_sync_requests(lead_id);
+        CREATE INDEX IF NOT EXISTS idx_lead_sync_requests_status ON lead_sync_requests(status);
+    """))
+    db.commit()
+
+def _sync_lead_to_customer_record(lead: "Lead", db: Session):
+    """Idempotently sync a lead to customer DB and return (linked_existing, entity_id, customer_uuid_str)."""
+    existing = None
+    if lead.mobile:
+        normalized = normalize_mobile(lead.mobile)
+        if normalized:
+            patterns = [normalized]
+            if normalized.startswith("0"):
+                patterns.append("+92" + normalized[1:])
+                patterns.append("92" + normalized[1:])
+            existing = db.query(Customer).filter(or_(*[Customer.mobile.ilike(p) for p in patterns])).first()
+
+    linked_existing = False
+    if existing:
+        linked_existing = True
+        if not existing.assigned_rep_id and lead.assigned_rep_id:
+            existing.assigned_rep_id = lead.assigned_rep_id
+        lead.converted_customer_id = existing.id
+        entity_id = existing.customer_id
+        customer_uuid = str(existing.id)
+    else:
+        c = Customer(
+            name=lead.name,
+            mobile=lead.mobile or f"lead-{lead.lead_id}",
+            email=lead.email,
+            assigned_rep_id=lead.assigned_rep_id
+        )
+        db.add(c); db.flush()
+        lead.converted_customer_id = c.id
+        entity_id = c.customer_id
+        customer_uuid = str(c.id)
+
+    lead.lead_type = "customer"
+    db.query(Interaction).filter(
+        Interaction.lead_id == lead.id,
+        Interaction.customer_id.is_(None)
+    ).update({"customer_id": lead.converted_customer_id}, synchronize_session="fetch")
+
+    return linked_existing, entity_id, customer_uuid
 
 def notify_duplicate_attempt(db, duplicates, attempted_by_user, action_type, campaign_name=None):
     """Send notifications when duplicate lead addition is attempted.
@@ -1464,6 +1596,7 @@ def list_customers(db: Session = Depends(get_db),
         "country_code": c.country_code or "+92",
         "notes": c.notes,
         "assigned_rep_id": str(c.assigned_rep_id) if c.assigned_rep_id else None,
+        "temperature": c.temperature,
         "created_at": str(c.created_at)
     } for c in customers]
 
@@ -1489,6 +1622,7 @@ def get_customer(cid: str, db: Session = Depends(get_db),
         "country_code": c.country_code or "+92",
         "notes": c.notes,
         "assigned_rep_id": str(c.assigned_rep_id) if c.assigned_rep_id else None,
+        "temperature": c.temperature,
         "created_at": str(c.created_at),
         "is_also_broker": broker is not None,
         "broker_id": broker.broker_id if broker else None
@@ -1497,6 +1631,8 @@ def get_customer(cid: str, db: Session = Depends(get_db),
 @app.post("/api/customers")
 def create_customer(data: dict, db: Session = Depends(get_db),
                     current_user: CompanyRep = Depends(get_current_user)):
+    if current_user.role == "user":
+        raise HTTPException(403, "Sales reps can create leads only. Customer creation is restricted.")
     # Normalize primary mobile
     if data.get("mobile"):
         data["mobile"] = normalize_mobile(data["mobile"]) or data["mobile"]
@@ -1532,7 +1668,8 @@ def create_customer(data: dict, db: Session = Depends(get_db),
         area=data.get("area"), city=data.get("city"),
         country_code=data.get("country_code", "+92"),
         notes=data.get("notes"),
-        assigned_rep_id=current_user.id
+        assigned_rep_id=current_user.id,
+        temperature=data.get("temperature")
     )
     db.add(c); db.commit(); db.refresh(c)
     result = {"message": "Customer created", "id": str(c.id), "customer_id": c.customer_id}
@@ -1547,7 +1684,7 @@ def update_customer(cid: str, data: dict, db: Session = Depends(get_db),
     if not c: raise HTTPException(404, "Customer not found")
     for k in ["name", "mobile", "address", "cnic", "email",
               "additional_mobiles", "source", "source_other", "occupation", "occupation_other",
-              "interested_project_other", "area", "city", "country_code", "notes"]:
+              "interested_project_other", "area", "city", "country_code", "notes", "temperature"]:
         if k in data: setattr(c, k, data[k])
     # Handle interested_project_id separately (FK resolution)
     if "interested_project_id" in data:
@@ -1596,6 +1733,8 @@ def download_customer_template():
 @app.post("/api/customers/bulk-import")
 async def bulk_import_customers(file: UploadFile = File(...), db: Session = Depends(get_db),
                                 current_user: CompanyRep = Depends(get_current_user)):
+    if current_user.role == "user":
+        raise HTTPException(403, "Sales reps can create leads only. Customer import is restricted.")
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode('utf-8-sig')))
     results = {"success": 0, "errors": [], "created": []}
@@ -2185,7 +2324,11 @@ def download_transactions_template():
 
 @app.get("/api/transactions/{tid}")
 def get_transaction(tid: str, db: Session = Depends(get_db)):
-    t = db.query(Transaction).filter((Transaction.id == tid) | (Transaction.transaction_id == tid)).first()
+    try:
+        tid_uuid = uuid.UUID(str(tid))
+        t = db.query(Transaction).filter((Transaction.id == tid_uuid) | (Transaction.transaction_id == tid)).first()
+    except ValueError:
+        t = db.query(Transaction).filter(Transaction.transaction_id == tid).first()
     if not t: raise HTTPException(404, "Transaction not found")
     c = db.query(Customer).filter(Customer.id == t.customer_id).first()
     b = db.query(Broker).filter(Broker.id == t.broker_id).first() if t.broker_id else None
@@ -2198,6 +2341,9 @@ def get_transaction(tid: str, db: Session = Depends(get_db)):
         "broker": {"id": str(b.id), "name": b.name, "commission_rate": float(t.broker_commission_rate)} if b else None,
         "project": {"id": str(p.id), "name": p.name} if p else None,
         "company_rep": {"id": str(r.id), "name": r.name} if r else None,
+        "customer_name": c.name if c else None,
+        "broker_name": b.name if b else None,
+        "project_name": p.name if p else None,
         "unit_number": t.unit_number, "block": t.block,
         "area_marla": float(t.area_marla), "rate_per_marla": float(t.rate_per_marla),
         "total_value": float(t.total_value),
@@ -2212,17 +2358,22 @@ def get_transaction(tid: str, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/transactions")
-def create_transaction(data: dict, db: Session = Depends(get_db)):
-    customer = db.query(Customer).filter((Customer.id == data["customer_id"]) | (Customer.customer_id == data["customer_id"]) | (Customer.mobile == data["customer_id"])).first()
+def create_transaction(data: dict, db: Session = Depends(get_db),
+                       current_user: CompanyRep = Depends(get_current_user)):
+    customer = find_entity(db, Customer, "customer_id", data["customer_id"]) or db.query(Customer).filter(
+        Customer.mobile == data["customer_id"]
+    ).first()
     if not customer: raise HTTPException(404, "Customer not found")
-    
-    inventory = db.query(Inventory).filter((Inventory.id == data["inventory_id"]) | (Inventory.inventory_id == data["inventory_id"])).first()
+    if current_user.role == "user" and str(customer.assigned_rep_id or "") != str(current_user.id):
+        raise HTTPException(403, "Sales reps can create transactions only for customers assigned to them.")
+
+    inventory = find_entity(db, Inventory, "inventory_id", data["inventory_id"])
     if not inventory: raise HTTPException(404, "Inventory not found")
     if inventory.status != "available": raise HTTPException(400, f"Unit not available (status: {inventory.status})")
     
     project = db.query(Project).filter(Project.id == inventory.project_id).first()
-    broker = db.query(Broker).filter((Broker.id == data["broker_id"]) | (Broker.broker_id == data["broker_id"]) | (Broker.mobile == data["broker_id"])).first() if data.get("broker_id") else None
-    rep = db.query(CompanyRep).filter((CompanyRep.id == data["company_rep_id"]) | (CompanyRep.rep_id == data["company_rep_id"])).first() if data.get("company_rep_id") else None
+    broker = (find_entity(db, Broker, "broker_id", data["broker_id"]) or db.query(Broker).filter(Broker.mobile == data["broker_id"]).first()) if data.get("broker_id") else None
+    rep = find_entity(db, CompanyRep, "rep_id", data["company_rep_id"]) if data.get("company_rep_id") else None
     
     area = float(data.get("area_marla") or inventory.area_marla)
     rate = float(data.get("rate_per_marla") or inventory.rate_per_marla)
@@ -2259,7 +2410,11 @@ def create_transaction(data: dict, db: Session = Depends(get_db)):
 
 @app.put("/api/transactions/{tid}")
 def update_transaction(tid: str, data: dict, db: Session = Depends(get_db)):
-    t = db.query(Transaction).filter((Transaction.id == tid) | (Transaction.transaction_id == tid)).first()
+    try:
+        tid_uuid = uuid.UUID(str(tid))
+        t = db.query(Transaction).filter((Transaction.id == tid_uuid) | (Transaction.transaction_id == tid)).first()
+    except ValueError:
+        t = db.query(Transaction).filter(Transaction.transaction_id == tid).first()
     if not t: raise HTTPException(404, "Transaction not found")
     for k in ["broker_commission_rate", "status", "notes"]:
         if k in data and data[k] is not None: setattr(t, k, data[k])
@@ -2822,6 +2977,7 @@ def list_leads(campaign_id: str = None, rep_id: str = None, status: str = None,
                 "area": l.area, "city": l.city,
                 "country_code": l.country_code or "+92",
                 "source_details": l.source_details,
+                "temperature": l.temperature,
                 "created_at": str(l.created_at)
             })
         return result
@@ -2889,7 +3045,8 @@ def create_lead(data: dict, db: Session = Depends(get_db),
             interested_project_id=interested_project_id,
             interested_project_other=data.get("interested_project_other"),
             area=data.get("area"), city=data.get("city"),
-            country_code=data.get("country_code", "+92")
+            country_code=data.get("country_code", "+92"),
+            temperature=data.get("temperature")
         )
         db.add(l); db.commit(); db.refresh(l)
         return {"message": "Lead created", "id": str(l.id), "lead_id": l.lead_id}
@@ -3031,7 +3188,7 @@ def update_lead(lid: str, data: dict, db: Session = Depends(get_db),
     if not l: raise HTTPException(404, "Lead not found")
     for k in ["name", "mobile", "email", "source_details", "status", "lead_type", "notes", "pipeline_stage",
               "additional_mobiles", "source", "source_other", "occupation", "occupation_other",
-              "interested_project_other", "area", "city", "country_code"]:
+              "interested_project_other", "area", "city", "country_code", "temperature"]:
         if k in data: setattr(l, k, data[k])
     if "interested_project_id" in data:
         if data["interested_project_id"] and data["interested_project_id"] != "other":
@@ -3057,37 +3214,14 @@ def update_lead(lid: str, data: dict, db: Session = Depends(get_db),
 def convert_lead(lid: str, data: dict, db: Session = Depends(get_db),
                  current_user: CompanyRep = Depends(get_current_user)):
     """Sync a lead to the customer or broker database. Does NOT mark as converted — that only happens when pipeline_stage is set to Won."""
+    if current_user.role not in ["admin", "director", "cco", "coo", "manager"]:
+        raise HTTPException(403, "Only manager/director/cco/coo/admin can sync leads to customer/broker DB.")
     l = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
     if not l: raise HTTPException(404, "Lead not found")
 
     convert_to = data.get("convert_to")  # 'customer' or 'broker'
     if convert_to == "customer":
-        # Check if customer with same mobile already exists (using normalized comparison)
-        existing = None
-        if l.mobile:
-            normalized = normalize_mobile(l.mobile)
-            if normalized:
-                patterns = [normalized]
-                if normalized.startswith("0"):
-                    patterns.append("+92" + normalized[1:])
-                    patterns.append("92" + normalized[1:])
-                existing = db.query(Customer).filter(or_(*[Customer.mobile.ilike(p) for p in patterns])).first()
-        linked_existing = False
-        if existing:
-            l.converted_customer_id = existing.id
-            linked_existing = True
-            entity_id = existing.customer_id
-        else:
-            c = Customer(name=l.name, mobile=l.mobile or f"lead-{l.lead_id}", email=l.email)
-            db.add(c); db.flush()
-            l.converted_customer_id = c.id
-            entity_id = c.customer_id
-        l.lead_type = "customer"
-        # Carry forward lead interactions to the customer
-        db.query(Interaction).filter(
-            Interaction.lead_id == l.id,
-            Interaction.customer_id.is_(None)
-        ).update({"customer_id": l.converted_customer_id}, synchronize_session="fetch")
+        linked_existing, entity_id, _ = _sync_lead_to_customer_record(l, db)
         db.commit()
         return {"message": "Lead synced to customer DB", "customer_id": str(l.converted_customer_id),
                 "linked_existing": linked_existing, "entity_id": entity_id}
@@ -3181,7 +3315,7 @@ def list_receipts(customer_id: str = None, transaction_id: str = None, limit: in
                     "amount": float(a.amount)
                 })
             
-            result.append({
+            entry = {
                 "id": str(r.id), "receipt_id": r.receipt_id,
                 "customer_name": cust.name if cust else None, "customer_id": cust.customer_id if cust else None,
                 "transaction_id": txn.transaction_id if txn else None,
@@ -3191,7 +3325,21 @@ def list_receipts(customer_id: str = None, transaction_id: str = None, limit: in
                 "payment_date": str(r.payment_date) if r.payment_date else None,
                 "notes": r.notes, "created_by": rep.name if rep else None,
                 "created_at": str(r.created_at), "allocations": alloc_details
-            })
+            }
+            # Add classification if receipt is linked to a transaction
+            if txn:
+                try:
+                    try:
+                        from app.services.receipt_classification_service import classify_receipt as _classify
+                    except ImportError:
+                        from services.receipt_classification_service import classify_receipt as _classify
+                    entry["classification"] = _classify(txn, db)
+                except Exception as exc:
+                    logging.getLogger("orbit.receipt_classification").warning(
+                        "Classification failed for receipt %s: %s", r.receipt_id, exc
+                    )
+                    entry["classification_error"] = str(exc)
+            result.append(entry)
         return result
     except Exception as e:
         print(f"Error listing receipts: {e}")
@@ -3261,22 +3409,17 @@ def get_customer_transactions_for_receipt(cid: str, db: Session = Depends(get_db
 
 @app.post("/api/receipts")
 def create_receipt(data: dict, db: Session = Depends(get_db)):
-    customer = db.query(Customer).filter(
-        (Customer.id == data["customer_id"]) | (Customer.customer_id == data["customer_id"]) | (Customer.mobile == data["customer_id"])
+    customer = find_entity(db, Customer, "customer_id", data["customer_id"]) or db.query(Customer).filter(
+        Customer.mobile == data["customer_id"]
     ).first()
     if not customer: raise HTTPException(404, "Customer not found")
-    
     transaction = None
     if data.get("transaction_id"):
-        transaction = db.query(Transaction).filter(
-            (Transaction.id == data["transaction_id"]) | (Transaction.transaction_id == data["transaction_id"])
-        ).first()
+        transaction = find_entity(db, Transaction, "transaction_id", data["transaction_id"])
     
     rep = None
     if data.get("created_by_rep_id"):
-        rep = db.query(CompanyRep).filter(
-            (CompanyRep.id == data["created_by_rep_id"]) | (CompanyRep.rep_id == data["created_by_rep_id"])
-        ).first()
+        rep = find_entity(db, CompanyRep, "rep_id", data["created_by_rep_id"])
     
     r = Receipt(
         customer_id=customer.id,
@@ -3324,7 +3467,74 @@ def create_receipt(data: dict, db: Session = Depends(get_db)):
             remaining -= alloc_amount
     
     db.commit(); db.refresh(r)
-    return {"message": "Receipt created", "id": str(r.id), "receipt_id": r.receipt_id}
+
+    # ── Receipt classification (read-only against payment rules) ───────
+    result = {"message": "Receipt created", "id": str(r.id), "receipt_id": r.receipt_id}
+    if transaction:
+        try:
+            try:
+                from app.services.receipt_classification_service import classify_receipt as _classify
+            except ImportError:
+                from services.receipt_classification_service import classify_receipt as _classify
+            result["classification"] = _classify(transaction, db)
+        except Exception as exc:
+            logging.getLogger("orbit.receipt_classification").warning(
+                "Classification failed for new receipt %s: %s", r.receipt_id, exc
+            )
+            result["classification_error"] = str(exc)
+    return result
+
+@app.get("/api/receipts/{rid}")
+def get_receipt(rid: str, db: Session = Depends(get_db),
+                current_user: CompanyRep = Depends(get_current_user)):
+    """Get single receipt with classification details."""
+    r = db.query(Receipt).filter(
+        (Receipt.id == rid) | (Receipt.receipt_id == rid)
+    ).first()
+    if not r:
+        raise HTTPException(404, "Receipt not found")
+
+    cust = db.query(Customer).filter(Customer.id == r.customer_id).first()
+    txn = db.query(Transaction).filter(Transaction.id == r.transaction_id).first() if r.transaction_id else None
+    proj = db.query(Project).filter(Project.id == txn.project_id).first() if txn else None
+    rep = db.query(CompanyRep).filter(CompanyRep.id == r.created_by_rep_id).first() if r.created_by_rep_id else None
+
+    allocations = db.query(ReceiptAllocation).filter(ReceiptAllocation.receipt_id == r.id).all()
+    alloc_details = []
+    for a in allocations:
+        inst = db.query(Installment).filter(Installment.id == a.installment_id).first()
+        alloc_details.append({
+            "id": str(a.id), "installment_number": inst.installment_number if inst else None,
+            "amount": float(a.amount)
+        })
+
+    result = {
+        "id": str(r.id), "receipt_id": r.receipt_id,
+        "customer_name": cust.name if cust else None, "customer_id": cust.customer_id if cust else None,
+        "transaction_id": txn.transaction_id if txn else None,
+        "project_name": proj.name if proj else None, "unit_number": txn.unit_number if txn else None,
+        "amount": float(r.amount), "payment_method": r.payment_method,
+        "reference_number": r.reference_number,
+        "payment_date": str(r.payment_date) if r.payment_date else None,
+        "notes": r.notes, "created_by": rep.name if rep else None,
+        "created_at": str(r.created_at), "allocations": alloc_details
+    }
+
+    # Classification
+    if txn:
+        try:
+            try:
+                from app.services.receipt_classification_service import classify_receipt as _classify
+            except ImportError:
+                from services.receipt_classification_service import classify_receipt as _classify
+            result["classification"] = _classify(txn, db)
+        except Exception as exc:
+            logging.getLogger("orbit.receipt_classification").warning(
+                "Classification failed for receipt %s: %s", rid, exc
+            )
+            result["classification_error"] = str(exc)
+
+    return result
 
 @app.delete("/api/receipts/{rid}")
 def delete_receipt(rid: str, db: Session = Depends(get_db), current_user: CompanyRep = Depends(get_current_user)):
@@ -4180,12 +4390,133 @@ def get_project_inventory(db: Session = Depends(get_db)):
             )
         raise HTTPException(status_code=500, detail=f"Error loading project inventory: {error_msg[:200]}")
 
+
+@app.get("/api/dashboard/sales-kpis")
+def get_sales_kpis(
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    rep_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Sales KPIs: tokens, partial down payments, closed won, achieved revenue, unit/target.
+    Role-scoped: user sees self, manager sees team, admin/cco/director/coo sees all."""
+    try:
+        today = date.today()
+        kpi_month = month or today.month
+        kpi_year = year or today.year
+
+        isolation = get_rep_isolation_filter(current_user, db)
+
+        # Build rep scope
+        scoped_rep_ids = None  # None = all
+        if isolation["isolated"]:
+            scoped_rep_ids = isolation["team_rep_uuids"]
+        if rep_id:
+            rep_obj = db.query(CompanyRep).filter(
+                (CompanyRep.rep_id == rep_id) | (func.cast(CompanyRep.id, String) == rep_id)
+            ).first()
+            if rep_obj:
+                if not isolation["isolated"] or rep_obj.id in (scoped_rep_ids or []):
+                    scoped_rep_ids = [rep_obj.id]
+
+        # --- Transactions for token/partial/down-payment classification ---
+        txn_q = db.query(Transaction).filter(Transaction.status != "cancelled")
+        if scoped_rep_ids is not None:
+            txn_q = txn_q.filter(Transaction.company_rep_id.in_(scoped_rep_ids))
+        if project_id:
+            proj = db.query(Project).filter(
+                (Project.project_id == project_id) | (func.cast(Project.id, String) == project_id)
+            ).first()
+            if proj:
+                txn_q = txn_q.filter(Transaction.project_id == proj.id)
+        all_txns = txn_q.all()
+
+        # Pre-fetch cumulative receipts per transaction (join through installments)
+        txn_ids = [t.id for t in all_txns]
+        receipt_sums = {}
+        if txn_ids:
+            alloc_q = db.query(
+                Installment.transaction_id,
+                func.sum(ReceiptAllocation.amount).label("total_paid")
+            ).join(
+                Installment, ReceiptAllocation.installment_id == Installment.id
+            ).filter(
+                Installment.transaction_id.in_(txn_ids)
+            )
+            alloc_rows = alloc_q.group_by(Installment.transaction_id).all()
+            receipt_sums = {row.transaction_id: float(row.total_paid or 0) for row in alloc_rows}
+
+        # Classify each transaction by cumulative paid percentage
+        tokens_amount = 0.0
+        partial_dp_amount = 0.0
+        down_payment_complete_count = 0
+        total_received = 0.0
+
+        for t in all_txns:
+            tv = float(t.total_value or 0)
+            paid = receipt_sums.get(t.id, 0.0)
+            total_received += paid
+            if tv <= 0:
+                continue
+            pct = (paid / tv) * 100.0
+            # Default threshold: 10% booking amount
+            threshold = 10.0
+            if pct < threshold:
+                tokens_amount += paid
+            elif pct < 100.0:
+                partial_dp_amount += paid
+            if pct >= threshold:
+                down_payment_complete_count += 1
+
+        # --- Closed Won Cases (converted leads) ---
+        lead_q = db.query(func.count(Lead.id)).filter(Lead.status == "converted")
+        if scoped_rep_ids is not None:
+            lead_q = lead_q.filter(Lead.assigned_rep_id.in_(scoped_rep_ids))
+        closed_won = lead_q.scalar() or 0
+
+        # --- Project units sold vs target ---
+        inv_q = db.query(func.count(Inventory.id)).filter(Inventory.status == "sold")
+        if project_id and 'proj' in dir() and proj:
+            inv_q = inv_q.filter(Inventory.project_id == proj.id)
+        units_sold = inv_q.scalar() or 0
+
+        # Monthly target from MonthlyRepTarget
+        target_q = db.query(
+            func.sum(MonthlyRepTarget.transaction_target).label("txn_target"),
+            func.sum(MonthlyRepTarget.revenue_target).label("rev_target")
+        ).filter(
+            MonthlyRepTarget.target_month == kpi_month,
+            MonthlyRepTarget.target_year == kpi_year
+        )
+        if scoped_rep_ids is not None:
+            target_q = target_q.filter(MonthlyRepTarget.rep_id.in_(scoped_rep_ids))
+        target_row = target_q.first()
+        units_target = int(target_row.txn_target or 0) if target_row else 0
+        achievement_pct = round(units_sold / units_target * 100, 1) if units_target > 0 else None
+
+        return {
+            "tokens": round(tokens_amount, 2),
+            "partial_down_payments": round(partial_dp_amount, 2),
+            "closed_won_cases": closed_won,
+            "achieved_revenue": round(total_received, 2),
+            "project_units_sold": units_sold,
+            "project_units_target": units_target if units_target > 0 else None,
+            "project_units_target_achievement_pct": achievement_pct,
+            "period": {"month": kpi_month, "year": kpi_year},
+            "scope": "team" if isolation.get("isolated") else "global"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sales KPI error: {str(e)}")
+
+
 @app.get("/api/customers/{customer_id}/details")
 def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
     """Comprehensive customer details for modal popup"""
-    # Find customer by ID or mobile
-    customer = db.query(Customer).filter(
-        (Customer.customer_id == customer_id) | (Customer.mobile == customer_id) | (Customer.id == customer_id)
+    # Find customer by UUID-safe helper first, then mobile fallback.
+    customer = find_entity(db, Customer, "customer_id", customer_id) or db.query(Customer).filter(
+        Customer.mobile == customer_id
     ).first()
     
     if not customer:
@@ -4207,10 +4538,30 @@ def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
     paid_installments = []
     total_overdue = 0
     total_future = 0
+    transaction_progress = []
     
     for t in txns:
         project = db.query(Project).filter(Project.id == t.project_id).first()
         installments = db.query(Installment).filter(Installment.transaction_id == t.id).order_by(Installment.due_date).all()
+        progress_item = {
+            "transaction_id": str(t.transaction_id),
+            "transaction_uuid": str(t.id),
+            "project_name": project.name if project else None,
+            "unit_number": t.unit_number,
+            "total_value": float(t.total_value or 0),
+            "booking_date": str(t.booking_date) if t.booking_date else None,
+            "status": t.status,
+            "installments_total": len(installments),
+            "installments_paid": 0,
+            "installments_overdue": 0,
+            "installments_pending": 0,
+            "cumulative_paid": 0.0,
+            "paid_percent": 0.0,
+            "threshold_percent": None,
+            "classification": None,
+            "payment_rule_source": None,
+            "classification_error": None
+        }
         
         for i in installments:
             paid = float(i.amount_paid or 0)
@@ -4231,12 +4582,36 @@ def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
             
             if balance <= 0:
                 paid_installments.append(inst_data)
+                progress_item["installments_paid"] += 1
             elif i.due_date <= today:
                 overdue_installments.append(inst_data)
                 total_overdue += balance
+                progress_item["installments_overdue"] += 1
             else:
                 future_installments.append(inst_data)
                 total_future += balance
+                progress_item["installments_pending"] += 1
+
+            progress_item["cumulative_paid"] += paid
+
+        # Add per-transaction payment progress classification.
+        try:
+            try:
+                from app.services.receipt_classification_service import classify_receipt as _classify_receipt
+            except ImportError:
+                from services.receipt_classification_service import classify_receipt as _classify_receipt
+            c = _classify_receipt(t, db)
+            progress_item["classification"] = c.get("classification")
+            progress_item["threshold_percent"] = c.get("threshold_percent")
+            progress_item["payment_rule_source"] = c.get("payment_rule_source")
+            progress_item["paid_percent"] = c.get("paid_percent", 0.0)
+        except Exception as exc:
+            # Keep endpoint resilient while surfacing what failed for UI diagnostics.
+            progress_item["classification_error"] = str(exc)
+            tv = float(t.total_value or 0)
+            progress_item["paid_percent"] = round((progress_item["cumulative_paid"] / tv) * 100, 2) if tv > 0 else 0.0
+
+        transaction_progress.append(progress_item)
     
     # Interactions
     interactions = db.query(Interaction).filter(Interaction.customer_id == customer.id).order_by(Interaction.created_at.desc()).limit(20).all()
@@ -4259,6 +4634,7 @@ def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
             "area": customer.area, "city": customer.city,
             "country_code": customer.country_code or "+92",
             "assigned_rep_id": str(customer.assigned_rep_id) if customer.assigned_rep_id else None,
+            "temperature": customer.temperature,
             "created_at": str(customer.created_at) if customer.created_at else None
         },
         "financials": {
@@ -4274,6 +4650,7 @@ def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
             "future": future_installments,
             "paid": paid_installments
         },
+        "transaction_progress": transaction_progress,
         "receipts": [{
             "id": str(r.id),
             "receipt_id": r.receipt_id,
@@ -4298,9 +4675,9 @@ def get_customer_details(customer_id: str, db: Session = Depends(get_db)):
 @app.get("/api/brokers/{broker_id}/details")
 def get_broker_details(broker_id: str, db: Session = Depends(get_db)):
     """Comprehensive broker details for modal popup"""
-    # Find broker by ID or mobile
-    broker = db.query(Broker).filter(
-        (Broker.broker_id == broker_id) | (Broker.mobile == broker_id) | (Broker.id == broker_id)
+    # Find broker by UUID-safe helper first, then mobile fallback.
+    broker = find_entity(db, Broker, "broker_id", broker_id) or db.query(Broker).filter(
+        Broker.mobile == broker_id
     ).first()
     
     if not broker:
@@ -8035,6 +8412,58 @@ def list_notifications(limit: int = 50, db: Session = Depends(get_db),
         "read_at": str(n.read_at) if n.read_at else None
     } for n in notifs]
 
+@app.get("/api/notifications/org-feed")
+def list_org_notifications(
+    limit: int = 200,
+    offset: int = 0,
+    rep_id: str = "",
+    unread_only: bool = False,
+    category: str = "",
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    can_view_org_feed = (
+        current_user.role in ["admin", "director", "cco", "coo"]
+        or current_user.rep_id in CUSTOMER_SYNC_APPROVER_REP_IDS
+    )
+    if not can_view_org_feed:
+        raise HTTPException(403, "Insufficient permissions")
+
+    q = db.query(Notification)
+    if rep_id:
+        q = q.filter(Notification.user_rep_id == rep_id)
+    if unread_only:
+        q = q.filter(Notification.is_read == False)
+    if category:
+        q = q.filter(Notification.category == category)
+
+    total = q.count()
+    rows = q.order_by(Notification.created_at.desc()).offset(max(0, offset)).limit(min(max(limit, 1), 1000)).all()
+    rep_ids = list({n.user_rep_id for n in rows if n.user_rep_id})
+    rep_rows = db.query(CompanyRep).filter(CompanyRep.rep_id.in_(rep_ids)).all() if rep_ids else []
+    rep_map = {r.rep_id: r.name for r in rep_rows}
+
+    return {
+        "total": total,
+        "count": len(rows),
+        "items": [{
+            "id": n.id,
+            "notification_id": n.notification_id,
+            "recipient_rep_id": n.user_rep_id,
+            "recipient_name": rep_map.get(n.user_rep_id),
+            "title": n.title,
+            "message": n.message,
+            "type": n.type,
+            "category": n.category,
+            "entity_type": n.entity_type,
+            "entity_id": n.entity_id,
+            "is_read": bool(n.is_read),
+            "data": n.data or {},
+            "created_at": str(n.created_at),
+            "read_at": str(n.read_at) if n.read_at else None
+        } for n in rows]
+    }
+
 @app.get("/api/notifications/unread")
 def get_unread_notifications(db: Session = Depends(get_db),
                               current_user: CompanyRep = Depends(get_current_user)):
@@ -8409,6 +8838,7 @@ def get_leads_pipeline(rep_id: str = None, campaign_id: str = None,
             "converted_customer_id": str(l.converted_customer_id) if l.converted_customer_id else None,
             "converted_broker_id": str(l.converted_broker_id) if l.converted_broker_id else None,
             "source": l.source, "source_details": l.source_details,
+            "temperature": l.temperature,
             "notes": l.notes, "created_at": str(l.created_at)
         }
 
@@ -8597,6 +9027,255 @@ def review_assignment_request(rid: str, data: dict, db: Session = Depends(get_db
     return {"message": f"Request {action}d"}
 
 # ============================================
+# LEAD -> CUSTOMER SYNC REQUEST API
+# ============================================
+@app.post("/api/leads/{lid}/request-customer-sync")
+def request_customer_sync(lid: str, data: dict, db: Session = Depends(get_db),
+                          current_user: CompanyRep = Depends(get_current_user)):
+    _ensure_lead_sync_requests_table(db)
+    lead = db.query(Lead).filter((Lead.id == lid) | (Lead.lead_id == lid)).first()
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    if lead.converted_customer_id:
+        raise HTTPException(400, "Lead is already synced to customer DB")
+    # Sales users can request sync only for leads assigned to them.
+    if current_user.role == "user" and lead.assigned_rep_id != current_user.id:
+        raise HTTPException(403, "You can request sync only for leads assigned to you")
+
+    exists = db.execute(text("""
+        SELECT 1 FROM lead_sync_requests
+        WHERE lead_id = :lead_id AND requested_by = :requested_by AND status = 'pending'
+        LIMIT 1
+    """), {"lead_id": str(lead.id), "requested_by": str(current_user.id)}).first()
+    if exists:
+        raise HTTPException(400, "You already have a pending customer sync request for this lead")
+
+    request_id = f"LSR-{uuid.uuid4().hex[:8].upper()}"
+    db.execute(text("""
+        INSERT INTO lead_sync_requests (request_id, lead_id, requested_by, reason, status)
+        VALUES (:request_id, :lead_id, :requested_by, :reason, 'pending')
+    """), {
+        "request_id": request_id,
+        "lead_id": str(lead.id),
+        "requested_by": str(current_user.id),
+        "reason": data.get("reason", "")
+    })
+
+    approvers = db.query(CompanyRep).filter(
+        and_(
+            CompanyRep.status == "active",
+            or_(
+                CompanyRep.rep_id.in_(CUSTOMER_SYNC_APPROVER_REP_IDS),
+                CompanyRep.role.in_(["admin", "cco", "director", "coo"])
+            )
+        )
+    ).all()
+    for ap in approvers:
+        create_notification(
+            db, ap.rep_id, "customer_sync_request",
+            f"{current_user.name} requested customer sync",
+            f"Lead {lead.lead_id} ({lead.name}) requested for customer sync. Reason: {data.get('reason', 'N/A')}",
+            category="sync_request",
+            entity_type="lead",
+            entity_id=lead.lead_id,
+            data={"request_id": request_id, "lead_id": lead.lead_id, "requested_by": current_user.rep_id}
+        )
+    db.commit()
+    return {"message": "Customer sync request submitted", "request_id": request_id}
+
+@app.get("/api/lead-sync-requests")
+def list_customer_sync_requests(status: str = "pending", db: Session = Depends(get_db),
+                                current_user: CompanyRep = Depends(get_current_user)):
+    _ensure_lead_sync_requests_table(db)
+    if not _is_customer_sync_approver(current_user):
+        raise HTTPException(403, "Insufficient permissions")
+    rows = db.execute(text("""
+        SELECT
+            r.id::text AS id, r.request_id, r.status, r.reason,
+            r.created_at::text AS created_at, r.reviewed_at::text AS reviewed_at,
+            l.lead_id AS lead_code, l.name AS lead_name, l.mobile AS lead_mobile,
+            req.rep_id AS requester_rep_id, req.name AS requester_name,
+            rev.rep_id AS reviewer_rep_id, rev.name AS reviewer_name
+        FROM lead_sync_requests r
+        JOIN leads l ON l.id = r.lead_id
+        JOIN company_reps req ON req.id = r.requested_by
+        LEFT JOIN company_reps rev ON rev.id = r.reviewed_by
+        WHERE (:status = '' OR r.status = :status)
+        ORDER BY r.created_at DESC
+    """), {"status": status or ""}).mappings().all()
+    return [dict(row) for row in rows]
+
+@app.post("/api/lead-sync-requests/{rid}/review")
+def review_customer_sync_request(rid: str, data: dict, db: Session = Depends(get_db),
+                                 current_user: CompanyRep = Depends(get_current_user)):
+    _ensure_lead_sync_requests_table(db)
+    if not _is_customer_sync_approver(current_user):
+        raise HTTPException(403, "Insufficient permissions")
+    action = (data.get("action") or "").strip().lower()
+    if action not in ["approve", "reject"]:
+        raise HTTPException(400, "Action must be 'approve' or 'reject'")
+
+    req = db.execute(text("""
+        SELECT id, request_id, lead_id, requested_by, status
+        FROM lead_sync_requests
+        WHERE id::text = :rid OR request_id = :rid
+        LIMIT 1
+    """), {"rid": rid}).mappings().first()
+    if not req:
+        raise HTTPException(404, "Request not found")
+    if req["status"] != "pending":
+        raise HTTPException(400, "Request is not pending")
+
+    lead = db.query(Lead).filter(Lead.id == req["lead_id"]).first()
+    requester = db.query(CompanyRep).filter(CompanyRep.id == req["requested_by"]).first()
+    if not lead or not requester:
+        raise HTTPException(404, "Linked lead/requester not found")
+
+    if action == "approve":
+        linked_existing, entity_id, _ = _sync_lead_to_customer_record(lead, db)
+        db.execute(text("""
+            UPDATE lead_sync_requests
+            SET status='approved', reviewed_by=:reviewed_by, reviewed_at=NOW()
+            WHERE id=:id
+        """), {"reviewed_by": str(current_user.id), "id": str(req["id"])})
+        create_notification(
+            db, requester.rep_id, "customer_sync_approved",
+            "Customer sync approved",
+            f"Your sync request for lead {lead.lead_id} was approved by {current_user.name}. Customer: {entity_id}",
+            category="sync_request",
+            entity_type="lead",
+            entity_id=lead.lead_id
+        )
+        db.commit()
+        return {"message": "Request approved and lead synced to customer DB", "linked_existing": linked_existing, "entity_id": entity_id}
+
+    db.execute(text("""
+        UPDATE lead_sync_requests
+        SET status='rejected', reviewed_by=:reviewed_by, reviewed_at=NOW()
+        WHERE id=:id
+    """), {"reviewed_by": str(current_user.id), "id": str(req["id"])})
+    create_notification(
+        db, requester.rep_id, "customer_sync_rejected",
+        "Customer sync request rejected",
+        f"Your sync request for lead {lead.lead_id} was rejected by {current_user.name}.",
+        category="sync_request",
+        entity_type="lead",
+        entity_id=lead.lead_id
+    )
+    db.commit()
+    return {"message": "Request rejected"}
+
+@app.post("/api/lead-sync-requests/bulk-review")
+def bulk_review_customer_sync_requests(data: dict, db: Session = Depends(get_db),
+                                       current_user: CompanyRep = Depends(get_current_user)):
+    _ensure_lead_sync_requests_table(db)
+    if not _is_customer_sync_approver(current_user):
+        raise HTTPException(403, "Insufficient permissions")
+    request_ids = data.get("request_ids") or []
+    action = (data.get("action") or "").strip().lower()
+    if not request_ids or action not in ["approve", "reject"]:
+        raise HTTPException(400, "request_ids and valid action required")
+
+    processed = 0
+    synced = 0
+    for rid in request_ids:
+        req = db.execute(text("""
+            SELECT id, request_id, lead_id, requested_by, status
+            FROM lead_sync_requests
+            WHERE id::text = :rid OR request_id = :rid
+            LIMIT 1
+        """), {"rid": rid}).mappings().first()
+        if not req or req["status"] != "pending":
+            continue
+        lead = db.query(Lead).filter(Lead.id == req["lead_id"]).first()
+        requester = db.query(CompanyRep).filter(CompanyRep.id == req["requested_by"]).first()
+        if not lead or not requester:
+            continue
+
+        if action == "approve":
+            _sync_lead_to_customer_record(lead, db)
+            db.execute(text("""
+                UPDATE lead_sync_requests
+                SET status='approved', reviewed_by=:reviewed_by, reviewed_at=NOW()
+                WHERE id=:id
+            """), {"reviewed_by": str(current_user.id), "id": str(req["id"])})
+            create_notification(
+                db, requester.rep_id, "customer_sync_approved",
+                "Customer sync approved",
+                f"Your sync request for lead {lead.lead_id} was approved by {current_user.name}.",
+                category="sync_request",
+                entity_type="lead",
+                entity_id=lead.lead_id
+            )
+            synced += 1
+        else:
+            db.execute(text("""
+                UPDATE lead_sync_requests
+                SET status='rejected', reviewed_by=:reviewed_by, reviewed_at=NOW()
+                WHERE id=:id
+            """), {"reviewed_by": str(current_user.id), "id": str(req["id"])})
+            create_notification(
+                db, requester.rep_id, "customer_sync_rejected",
+                "Customer sync request rejected",
+                f"Your sync request for lead {lead.lead_id} was rejected by {current_user.name}.",
+                category="sync_request",
+                entity_type="lead",
+                entity_id=lead.lead_id
+            )
+        processed += 1
+
+    db.commit()
+    return {"message": f"{processed} requests processed", "processed": processed, "synced": synced, "action": action}
+
+@app.post("/api/leads/bulk-sync-customers")
+def bulk_sync_leads_to_customers(data: dict, db: Session = Depends(get_db),
+                                 current_user: CompanyRep = Depends(get_current_user)):
+    if not _is_customer_sync_approver(current_user):
+        raise HTTPException(403, "Insufficient permissions")
+
+    lead_ids = data.get("lead_ids") or []
+    if not isinstance(lead_ids, list) or not lead_ids:
+        raise HTTPException(400, "lead_ids list is required")
+    if len(lead_ids) > 500:
+        raise HTTPException(400, "Maximum 500 leads allowed per bulk sync request")
+
+    synced = 0
+    linked_existing = 0
+    failed = 0
+    failures = []
+    processed_codes = []
+
+    for raw_id in lead_ids:
+        lid = (str(raw_id or "")).strip()
+        if not lid:
+            continue
+        lead = find_entity(db, Lead, "lead_id", lid)
+        if not lead:
+            failed += 1
+            failures.append({"lead_id": lid, "error": "Lead not found"})
+            continue
+
+        try:
+            linked, entity_id, _ = _sync_lead_to_customer_record(lead, db)
+            synced += 1
+            if linked:
+                linked_existing += 1
+            processed_codes.append({"lead_id": lead.lead_id, "customer_id": entity_id, "linked_existing": linked})
+        except Exception as e:
+            failed += 1
+            failures.append({"lead_id": lead.lead_id, "error": str(e)})
+
+    db.commit()
+    return {
+        "message": "Bulk customer sync completed",
+        "synced": synced,
+        "linked_existing": linked_existing,
+        "failed": failed,
+        "processed": processed_codes,
+        "failures": failures[:50]
+    }
+
+# ============================================
 # STALE LEAD API
 # ============================================
 @app.get("/api/leads/stale")
@@ -8699,6 +9378,297 @@ def reassign_lead(lid: str, data: dict, db: Session = Depends(get_db),
         )
     db.commit()
     return {"message": f"Lead reassigned to {new_rep.name}"}
+
+
+# ============================================
+# PAYMENT PLAN MANAGEMENT ENDPOINTS
+# ============================================
+
+PAYMENT_PLAN_ROLES = ["admin", "director", "cco", "coo"]
+
+
+def _plan_to_dict(plan, db=None):
+    """Convert payment plan to dict with versions if db provided."""
+    d = {
+        "id": str(plan.id), "plan_id": plan.plan_id,
+        "project_id": str(plan.project_id), "name": plan.name,
+        "description": plan.description, "is_default": plan.is_default,
+        "is_locked": plan.is_locked, "locked_at": plan.locked_at.isoformat() if plan.locked_at else None,
+        "lock_reason": plan.lock_reason, "status": plan.status,
+        "created_at": plan.created_at.isoformat() if plan.created_at else None,
+    }
+    if plan.locked_by:
+        d["locked_by"] = str(plan.locked_by)
+    if db:
+        versions = db.query(ProjectPaymentPlanVersion).filter(
+            ProjectPaymentPlanVersion.plan_id == plan.id
+        ).order_by(ProjectPaymentPlanVersion.version_number.desc()).all()
+        d["versions"] = [{
+            "id": str(v.id), "version_number": v.version_number,
+            "is_active": v.is_active, "installments": v.installments,
+            "num_installments": v.num_installments,
+            "installment_cycle": v.installment_cycle, "notes": v.notes,
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+        } for v in versions]
+    return d
+
+
+@app.get("/api/projects/{project_id}/payment-plans")
+def list_payment_plans(
+    project_id: str, status: str = "active",
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """List payment plans for a project."""
+    proj = db.query(Project).filter(
+        (Project.project_id == project_id) | (func.cast(Project.id, String) == project_id)
+    ).first()
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    q = db.query(ProjectPaymentPlan).filter(ProjectPaymentPlan.project_id == proj.id)
+    if status != "all":
+        q = q.filter(ProjectPaymentPlan.status == status)
+    plans = q.order_by(ProjectPaymentPlan.created_at.desc()).all()
+    return [_plan_to_dict(p, db) for p in plans]
+
+
+@app.post("/api/projects/{project_id}/payment-plans", status_code=201)
+def create_payment_plan(
+    project_id: str, data: dict,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(PAYMENT_PLAN_ROLES))
+):
+    """Create a new payment plan shell for a project."""
+    proj = db.query(Project).filter(
+        (Project.project_id == project_id) | (func.cast(Project.id, String) == project_id)
+    ).first()
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    # Generate plan_id
+    count = db.query(ProjectPaymentPlan).count()
+    plan_id = f"PPL-{str(count + 1).zfill(4)}"
+    while db.query(ProjectPaymentPlan).filter(ProjectPaymentPlan.plan_id == plan_id).first():
+        count += 1
+        plan_id = f"PPL-{str(count + 1).zfill(4)}"
+    plan = ProjectPaymentPlan(
+        plan_id=plan_id, project_id=proj.id,
+        name=data.get("name", "Default Plan"),
+        description=data.get("description"),
+        is_default=data.get("is_default", False),
+        created_by=current_user.id
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return _plan_to_dict(plan, db)
+
+
+@app.get("/api/payment-plans/{plan_id}")
+def get_payment_plan(
+    plan_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Get payment plan detail with versions."""
+    plan = db.query(ProjectPaymentPlan).filter(
+        (ProjectPaymentPlan.plan_id == plan_id) | (func.cast(ProjectPaymentPlan.id, String) == plan_id)
+    ).first()
+    if not plan:
+        raise HTTPException(404, "Payment plan not found")
+    return _plan_to_dict(plan, db)
+
+
+@app.put("/api/payment-plans/{plan_id}")
+def update_payment_plan(
+    plan_id: str, data: dict,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(PAYMENT_PLAN_ROLES))
+):
+    """Update mutable metadata. Reject business field changes if locked."""
+    plan = db.query(ProjectPaymentPlan).filter(
+        (ProjectPaymentPlan.plan_id == plan_id) | (func.cast(ProjectPaymentPlan.id, String) == plan_id)
+    ).first()
+    if not plan:
+        raise HTTPException(404, "Payment plan not found")
+    if plan.is_locked and any(k in data for k in ["is_default"]):
+        raise HTTPException(409, detail="Payment plan is locked; unlock required before mutation")
+    for k in ["name", "description", "is_default", "status"]:
+        if k in data:
+            setattr(plan, k, data[k])
+    plan.updated_at = func.now()
+    db.commit()
+    db.refresh(plan)
+    return _plan_to_dict(plan, db)
+
+
+@app.delete("/api/payment-plans/{plan_id}")
+def delete_payment_plan(
+    plan_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(PAYMENT_PLAN_ROLES))
+):
+    """Archive or delete a payment plan."""
+    plan = db.query(ProjectPaymentPlan).filter(
+        (ProjectPaymentPlan.plan_id == plan_id) | (func.cast(ProjectPaymentPlan.id, String) == plan_id)
+    ).first()
+    if not plan:
+        raise HTTPException(404, "Payment plan not found")
+    # Check if referenced by transactions
+    txn_ref = db.query(Transaction).filter(Transaction.payment_plan_version_id.in_(
+        db.query(ProjectPaymentPlanVersion.id).filter(ProjectPaymentPlanVersion.plan_id == plan.id)
+    )).first()
+    if txn_ref:
+        plan.status = "archived"
+        db.commit()
+        return {"message": "Plan archived (referenced by transactions)"}
+    db.delete(plan)
+    db.commit()
+    return {"message": "Plan deleted"}
+
+
+@app.post("/api/payment-plans/{plan_id}/versions", status_code=201)
+def create_plan_version(
+    plan_id: str, data: dict,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(PAYMENT_PLAN_ROLES))
+):
+    """Create a new version under a payment plan. Deny if plan is locked."""
+    plan = db.query(ProjectPaymentPlan).filter(
+        (ProjectPaymentPlan.plan_id == plan_id) | (func.cast(ProjectPaymentPlan.id, String) == plan_id)
+    ).first()
+    if not plan:
+        raise HTTPException(404, "Payment plan not found")
+    if plan.is_locked:
+        raise HTTPException(409, detail="Payment plan is locked; unlock required before mutation")
+    installments = data.get("installments", [])
+    if not installments:
+        raise HTTPException(400, detail="installments required")
+    pct_sum = sum(i.get("percentage", 0) for i in installments)
+    if abs(pct_sum - 100.0) > 0.01:
+        raise HTTPException(400, detail="Installment percentages must sum to 100")
+    max_ver = db.query(func.max(ProjectPaymentPlanVersion.version_number)).filter(
+        ProjectPaymentPlanVersion.plan_id == plan.id
+    ).scalar() or 0
+    ver = ProjectPaymentPlanVersion(
+        plan_id=plan.id, version_number=max_ver + 1,
+        is_active=True, installments=installments,
+        num_installments=data.get("num_installments", len(installments)),
+        installment_cycle=data.get("installment_cycle", "bi-annual"),
+        notes=data.get("notes"), created_by=current_user.id
+    )
+    # Deactivate siblings
+    db.query(ProjectPaymentPlanVersion).filter(
+        ProjectPaymentPlanVersion.plan_id == plan.id
+    ).update({"is_active": False})
+    db.add(ver)
+    db.commit()
+    db.refresh(ver)
+    return {
+        "id": str(ver.id), "version_number": ver.version_number,
+        "is_active": ver.is_active, "installments": ver.installments,
+        "num_installments": ver.num_installments,
+        "percentage_total": round(pct_sum, 2)
+    }
+
+
+@app.get("/api/payment-plans/{plan_id}/versions")
+def list_plan_versions(
+    plan_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """List versions for a payment plan."""
+    plan = db.query(ProjectPaymentPlan).filter(
+        (ProjectPaymentPlan.plan_id == plan_id) | (func.cast(ProjectPaymentPlan.id, String) == plan_id)
+    ).first()
+    if not plan:
+        raise HTTPException(404, "Payment plan not found")
+    versions = db.query(ProjectPaymentPlanVersion).filter(
+        ProjectPaymentPlanVersion.plan_id == plan.id
+    ).order_by(ProjectPaymentPlanVersion.version_number.desc()).all()
+    return [{
+        "id": str(v.id), "version_number": v.version_number,
+        "is_active": v.is_active, "installments": v.installments,
+        "num_installments": v.num_installments,
+        "installment_cycle": v.installment_cycle, "notes": v.notes,
+        "created_at": v.created_at.isoformat() if v.created_at else None,
+    } for v in versions]
+
+
+@app.post("/api/payment-plans/{plan_id}/versions/{version_id}/activate")
+def activate_plan_version(
+    plan_id: str, version_id: str,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(PAYMENT_PLAN_ROLES))
+):
+    """Activate a specific version; deactivate siblings. Deny if locked."""
+    plan = db.query(ProjectPaymentPlan).filter(
+        (ProjectPaymentPlan.plan_id == plan_id) | (func.cast(ProjectPaymentPlan.id, String) == plan_id)
+    ).first()
+    if not plan:
+        raise HTTPException(404, "Payment plan not found")
+    if plan.is_locked:
+        raise HTTPException(409, detail="Payment plan is locked; unlock required before mutation")
+    ver = db.query(ProjectPaymentPlanVersion).filter(
+        (func.cast(ProjectPaymentPlanVersion.id, String) == version_id),
+        ProjectPaymentPlanVersion.plan_id == plan.id
+    ).first()
+    if not ver:
+        raise HTTPException(404, "Version not found")
+    db.query(ProjectPaymentPlanVersion).filter(
+        ProjectPaymentPlanVersion.plan_id == plan.id
+    ).update({"is_active": False})
+    ver.is_active = True
+    db.commit()
+    return {"message": "Version activated", "active_version_id": str(ver.id)}
+
+
+@app.post("/api/payment-plans/{plan_id}/lock")
+def lock_payment_plan(
+    plan_id: str, data: dict = {},
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(PAYMENT_PLAN_ROLES))
+):
+    """Lock a payment plan. Prevents version creation and business field mutations."""
+    plan = db.query(ProjectPaymentPlan).filter(
+        (ProjectPaymentPlan.plan_id == plan_id) | (func.cast(ProjectPaymentPlan.id, String) == plan_id)
+    ).first()
+    if not plan:
+        raise HTTPException(404, "Payment plan not found")
+    if plan.is_locked:
+        raise HTTPException(409, detail="Payment plan is already locked")
+    plan.is_locked = True
+    plan.locked_by = current_user.id
+    plan.locked_at = func.now()
+    plan.lock_reason = data.get("reason", "")
+    db.commit()
+    db.refresh(plan)
+    return _plan_to_dict(plan)
+
+
+@app.post("/api/payment-plans/{plan_id}/unlock")
+def unlock_payment_plan(
+    plan_id: str, data: dict = {},
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(require_role(PAYMENT_PLAN_ROLES))
+):
+    """Unlock a payment plan. Requires reason."""
+    plan = db.query(ProjectPaymentPlan).filter(
+        (ProjectPaymentPlan.plan_id == plan_id) | (func.cast(ProjectPaymentPlan.id, String) == plan_id)
+    ).first()
+    if not plan:
+        raise HTTPException(404, "Payment plan not found")
+    if not plan.is_locked:
+        raise HTTPException(409, detail="Payment plan is not locked")
+    if not data.get("reason"):
+        raise HTTPException(400, detail="Unlock reason is required")
+    plan.is_locked = False
+    plan.locked_by = None
+    plan.locked_at = None
+    plan.lock_reason = None
+    db.commit()
+    db.refresh(plan)
+    return _plan_to_dict(plan)
 
 
 # ============================================
@@ -9021,6 +9991,165 @@ def analytics_rep_performance(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Rep analytics error: {str(e)}")
+
+
+@app.get("/api/analytics/leads/drilldown")
+def analytics_leads_drilldown(
+    stage: Optional[str] = None,
+    aging_bucket: Optional[str] = None,
+    rep_id: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+    source: Optional[str] = None,
+    export_format: Optional[str] = "json",
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    """Analytics drilldown: filtered lead list with optional CSV/Excel export.
+    Supports funnel stage click, aging bucket click, and role-scoped filtering."""
+    try:
+        isolation = get_rep_isolation_filter(current_user, db)
+
+        lead_q = db.query(Lead)
+
+        # Role-based isolation
+        if isolation["isolated"]:
+            lead_q = lead_q.filter(Lead.assigned_rep_id.in_(isolation["team_rep_uuids"]))
+
+        # Rep filter (admin/cco/director/coo can filter any rep; manager within team)
+        if rep_id:
+            rep_obj = db.query(CompanyRep).filter(
+                (CompanyRep.rep_id == rep_id) | (func.cast(CompanyRep.id, String) == rep_id)
+            ).first()
+            if rep_obj:
+                if not isolation["isolated"]:
+                    lead_q = lead_q.filter(Lead.assigned_rep_id == rep_obj.id)
+                elif rep_obj.id in isolation["team_rep_uuids"]:
+                    lead_q = lead_q.filter(Lead.assigned_rep_id == rep_obj.id)
+
+        # Campaign filter
+        if campaign_id:
+            camp = db.query(Campaign).filter(
+                (Campaign.campaign_id == campaign_id) | (func.cast(Campaign.id, String) == campaign_id)
+            ).first()
+            if camp:
+                lead_q = lead_q.filter(Lead.campaign_id == camp.id)
+
+        # Pipeline stage filter
+        if stage:
+            lead_q = lead_q.filter(Lead.pipeline_stage == stage)
+
+        # Source filter (via campaign.source)
+        if source:
+            source_camp_ids = [c.id for c in db.query(Campaign).filter(Campaign.source == source).all()]
+            if source_camp_ids:
+                lead_q = lead_q.filter(Lead.campaign_id.in_(source_camp_ids))
+            else:
+                lead_q = lead_q.filter(False)
+
+        all_leads = lead_q.all()
+
+        # Aging bucket filter (computed post-query: not-attempted leads only)
+        if aging_bucket:
+            today = date.today()
+            filtered = []
+            for l in all_leads:
+                if l.last_contacted_at is not None or l.status in ("converted", "lost"):
+                    continue
+                days_since = (today - l.created_at.date()).days if l.created_at else 0
+                if aging_bucket == "0_7d" and days_since <= 7:
+                    filtered.append(l)
+                elif aging_bucket == "7_14d" and 7 < days_since <= 14:
+                    filtered.append(l)
+                elif aging_bucket == "14d_plus" and days_since > 14:
+                    filtered.append(l)
+            all_leads = filtered
+
+        # Pre-fetch rep and campaign names
+        rep_ids = set(l.assigned_rep_id for l in all_leads if l.assigned_rep_id)
+        camp_ids = set(l.campaign_id for l in all_leads if l.campaign_id)
+        rep_name_map = {}
+        camp_name_map = {}
+        if rep_ids:
+            for r in db.query(CompanyRep).filter(CompanyRep.id.in_(rep_ids)).all():
+                rep_name_map[r.id] = {"name": r.name, "rep_id": r.rep_id}
+        if camp_ids:
+            for c in db.query(Campaign).filter(Campaign.id.in_(camp_ids)).all():
+                camp_name_map[c.id] = {"name": c.name, "campaign_id": c.campaign_id}
+
+        today = date.today()
+        rows = []
+        for l in all_leads:
+            rep_info = rep_name_map.get(l.assigned_rep_id, {})
+            camp_info = camp_name_map.get(l.campaign_id, {})
+            days_since = (today - l.created_at.date()).days if l.created_at else None
+            rows.append({
+                "lead_id": l.lead_id,
+                "name": l.name,
+                "mobile": l.mobile or "",
+                "email": l.email or "",
+                "pipeline_stage": l.pipeline_stage or "",
+                "status": l.status or "",
+                "source": l.source or "",
+                "temperature": l.temperature or "",
+                "assigned_rep": rep_info.get("name", "Unassigned"),
+                "assigned_rep_id": rep_info.get("rep_id", ""),
+                "campaign": camp_info.get("name", ""),
+                "campaign_id": camp_info.get("campaign_id", ""),
+                "days_since_creation": days_since,
+                "last_contacted": l.last_contacted_at.isoformat() if l.last_contacted_at else "",
+                "created_at": l.created_at.isoformat() if l.created_at else "",
+                "city": l.city or "",
+                "area": l.area or "",
+            })
+
+        # CSV export
+        if export_format == "csv":
+            import csv as csv_mod
+            from io import StringIO
+            output = StringIO()
+            if rows:
+                writer = csv_mod.DictWriter(output, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+            content = output.getvalue()
+            return StreamingResponse(
+                iter([content]),
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename=leads_drilldown.csv"}
+            )
+
+        # Excel export
+        if export_format == "excel":
+            import openpyxl
+            from io import BytesIO
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Leads Drilldown"
+            if rows:
+                headers = list(rows[0].keys())
+                ws.append(headers)
+                for row in rows:
+                    ws.append([row.get(h, "") for h in headers])
+            buf = BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+            return StreamingResponse(
+                buf,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f"attachment; filename=leads_drilldown.xlsx"}
+            )
+
+        return {
+            "leads": rows,
+            "total": len(rows),
+            "filters": {
+                "stage": stage, "aging_bucket": aging_bucket,
+                "rep_id": rep_id, "campaign_id": campaign_id, "source": source
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Drilldown error: {str(e)}")
+
 
 # ============================================
 # TASK MANAGEMENT ENDPOINTS
@@ -10386,3 +11515,4 @@ async def server_health(
     }
 
     return health
+

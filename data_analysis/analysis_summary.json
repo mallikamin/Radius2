@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-02-17T19:58:52.370091",
+  "total_raw": 9920,
+  "total_cleaned": 9897,
+  "total_unique_mobiles": 8728,
+  "cross_rep_overlaps": 927,
+  "per_rep": {
+    "Ali Zaidi": {
+      "raw": 2427,
+      "cleaned": 2417,
+      "promoted_phones": 137,
+      "invalid_phones": 18,
+      "international": 27,
+      "landlines": 0,
+      "internal_dupes": 258
+    },
+    "Iram Aslam": {
+      "raw": 2943,
+      "cleaned": 2936,
+      "promoted_phones": 4,
+      "invalid_phones": 17,
+      "international": 36,
+      "landlines": 0,
+      "internal_dupes": 122
+    },
+    "Naeem Zaidi": {
+      "raw": 2970,
+      "cleaned": 2964,
+      "promoted_phones": 9,
+      "invalid_phones": 13,
+      "international": 63,
+      "landlines": 0,
+      "internal_dupes": 58
+    },
+    "Samia Rashid": {
+      "raw": 1580,
+      "cleaned": 1580,
+      "promoted_phones": 0,
+      "invalid_phones": 11,
+      "international": 14,
+      "landlines": 0,
+      "internal_dupes": 263
+    }
+  },
+  "pairwise_overlaps": {
+    "Ali Zaidi vs Iram Aslam": 105,
+    "Ali Zaidi vs Naeem Zaidi": 74,
+    "Ali Zaidi vs Samia Rashid": 42,
+    "Iram Aslam vs Naeem Zaidi": 100,
+    "Iram Aslam vs Samia Rashid": 57,
+    "Naeem Zaidi vs Samia Rashid": 35
+  }
+}

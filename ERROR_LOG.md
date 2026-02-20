@@ -47,3 +47,17 @@ Each entry follows:
 - **Root Cause**: `Interaction.created_at` uses `server_default=func.now()` which includes time, but frontend display may truncate
 - **Fix**: Verified backend sends full datetime. Frontend display format was the issue.
 - **Rule**: Always check both backend response shape AND frontend display formatting when datetime appears wrong.
+
+### 2026-02-19 - Deploy race: network reconnect lost after API rebuild
+- **Error**: Orbit frontend looked up, but API path could fail after deploy.
+- **Context**: `docker network connect pos-system_default orbit_api` was run before `docker compose up -d --build orbit_api` fully finished.
+- **Root Cause**: API container was recreated after connect, so runtime-only network attach was lost.
+- **Fix**: Re-ran network connect after rebuild completed, then reloaded POS nginx.
+- **Rule**: Deploy must be serialized: rebuild API -> connect networks -> reload nginx -> verify network membership.
+
+### 2026-02-19 - Windows SCP path/wildcard pitfalls on manual deploy
+- **Error**: SCP failed when using wildcard paths and missing remote directories.
+- **Context**: Uploading frontend dist and migration SQL from Windows.
+- **Root Cause**: Shell/path expansion differences plus missing `~/orbit-crm/backend/migrations` directory on server.
+- **Fix**: Use `scp -r frontend/dist/. root@...:~/orbit-crm/frontend/dist/` and create remote dirs with `mkdir -p` before copy.
+- **Rule**: Avoid wildcard-dependent SCP on Windows and always ensure remote path exists first.

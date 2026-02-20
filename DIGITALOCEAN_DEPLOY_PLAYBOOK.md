@@ -14,6 +14,17 @@ Last updated: 2026-02-17
 - POS nginx (`pos-system-nginx-1`) could not resolve/reach `orbit_web` and `orbit_api`.
 - Result: Orbit domain became unreachable even though containers were running.
 
+## Incident Addendum (2026-02-19)
+- Deploy succeeded, but one critical race condition reappeared:
+- `docker network connect pos-system_default orbit_api` was run before API rebuild fully finished.
+- `orbit_api` container was then recreated by `docker compose up -d --build orbit_api`, dropping the just-added network link.
+- Outcome: frontend could still return `200`, but API route path was fragile/failing until reconnect was repeated after rebuild.
+
+Secondary deploy friction seen on Windows:
+- SCP wildcard expansion (`dist/*`) can fail depending on shell.
+- Fix: use `scp -r frontend/dist/. root@...:~/orbit-crm/frontend/dist/` (PowerShell-safe) or full dir path in Git Bash.
+- Manual SCP deploy means remote directories may not exist; create with `mkdir -p` first.
+
 ## Root Cause
 - Network link to `pos-system_default` was not fully enforced as a persistent deploy invariant.
 - Recreated containers only keep networks defined in compose. Any missing runtime-only network links are lost.
@@ -38,18 +49,31 @@ ssh root@159.65.158.26 "rm -rf ~/orbit-crm/frontend/dist/*"
 3. Upload changed files:
 ```bash
 scp backend/app/main.py root@159.65.158.26:~/orbit-crm/backend/app/main.py
-scp -r frontend/dist/* root@159.65.158.26:~/orbit-crm/frontend/dist/
+scp -r frontend/dist/. root@159.65.158.26:~/orbit-crm/frontend/dist/
 ```
-4. Rebuild Orbit API and restart Orbit web:
+4. Upload migrations (manual deploy path):
+```bash
+ssh root@159.65.158.26 "mkdir -p ~/orbit-crm/backend/migrations"
+scp backend/migrations/phase9_micro_tasks.sql root@159.65.158.26:~/orbit-crm/backend/migrations/
+```
+5. Apply migration (idempotent):
+```bash
+ssh root@159.65.158.26 "cat ~/orbit-crm/backend/migrations/phase9_micro_tasks.sql | docker exec -i orbit_db psql -U sitara -d sitara_crm"
+```
+6. Rebuild Orbit API (must complete before reconnect):
 ```bash
 ssh root@159.65.158.26 "cd ~/orbit-crm && docker compose up -d --build orbit_api"
-ssh root@159.65.158.26 "docker restart orbit_web"
 ```
-5. Re-attach Orbit containers to POS network (always verify/repair):
+7. Re-attach Orbit containers to POS network (MUST run after step 6):
 ```bash
 ssh root@159.65.158.26 "docker network connect pos-system_default orbit_web || true"
 ssh root@159.65.158.26 "docker network connect pos-system_default orbit_api || true"
+ssh root@159.65.158.26 "docker exec pos-system-nginx-1 nginx -s reload"
 ```
+
+Hard rule:
+- Never run step 7 in parallel with step 6.
+- Wait for API rebuild/recreate to finish first, or network attach is lost.
 
 ## Mandatory Verification Checklist
 Run all of these after deploy:
@@ -79,6 +103,15 @@ ssh root@159.65.158.26 "curl -sk https://orbit-voice.duckdns.org/api/health -H '
 ```powershell
 curl https://orbit-voice.duckdns.org/api/health
 ```
+
+6. Confirm network membership (post-rebuild):
+```bash
+ssh root@159.65.158.26 "docker inspect orbit_api -f '{{json .NetworkSettings.Networks}}'"
+```
+Expected to include:
+- `orbit-crm_orbit_internal`
+- `voice_gateway`
+- `pos-system_default`
 
 ## Emergency Recovery (If Orbit Goes Dark)
 1. Check network memberships:
