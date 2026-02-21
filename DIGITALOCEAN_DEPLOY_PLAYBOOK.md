@@ -1,6 +1,6 @@
 # DigitalOcean Deploy Playbook (Orbit + POS Co-Hosted)
 
-Last updated: 2026-02-17
+Last updated: 2026-02-21
 
 ## Scope
 - Droplet: `159.65.158.26`
@@ -132,3 +132,37 @@ ssh root@159.65.158.26 "docker exec pos-system-nginx-1 nginx -t && docker exec p
 - Do not run `docker compose down` in POS project path during Orbit deploy.
 - Do not run broad cleanup commands like `docker system prune -a`.
 - Do not edit/remove POS nginx default config while deploying Orbit.
+
+## DB Migration Protocol (MANDATORY — added 2026-02-21)
+
+**NEVER run migrations directly on production. Always test first.**
+
+```bash
+# 1. Create test DB (clone from prod)
+docker exec orbit_db psql -U sitara -d postgres \
+  -c "CREATE DATABASE sitara_crm_test OWNER sitara;"
+docker exec orbit_db bash -c \
+  'pg_dump -U sitara sitara_crm | psql -U sitara sitara_crm_test'
+
+# 2. Upload and run migration on test DB
+docker exec -i orbit_db psql -U sitara -d sitara_crm_test < /tmp/migration.sql
+
+# 3. Validate (check counts, spot-check data)
+
+# 4. If OK → run on production
+docker exec -i orbit_db psql -U sitara -d sitara_crm < /tmp/migration.sql
+
+# 5. Drop test DB and restart API
+docker exec orbit_db psql -U sitara -d postgres \
+  -c "DROP DATABASE sitara_crm_test;"
+docker restart orbit_api
+```
+
+Note: `CREATE DATABASE ... WITH TEMPLATE` won't work while prod has active connections. Use `pg_dump | psql` instead.
+
+## Branch Protocol (added 2026-02-21)
+
+See `HANDOFF_NOTES.md` Section 1 for full branch naming convention.
+- `wip/*` → deploy → merge to master → rename to `archive/wip-*`
+- Create `prod/<date>-<HHMM>` snapshot at deploy time
+- NEVER work directly on master
