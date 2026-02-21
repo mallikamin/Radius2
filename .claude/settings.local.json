@@ -46,7 +46,9 @@
       "Bash(PGPASSWORD=sitara123 psql:*)",
       "Bash(docker cp:*)",
       "Bash(git ls-tree:*)",
-      "Bash(PYTHONPATH=\"backend/app;backend/app/services\" python -m pytest:*)"
+      "Bash(PYTHONPATH=\"backend/app;backend/app/services\" python -m pytest:*)",
+      "Bash(git merge:*)",
+      "Bash(git stash:*)"
     ]
   }
 }
