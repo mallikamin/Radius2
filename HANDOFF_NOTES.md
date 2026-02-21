@@ -1,140 +1,182 @@
-# HANDOFF NOTES - Interactions + Tasks
+# HANDOFF NOTES — Agent Standards & Deployment Protocol
 
-Date: 2026-02-17
-Branch context: `InteractionsUpdate` (work in progress), `Prod16thFeb` reported deployed
-Workspace: `C:\Users\Malik\desktop\radius2-analytics`
+> **Last updated**: 2026-02-21
+> **Any agent (Claude, Codex, or human) deploying to production MUST read and follow this file.**
 
-## 1) What was implemented (Codex - backend)
+---
 
-### Task casing + visibility bug fix
-- Root issue: legacy tasks had uppercase `task_type` values (`GENERAL`, `FOLLOW_UP`) while filters/config expected lowercase (`general`, `follow_up`).
-- Changes made:
-  - `backend/app/main.py`
-    - Task model defaults updated:
-      - `task_type` default: `general`
-      - `priority` default: `medium`
-      - `status` default: `pending`
-    - Leads bulk-import duplicate task creation normalized:
-      - `task_type="follow_up"`
-      - `priority="high"`
-  - `backend/app/services/task_service.py`
-    - Added one-time legacy normalization routine:
-      - Lowercases existing `Task.task_type` rows in DB (`UPDATE` equivalent via SQLAlchemy)
-    - Applied case-insensitive task type filtering:
-      - `func.lower(Task.task_type) == task_type.lower()`
-    - Normalization hook called in:
-      - `get_tasks`
-      - `get_my_tasks`
-      - `get_task_summary`
-      - `get_executive_summary`
-    - Task creation path now normalizes `task_type`/`priority` to lowercase.
+## 1. Branch Naming Convention (MANDATORY)
 
-### Interaction timestamp verification
-- `Interaction.created_at` is server-side (`server_default=func.now()`).
-- API list/details/report outputs include interaction datetime fields (`created_at` / `date` from `created_at`).
+| Type | Pattern | Example |
+|------|---------|---------|
+| **Work-in-progress** | `wip/<FeatureName>` | `wip/SitaraSquareDataUpdation_21stFeb` |
+| **Production snapshot** | `prod/<date>-<HHMM>` | `prod/21stFeb-2026-1545` |
+| **Archived WIP** | `archive/wip-<FeatureName>` | `archive/wip-SitaraSquareDataUpdation_21stFeb` |
+| **Archived prod** | `archive/prod-<date>` | `archive/prod-18thFeb` |
 
-### Validation run
-- `python -m py_compile backend/app/main.py backend/app/services/task_service.py backend/app/reports.py` passed.
+### Branch Lifecycle Flow
 
-## 2) Claude-side frontend context (reported)
-- Interactions target search integrated (`/api/interactions/targets/search`).
-- Quick log available from:
-  - Customers tab rows
-  - Brokers cards
-  - Pipeline lead cards
-- Interactions form supports lead/customer/broker entity linking.
-
-## 3) Pending QA checklist (must run)
-
-### Interactions consistency
-1. From Customers & Leads tab `Log`, confirm same behavior/data shape as Interactions tab submit.
-2. Confirm record appears in:
-   - Interactions tab
-   - Related entity history (lead/customer/broker)
-   - Reports history
-3. Confirm date-time shown with time (not date-only) in all interaction tables/histories.
-
-### Tasks visibility + import behavior
-1. Open Tasks without type filter and verify old test tasks appear.
-2. Filter by `general` and verify legacy uppercase tasks are still visible.
-3. Run a lead bulk-import with known duplicate mobile and verify:
-   - `results.duplicates` increments
-   - follow-up task is created
-   - assignee resolution (matched rep or current user fallback)
-4. Verify unassigned tasks are visible when filters include unassigned scope.
-
-## 4) Known observations
-- If bulk-import has no duplicate rows, no follow-up tasks are created by design.
-- Existing missing tasks were likely mostly filter-casing + assignment/filter UI effects, not data deletion.
-
-## 5) Deployment references
-- Orbit reported live: `https://orbit-voice.duckdns.org/`
-- Shared DO/POS+Orbit reference (maintained in sibling repo):
-  - `C:\Users\Malik\desktop\radius2\DIGITALOCEAN_SERVER_REFERENCE.md`
-
-## 6) Next action when resuming
-1. Finish frontend parity tweaks (QuickLogModal vs Interactions modal UX + toasts + timestamp display).
-2. Execute QA checklist above with screenshots/results.
-3. Only then merge/cherry-pick to production branch.
-
-## 6.1) Deployment incident note (2026-02-17)
-- Orbit deploy temporarily broke public routing after container rebuild.
-- Root cause: `orbit_web`/`orbit_api` lost attachment to `pos-system_default`, so POS nginx could not resolve upstreams.
-- Recovery performed on server:
-  - `docker network connect pos-system_default orbit_web`
-  - `docker network connect pos-system_default orbit_api`
-  - `docker exec pos-system-nginx-1 nginx -t && docker exec pos-system-nginx-1 nginx -s reload`
-- Permanent playbook reference in this repo:
-  - `DIGITALOCEAN_DEPLOY_PLAYBOOK.md`
-
-## 7) Current project structure (as of 2026-02-17)
-```text
-radius2-analytics/
-|- .claude/
-|  |- settings.local.json
-|- backend/
-|  |- app/
-|  |- migrations/
-|  |- Dockerfile
-|  |- requirements.txt
-|  |- create_all_tables.sql
-|  |- setup_all_tables.sql
-|  |- phase2_tables.sql ... phase6_media.sql
-|  |- add_tables.sql, add_auth_columns.sql, apply_indexes.sql
-|  |- deployment_config.sql, optimizations.sql, init.sql
-|  |- install_dependencies.py, migrate_vector_schema.py
-|  |- test_endpoints.py, FIND_DB_CREDENTIALS.md
-|- database/
-|  |- init.sql
-|  |- phase9_enhanced_crm.sql
-|  |- phase10_add_sales_team.sql
-|- frontend/
-|  |- src/
-|  |- Dockerfile
-|  |- package.json, package-lock.json
-|  |- vite.config.js, tailwind.config.js, postcss.config.js
-|  |- index.html
-|  |- dist/ (build output)
-|  |- node_modules/ (local dependencies)
-|- media/
-|  |- interactions/
-|  |- payments/
-|  |- projects/
-|  |- receipts/
-|  |- transactions/
-|- nginx/
-|  |- default.conf
-|- _archive/
-|  |- initial_deployment_docs/
-|  |- test_login.py
-|- docker-compose.yml
-|- docker-compose.prod.yml
-|- HANDOFF_NOTES.md
-|- CLAUDE.md
-|- DIGITALOCEAN_DEPLOY_PLAYBOOK.md
-|- IMPORT_DATA_SYNC.ps1
-|- SYNC_DATA_TO_SERVER.ps1
-|- switch-to-local-ports.ps1
-|- revert-to-office-ports.ps1
-`- STOP.ps1
 ```
+1. Create:    git checkout -b wip/<FeatureName>
+2. Work:      commit changes on wip branch
+3. Deploy:    deploy to DO (see Section 3)
+4. Merge:     git checkout master && git merge wip/<FeatureName>
+5. Tag prod:  git branch prod/<date>-<HHMM>
+6. Archive:   git branch -m wip/<FeatureName> archive/wip-<FeatureName>
+```
+
+**Rules:**
+- NEVER work directly on `master` — always use a `wip/*` branch
+- ALWAYS create a `prod/*` branch with datetime stamp at deploy time
+- ALWAYS rename `wip/*` to `archive/wip-*` after successful deployment
+- `master` must always reflect the latest deployed state
+
+---
+
+## 2. Database Migration Standard (TEST-FIRST — MANDATORY)
+
+**NEVER run migrations directly on production.** Always test first.
+
+### Step-by-step protocol:
+
+```bash
+# 1. Create test DB (clone from prod)
+docker exec orbit_db psql -U sitara -d postgres \
+  -c "CREATE DATABASE sitara_crm_test OWNER sitara;"
+docker exec orbit_db bash -c \
+  'pg_dump -U sitara sitara_crm | psql -U sitara sitara_crm_test'
+
+# 2. Run migration on test DB
+docker exec -i orbit_db psql -U sitara -d sitara_crm_test < /tmp/migration.sql
+
+# 3. Validate (run verification queries, check counts, spot-check data)
+
+# 4. If OK → run on production
+docker exec -i orbit_db psql -U sitara -d sitara_crm < /tmp/migration.sql
+
+# 5. Drop test DB
+docker exec orbit_db psql -U sitara -d postgres \
+  -c "DROP DATABASE sitara_crm_test;"
+
+# 6. Restart API to clear caches
+docker restart orbit_api
+```
+
+**Rules:**
+- Migration SQL must be wrapped in `BEGIN; ... COMMIT;` for atomicity
+- Always include verification queries at the end of the migration
+- Save migration files in `database/` directory and commit to git
+- Name pattern: `database/<feature>_migration.sql`
+
+---
+
+## 3. DigitalOcean Deployment Protocol
+
+### Server Details
+- **IP**: `159.65.158.26` | **SSH**: `root`
+- **Orbit path**: `~/orbit-crm`
+- **Domain**: `https://orbit-voice.duckdns.org/`
+- **No git on server** — deploy via SCP + docker rebuild
+
+### Full Code Deploy (frontend + backend)
+
+```bash
+# 1. Build frontend locally
+cd frontend && ./node_modules/.bin/vite build
+
+# 2. Clean server dist FIRST (prevents stale JS chunks)
+ssh root@159.65.158.26 "rm -rf ~/orbit-crm/frontend/dist/*"
+
+# 3. SCP files
+scp backend/app/main.py root@159.65.158.26:~/orbit-crm/backend/app/
+scp -r backend/app/services/ root@159.65.158.26:~/orbit-crm/backend/app/
+scp -r frontend/dist/ root@159.65.158.26:~/orbit-crm/frontend/
+
+# 4. Rebuild API container (restart alone does NOT work — Dockerfile uses COPY)
+ssh root@159.65.158.26 "cd ~/orbit-crm && docker compose up -d --build orbit_api"
+
+# 5. Restart web
+ssh root@159.65.158.26 "docker restart orbit_web"
+
+# 6. CRITICAL: Reconnect to POS network (see Section 4)
+```
+
+### DB-Only Deploy (no code changes)
+- Upload SQL to `/tmp/` on server
+- Follow test-first protocol (Section 2)
+- Restart API after: `docker restart orbit_api`
+
+### Verify After Deploy
+```bash
+# Check API is responding
+docker exec orbit_web curl -s http://orbit_api:8000/api/dashboard/summary | head -100
+
+# Check frontend hash matches
+ls ~/orbit-crm/frontend/dist/assets/index-*.js
+```
+
+---
+
+## 4. Co-Hosting Safety (Orbit + POS — CRITICAL)
+
+The DO server co-hosts Orbit CRM and a POS system. **Breaking POS = breaking a live business.**
+
+- POS stack at `~/pos-system` — **NEVER touch during Orbit deploy**
+- **NEVER run `docker system prune -a`** — destroys POS images
+- POS nginx (`pos-system-nginx-1`) is the ONLY entry point for ports 80/443
+- Orbit has NO host port bindings — relies on POS nginx reverse proxy
+
+### After ANY `docker compose up --build` on Orbit:
+
+Containers get recreated on `orbit-crm_orbit_internal` only — they lose `pos-system_default` membership. **You MUST reconnect:**
+
+```bash
+docker network connect pos-system_default orbit_web
+docker network connect pos-system_default orbit_api
+docker exec pos-system-nginx-1 nginx -s reload
+```
+
+**Without this, `orbit-voice.duckdns.org` silently drops (returns 444).**
+
+---
+
+## 5. Docker Volume Safety (CRITICAL)
+
+Volume names are IMMUTABLE. Changing them causes **silent total data loss**.
+
+| Environment | Volume Name | Compose Key |
+|-------------|-------------|-------------|
+| Local Dev | `radius2_sitara_v3_postgres` | `external: true` |
+| Production | `sitara_postgres_data` | `external: true` |
+
+**NEVER** remove `external: true` or change the `name:` field.
+
+---
+
+## 6. Current State (as of 2026-02-21)
+
+### Active Branches
+- `master` — latest, includes all deploys through 21 Feb 2026
+- `prod/21stFeb-2026-1545` — current production snapshot
+
+### Production Database (`sitara_crm`)
+- 25 customers, 17 brokers, 4 projects
+- 31 transactions (28 Sitara Square + 3 other)
+- 30 receipts with 62 allocations
+- 269 inventory items (28 sold Sitara Square)
+
+### Key Credentials
+- **DB**: `postgresql://sitara:sitara_secure_2024@localhost:5435/sitara_crm` (inside Docker network)
+- **Login**: REP-0002 (Admin) — reset password: `UPDATE company_reps SET password_hash = NULL WHERE rep_id = 'REP-0002';`
+
+---
+
+## 7. Error Logging
+
+When you fix a new error, **append it to `ERROR_LOG.md`** with:
+- Date
+- Error message
+- Context (what you were doing)
+- Root cause
+- Fix applied
+- Rule to prevent recurrence
