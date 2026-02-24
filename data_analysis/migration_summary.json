@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-02-24T19:00:39.785091",
+  "total_leads": 8543,
+  "lead_id_range": "LEAD-00030 to LEAD-08573",
+  "per_rep": {
+    "REP-0016": {
+      "name": "Samia Rashid",
+      "count": 1247,
+      "pk_mobiles": 1223,
+      "intl_mobiles": 24
+    },
+    "REP-0017": {
+      "name": "Syed Naeem Abbass Zaidi",
+      "count": 2781,
+      "pk_mobiles": 2729,
+      "intl_mobiles": 52
+    },
+    "REP-0018": {
+      "name": "Syed Ali Zaib Zaidi",
+      "count": 1917,
+      "pk_mobiles": 1880,
+      "intl_mobiles": 37
+    },
+    "REP-0019": {
+      "name": "Iram Aslam",
+      "count": 2598,
+      "pk_mobiles": 2551,
+      "intl_mobiles": 47
+    }
+  },
+  "sql_file": "C:/Users/Malik/desktop/radius2-analytics/database/raw_leads_migration.sql"
+}
