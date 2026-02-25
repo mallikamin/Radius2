@@ -153,17 +153,28 @@ Volume names are IMMUTABLE. Changing them causes **silent total data loss**.
 
 ---
 
-## 6. Current State (as of 2026-02-21)
+## 6. Current State (as of 2026-02-23)
 
 ### Active Branches
-- `master` — latest, includes all deploys through 21 Feb 2026
-- `prod/21stFeb-2026-1545` — current production snapshot
+- `master` — latest, includes batch 2 migration SQL (not yet deployed to prod)
+- `prod/21stFeb-2026-1545` — current production snapshot (batch 1 only)
 
-### Production Database (`sitara_crm`)
+### Pending Migration (NOT YET DEPLOYED)
+- `database/sitara_square_migration_2.sql` — Sitara Square Batch 2
+- 12 transactions: shops 5,10,19,20,21,24,28,33,34,36,45,C6
+- 11 new customers, 2 new brokers (Affaq Khan, Waqar)
+- Creates C6 inventory unit (commercial, not in original inventory)
+- **Must run test-first protocol (Section 2) before deploying**
+
+### Production Database (`sitara_crm`) — after batch 1, before batch 2
 - 25 customers, 17 brokers, 4 projects
 - 31 transactions (28 Sitara Square + 3 other)
 - 30 receipts with 62 allocations
 - 269 inventory items (28 sold Sitara Square)
+
+### After Batch 2 is deployed (expected counts)
+- ~36 customers (+11), ~19 brokers (+2), 4 projects
+- 43 transactions (+12), 270 inventory items (+1 C6)
 
 ### Key Credentials
 - **DB**: `postgresql://sitara:sitara_secure_2024@localhost:5435/sitara_crm` (inside Docker network)

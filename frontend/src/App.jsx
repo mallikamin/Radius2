@@ -358,10 +358,10 @@ export default function App() {
     
     // Role-based access rules
     const roleAccess = {
-      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
+      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'eoi', 'settings'],
       director: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
       cco: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
-      coo: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
+      coo: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'eoi', 'settings'],
       manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'tasks', 'media', 'vector'],
       creator: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector'],
       user: ['customers', 'tasks', 'interactions', 'dashboard', 'transactions', 'receipts'],
@@ -393,7 +393,7 @@ export default function App() {
     // Operations team: COO Hassan Danish, Ahsan Ejaz (Director Land), Sarosh Javed (CEO)
     operations: {
       members: ['REP-0003', 'REP-0004', 'REP-0009'],
-      primaryIds: ['tasks', 'inventory', 'transactions', 'vector', 'dashboard', 'reports'],
+      primaryIds: ['eoi', 'tasks', 'inventory', 'transactions', 'vector', 'dashboard', 'reports'],
     },
   };
 
@@ -418,11 +418,12 @@ export default function App() {
     { id: 'transactions', label: 'Transactions', icon: '\u{1F4B1}' },
     { id: 'receipts', label: 'Receipts', icon: '\u{1F4C4}' },
     { id: 'payments', label: 'Payments', icon: '\u{1F4B8}' },
+    { id: 'eoi', label: 'EOI Collection', icon: '\u{1F4DD}' },
     { id: 'media', label: 'Media Library', icon: '\u{1F4F7}' }
   ];
 
   // Icon map for tabs that can appear in either primary or more menu
-  const TAB_ICONS = { customers: '\u{1F465}', campaigns: '\u{1F4E3}', interactions: '\u{1F4DE}', vector: '\u{1F5FA}', inventory: '\u{1F4E6}', transactions: '\u{1F4B1}', tasks: '\u{2705}', reports: '\u{1F4CA}', dashboard: '\u{1F4C8}' };
+  const TAB_ICONS = { customers: '\u{1F465}', campaigns: '\u{1F4E3}', interactions: '\u{1F4DE}', vector: '\u{1F5FA}', inventory: '\u{1F4E6}', transactions: '\u{1F4B1}', tasks: '\u{2705}', reports: '\u{1F4CA}', dashboard: '\u{1F4C8}', eoi: '\u{1F4DD}' };
 
   // All known tabs (primary + more) for team-based selection
   const allKnownTabs = [...allPrimaryTabs, ...defaultMoreTabs];
@@ -570,6 +571,7 @@ export default function App() {
           deepLink={taskDeepLink}
           onDeepLinkHandled={() => setTaskDeepLink(null)}
         />}
+        {activeTab === 'eoi' && <EOICollectionView />}
         {activeTab === 'vector' && <VectorView />}
         {activeTab === 'settings' && <SettingsView />}
       </main>
@@ -1789,14 +1791,28 @@ function PipelineView() {
   const [leadSubView, setLeadSubView] = useState('main');
   const [leadFollowupMap, setLeadFollowupMap] = useState({});
   const [newLeadForm, setNewLeadForm] = useState(emptyEnhancedLead);
+  const [leadSearch, setLeadSearch] = useState('');
+  const [leadSearchInput, setLeadSearchInput] = useState('');
+  const [leadPage, setLeadPage] = useState(1);
+  const [leadPageSize] = useState(50);
   const role = getUserRole();
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
 
-  useEffect(() => { loadPipeline(); loadReps(); loadLeadMeta(); }, [repFilter]);
+  useEffect(() => { loadPipeline(); loadReps(); loadLeadMeta(); }, [repFilter, activeStage, leadSearch, leadPage]);
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => { setLeadSearch(leadSearchInput); setLeadPage(1); }, 400);
+    return () => clearTimeout(timer);
+  }, [leadSearchInput]);
   const loadPipeline = async () => {
     try {
+      setLoading(true);
       const params = new URLSearchParams();
       if (repFilter) params.append('rep_id', repFilter);
+      if (leadSearch) params.append('search', leadSearch);
+      if (activeStage && activeStage !== 'all') params.append('stage', activeStage);
+      params.append('page', leadPage);
+      params.append('page_size', leadPageSize);
       const [res, intRes] = await Promise.all([
         api.get(`/leads/pipeline?${params}`),
         api.get('/interactions', { params: { limit: 500 } }).catch(() => ({ data: [] }))
@@ -1879,22 +1895,9 @@ function PipelineView() {
   };
 
   const allStages = pipelineData?.pipeline || [];
-  const allLeads = allStages.flatMap(s => s.leads);
-  const stageLeads = activeStage === 'all' ? allLeads : (allStages.find(s => s.stage === activeStage)?.leads || []);
-  const todayISO = new Date().toISOString().split('T')[0];
-  const pendingLeads = stageLeads.filter(lead => {
-    const nextFollowUp = leadFollowupMap[lead.lead_id]?.nextFollowUp;
-    return nextFollowUp && nextFollowUp >= todayISO;
-  });
-  const overdueLeads = stageLeads.filter(lead => {
-    const nextFollowUp = leadFollowupMap[lead.lead_id]?.nextFollowUp;
-    return nextFollowUp && nextFollowUp < todayISO;
-  });
-  const displayLeads = leadSubView === 'pending'
-    ? pendingLeads
-    : leadSubView === 'overdue'
-      ? overdueLeads
-      : stageLeads;
+  const displayLeads = pipelineData?.leads || [];
+  const filteredTotal = pipelineData?.filtered_total || 0;
+  const totalPages = pipelineData?.total_pages || 1;
 
   return (
     <div className="space-y-4">
@@ -1902,7 +1905,7 @@ function PipelineView() {
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => setShowAddLeadModal(true)} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800">+ Add Lead</button>
         {isAdminLike && (
-          <select value={repFilter} onChange={e => { setRepFilter(e.target.value); setLoading(true); }}
+          <select value={repFilter} onChange={e => { setRepFilter(e.target.value); setLeadPage(1); setLoading(true); }}
             className="px-3 py-2 text-sm border rounded-lg bg-white">
             <option value="">All Reps</option>
             {reps.map(r => <option key={r.id} value={r.rep_id}>{r.name}</option>)}
@@ -1926,12 +1929,12 @@ function PipelineView() {
 
       {/* Stage tabs */}
       <div className="flex gap-1 overflow-x-auto pb-2">
-        <button onClick={() => setActiveStage('all')}
+        <button onClick={() => { setActiveStage('all'); setLeadPage(1); }}
           className={`px-3 py-1.5 text-sm font-medium rounded-full whitespace-nowrap transition-all ${activeStage === 'all' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
           All ({pipelineData?.total || 0})
         </button>
         {allStages.map(s => (
-          <button key={s.stage} onClick={() => setActiveStage(s.stage)}
+          <button key={s.stage} onClick={() => { setActiveStage(s.stage); setLeadPage(1); }}
             className={`px-3 py-1.5 text-sm font-medium rounded-full whitespace-nowrap transition-all flex items-center gap-1.5 ${activeStage === s.stage ? 'text-white' : 'text-gray-600 hover:bg-gray-200'}`}
             style={activeStage === s.stage ? { backgroundColor: s.color } : { backgroundColor: '#f3f4f6' }}>
             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }}></span>
@@ -1940,25 +1943,18 @@ function PipelineView() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[220px,1fr] gap-4">
-        <div className="bg-white rounded-xl border p-2 h-fit">
-          {[
-            { id: 'main', label: 'Main Leads', count: stageLeads.length },
-            { id: 'pending', label: 'Pending Follow-ups', count: pendingLeads.length },
-            { id: 'overdue', label: 'Overdue Follow-ups', count: overdueLeads.length }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setLeadSubView(tab.id)}
-              className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md mb-1 last:mb-0 ${
-                leadSubView === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              <span>{tab.label}</span>
-              <span className={`text-xs px-1.5 py-0.5 rounded ${leadSubView === tab.id ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-700'}`}>{tab.count}</span>
-            </button>
-          ))}
+      {/* Search bar */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1 max-w-md">
+          <input type="text" placeholder="Search leads by name, mobile, ID, email..." value={leadSearchInput}
+            onChange={e => setLeadSearchInput(e.target.value)}
+            className="w-full border rounded-lg px-3 py-2 pl-9 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400" />
+          <svg className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
         </div>
+        <span className="text-xs text-gray-500">{filteredTotal} leads{leadSearch ? ` matching "${leadSearch}"` : ''}</span>
+      </div>
+
+      <div>
         {loading ? <Loader /> : displayLeads.length === 0 ? <Empty msg="No leads found for selected view" /> : (
           <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
             <table className="w-full">
@@ -2043,6 +2039,35 @@ function PipelineView() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between mt-3 px-1">
+            <span className="text-xs text-gray-500">
+              Page {leadPage} of {totalPages} ({filteredTotal} leads)
+            </span>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setLeadPage(1)} disabled={leadPage <= 1}
+                className="px-2 py-1 text-xs border rounded hover:bg-gray-50 disabled:opacity-30">First</button>
+              <button onClick={() => setLeadPage(p => Math.max(1, p - 1))} disabled={leadPage <= 1}
+                className="px-2 py-1 text-xs border rounded hover:bg-gray-50 disabled:opacity-30">Prev</button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pg;
+                if (totalPages <= 5) pg = i + 1;
+                else if (leadPage <= 3) pg = i + 1;
+                else if (leadPage >= totalPages - 2) pg = totalPages - 4 + i;
+                else pg = leadPage - 2 + i;
+                return (
+                  <button key={pg} onClick={() => setLeadPage(pg)}
+                    className={`px-2.5 py-1 text-xs border rounded ${pg === leadPage ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'}`}>{pg}</button>
+                );
+              })}
+              <button onClick={() => setLeadPage(p => Math.min(totalPages, p + 1))} disabled={leadPage >= totalPages}
+                className="px-2 py-1 text-xs border rounded hover:bg-gray-50 disabled:opacity-30">Next</button>
+              <button onClick={() => setLeadPage(totalPages)} disabled={leadPage >= totalPages}
+                className="px-2 py-1 text-xs border rounded hover:bg-gray-50 disabled:opacity-30">Last</button>
+            </div>
           </div>
         )}
       </div>
@@ -3244,6 +3269,732 @@ function ReceiptDetailModal({ receipt, onClose }) {
 }
 
 // ============================================
+// EOI COLLECTION VIEW — Expression of Interest
+// ============================================
+function EOICollectionView() {
+  const [eois, setEois] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [brokers, setBrokers] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [inventoryList, setInventoryList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editingEoi, setEditingEoi] = useState(null);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [selectedEoi, setSelectedEoi] = useState(null);
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [convertingEoi, setConvertingEoi] = useState(null);
+  const [selectedProjectId, setSelectedProjectId] = useState('');
+
+  // Filters
+  const [partyFilter, setPartyFilter] = useState('');
+  const [brokerFilter, setBrokerFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [eoiIdFilter, setEoiIdFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [drilldownFilter, setDrilldownFilter] = useState(null);
+
+  // Form
+  const emptyForm = {
+    party_name: '', party_mobile: '', party_cnic: '',
+    broker_name: '', broker_id: '',
+    amount: '', marlas: '', unit_number: '',
+    payment_method: 'cash', reference_number: '',
+    eoi_date: new Date().toISOString().split('T')[0],
+    eoi_time: new Date().toTimeString().slice(0, 5),
+    notes: '', project_id: ''
+  };
+  const [form, setForm] = useState(emptyForm);
+
+  // Convert form
+  const emptyConvertForm = {
+    customer_id: '', inventory_id: '', broker_id: '',
+    area_marla: '', rate_per_marla: '', num_installments: 4,
+    first_due_date: '', installment_cycle: 'quarterly',
+    broker_commission_rate: '', unit_number: '', block: '',
+    notes: ''
+  };
+  const [convertForm, setConvertForm] = useState(emptyConvertForm);
+  const [customerSearch, setCustomerSearch] = useState('');
+
+  const role = getUserRole();
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+
+  useEffect(() => { loadProjects(); }, []);
+  useEffect(() => { if (selectedProjectId) loadData(); }, [selectedProjectId]);
+
+  const loadProjects = async () => {
+    try {
+      const res = await api.get('/projects');
+      const list = res.data || [];
+      setProjects(list);
+      const sgb = list.find(p => p.name?.toLowerCase().includes('grand bazaar'));
+      if (sgb) setSelectedProjectId(sgb.id);
+      else if (list.length) setSelectedProjectId(list[0].id);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [eoiRes, dashRes, brkRes, custRes] = await Promise.all([
+        api.get('/eoi', { params: { project_id: selectedProjectId, limit: 500 } }).catch(() => ({ data: { items: [] } })),
+        api.get('/eoi/dashboard', { params: { project_id: selectedProjectId } }).catch(() => ({ data: null })),
+        api.get('/brokers').catch(() => ({ data: [] })),
+        api.get('/customers').catch(() => ({ data: [] }))
+      ]);
+      setEois(eoiRes.data?.items || eoiRes.data || []);
+      setDashboard(dashRes.data);
+      setBrokers(brkRes.data || []);
+      setCustomers(custRes.data || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const loadProjectInventory = async (projectId) => {
+    try {
+      const res = await api.get('/inventory', { params: { project_id: projectId, status: 'available', limit: 200 } });
+      setInventoryList(res.data || []);
+    } catch (e) { setInventoryList([]); }
+  };
+
+  // Client-side filtering
+  const filteredEois = eois.filter(e => {
+    if (partyFilter && !e.party_name?.toLowerCase().includes(partyFilter.toLowerCase())) return false;
+    if (brokerFilter && !(e.broker_name || 'Direct').toLowerCase().includes(brokerFilter.toLowerCase())) return false;
+    if (statusFilter && e.status !== statusFilter) return false;
+    if (eoiIdFilter && !e.eoi_id?.toLowerCase().startsWith(eoiIdFilter.toLowerCase())) return false;
+    if (dateFrom && e.eoi_date < dateFrom) return false;
+    if (dateTo && e.eoi_date > dateTo) return false;
+    if (drilldownFilter) {
+      if (drilldownFilter.status && e.status !== drilldownFilter.status) return false;
+      if (drilldownFilter.broker_name !== undefined) {
+        const bn = e.broker_name || 'Direct';
+        if (bn !== drilldownFilter.broker_name) return false;
+      }
+      if (drilldownFilter.slab) {
+        const m = parseFloat(e.marlas) || 0;
+        if (drilldownFilter.slab === '3-5' && (m < 3 || m > 5)) return false;
+        if (drilldownFilter.slab === '5-8' && (m < 5 || m > 8)) return false;
+        if (drilldownFilter.slab === '8+' && m < 8) return false;
+        if (drilldownFilter.slab === 'Unknown' && m > 0) return false;
+      }
+    }
+    return true;
+  });
+
+  const clearFilters = () => {
+    setPartyFilter(''); setBrokerFilter(''); setStatusFilter('');
+    setEoiIdFilter(''); setDateFrom(''); setDateTo('');
+    setDrilldownFilter(null);
+  };
+  const hasActiveFilters = partyFilter || brokerFilter || statusFilter || eoiIdFilter || dateFrom || dateTo || drilldownFilter;
+
+  // Create / Edit
+  const openCreate = () => {
+    setEditingEoi(null);
+    setForm({ ...emptyForm, project_id: selectedProjectId, eoi_time: new Date().toTimeString().slice(0, 5) });
+    setShowModal(true);
+  };
+  const openEdit = (eoi) => {
+    setEditingEoi(eoi);
+    setForm({
+      party_name: eoi.party_name || '', party_mobile: eoi.party_mobile || '',
+      party_cnic: eoi.party_cnic || '', broker_name: eoi.broker_name || '',
+      broker_id: eoi.broker_id || eoi.broker_uuid || '',
+      amount: eoi.amount || '', marlas: eoi.marlas || '',
+      unit_number: eoi.unit_number || '', payment_method: eoi.payment_method || 'cash',
+      reference_number: eoi.reference_number || '',
+      eoi_date: eoi.eoi_date || new Date().toISOString().split('T')[0],
+      eoi_time: eoi.created_at ? eoi.created_at.slice(11, 16) : '',
+      notes: eoi.notes || '', project_id: eoi.project_uuid || eoi.project_id || selectedProjectId
+    });
+    setShowModal(true);
+  };
+
+  const handleSubmit = async (ev) => {
+    ev.preventDefault();
+    if (!form.party_name) { window.showToast?.('Error', 'Party name is required', 'error'); return; }
+    if (!form.amount || parseFloat(form.amount) <= 0) { window.showToast?.('Error', 'Enter valid amount', 'error'); return; }
+    try {
+      const payload = { ...form };
+      // Resolve broker_id from name if needed
+      if (!payload.broker_id && payload.broker_name) {
+        const match = brokers.find(b => b.name?.toLowerCase() === payload.broker_name.toLowerCase());
+        if (match) payload.broker_id = match.broker_id || match.id;
+      }
+      delete payload.eoi_time;
+      if (!payload.project_id) payload.project_id = selectedProjectId;
+      // Use project entity_id for API
+      const proj = projects.find(p => p.id === payload.project_id);
+      if (proj?.project_id) payload.project_id = proj.project_id;
+
+      if (editingEoi) {
+        await api.put(`/eoi/${editingEoi.id || editingEoi.eoi_id}`, payload);
+        window.showToast?.('Updated', 'EOI updated successfully', 'success');
+      } else {
+        await api.post('/eoi', payload);
+        window.showToast?.('Created', 'EOI recorded successfully', 'success');
+      }
+      setShowModal(false); setEditingEoi(null); setForm(emptyForm);
+      loadData();
+    } catch (e) {
+      window.showToast?.('Error', e.response?.data?.detail || 'Failed to save EOI', 'error');
+    }
+  };
+
+  // Status actions
+  const handleCancel = async (eoi) => {
+    const reason = prompt(`Cancel EOI ${eoi.eoi_id} for ${eoi.party_name}?\nEnter reason (optional):`);
+    if (reason === null) return;
+    try {
+      await api.post(`/eoi/${eoi.id || eoi.eoi_id}/cancel`, { reason });
+      window.showToast?.('Cancelled', 'EOI cancelled', 'success');
+      loadData();
+    } catch (e) { window.showToast?.('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+  const handleRefund = async (eoi) => {
+    const reason = prompt(`Mark EOI ${eoi.eoi_id} as refunded?\nEnter reason (optional):`);
+    if (reason === null) return;
+    try {
+      await api.post(`/eoi/${eoi.id || eoi.eoi_id}/refund`, { reason });
+      window.showToast?.('Refunded', 'EOI marked as refunded', 'success');
+      loadData();
+    } catch (e) { window.showToast?.('Error', e.response?.data?.detail || 'Failed', 'error'); }
+  };
+
+  // Convert
+  const openConvert = (eoi) => {
+    setConvertingEoi(eoi);
+    setConvertForm({
+      ...emptyConvertForm,
+      area_marla: eoi.marlas || '',
+      unit_number: eoi.unit_number || '',
+      broker_id: eoi.broker_id || eoi.broker_uuid || '',
+      notes: `Converted from ${eoi.eoi_id}`
+    });
+    setCustomerSearch(eoi.party_name || '');
+    loadProjectInventory(eoi.project_uuid || eoi.project_id || selectedProjectId);
+    setShowConvertModal(true);
+  };
+  const handleConvert = async (ev) => {
+    ev.preventDefault();
+    if (!convertForm.customer_id) { window.showToast?.('Error', 'Select a customer', 'error'); return; }
+    if (!convertForm.rate_per_marla) { window.showToast?.('Error', 'Rate per marla required', 'error'); return; }
+    try {
+      const res = await api.post(`/eoi/${convertingEoi.id || convertingEoi.eoi_id}/convert`, convertForm);
+      window.showToast?.('Converted', `EOI converted → ${res.data?.transaction?.transaction_id || 'Transaction created'}`, 'success');
+      setShowConvertModal(false); setConvertingEoi(null); setConvertForm(emptyConvertForm);
+      loadData();
+    } catch (e) { window.showToast?.('Error', e.response?.data?.detail || 'Conversion failed', 'error'); }
+  };
+
+  // Export CSV
+  const handleExport = () => {
+    const data = filteredEois.map(e => ({
+      'EOI ID': e.eoi_id, 'Party Name': e.party_name,
+      'Mobile': e.party_mobile || '', 'CNIC': e.party_cnic || '',
+      'Broker': e.broker_name || 'Direct', 'Amount (PKR)': e.amount,
+      'Marlas': e.marlas || '', 'Unit #': e.unit_number || '',
+      'Method': e.payment_method || '', 'Reference': e.reference_number || '',
+      'Date': e.eoi_date, 'Recorded At': e.created_at || '',
+      'Status': e.status, 'Notes': e.notes || ''
+    }));
+    downloadCSV(data, `eoi_collection_${new Date().toISOString().split('T')[0]}.csv`);
+  };
+
+  const getStatusBadge = (status) => {
+    const s = { active: 'bg-emerald-50 text-emerald-700', converted: 'bg-blue-50 text-blue-700', cancelled: 'bg-red-50 text-red-700', refunded: 'bg-amber-50 text-amber-700' };
+    return s[status] || 'bg-gray-50 text-gray-700';
+  };
+  const getMethodBadge = (m) => {
+    const s = { cash: 'bg-green-50 text-green-700', cheque: 'bg-blue-50 text-blue-700', bank_transfer: 'bg-purple-50 text-purple-700', online: 'bg-orange-50 text-orange-700' };
+    return s[m] || 'bg-gray-50 text-gray-600';
+  };
+
+  const formatTimestamp = (ts) => {
+    if (!ts) return '-';
+    try { return new Date(ts).toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }); } catch { return ts; }
+  };
+
+  const selectedProject = projects.find(p => p.id === selectedProjectId);
+  const sum = dashboard?.summary;
+  const sb = sum?.status_breakdown || {};
+  const filteredCustomers = customers.filter(c =>
+    c.name?.toLowerCase().includes(customerSearch.toLowerCase()) ||
+    c.mobile?.includes(customerSearch) ||
+    c.customer_id?.toLowerCase().includes(customerSearch.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">EOI Collection</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {selectedProject?.name || 'Select Project'} — Expression of Interest tracking
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {projects.length > 1 && (
+            <select value={selectedProjectId} onChange={e => setSelectedProjectId(e.target.value)}
+              className="border rounded-lg px-3 py-2 text-sm">
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+          <button onClick={handleExport} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 text-gray-700">Export CSV</button>
+          <button onClick={openCreate} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Record EOI</button>
+        </div>
+      </div>
+
+      {/* Dashboard Summary Cards */}
+      {sum && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="bg-white rounded-2xl shadow-sm border p-5 cursor-pointer hover:shadow-md transition-shadow"
+              onClick={() => { clearFilters(); }}>
+              <div className="text-xs font-medium text-gray-400 uppercase">Total EOIs</div>
+              <div className="mt-2 text-2xl font-semibold text-gray-900">{sum.total_eois_count}</div>
+              <div className="text-sm text-gray-500 mt-1">{formatCurrency(sum.total_eois_amount)}</div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border p-5 cursor-pointer hover:shadow-md transition-shadow"
+              onClick={() => setDrilldownFilter({ status: 'active' })}>
+              <div className="text-xs font-medium text-emerald-500 uppercase">Active</div>
+              <div className="mt-2 text-2xl font-semibold text-emerald-600">{sb.active?.count || 0}</div>
+              <div className="text-sm text-gray-500 mt-1">{formatCurrency(sb.active?.amount || 0)}</div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border p-5 cursor-pointer hover:shadow-md transition-shadow"
+              onClick={() => setDrilldownFilter({ status: 'converted' })}>
+              <div className="text-xs font-medium text-blue-500 uppercase">Converted</div>
+              <div className="mt-2 text-2xl font-semibold text-blue-600">{sb.converted?.count || 0}</div>
+              <div className="text-sm text-gray-500 mt-1">{formatCurrency(sb.converted?.amount || 0)}</div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border p-5 cursor-pointer hover:shadow-md transition-shadow"
+              onClick={() => setDrilldownFilter({ status: 'cancelled' })}>
+              <div className="text-xs font-medium text-red-500 uppercase">Cancelled</div>
+              <div className="mt-2 text-2xl font-semibold text-red-600">{(sb.cancelled?.count || 0) + (sb.refunded?.count || 0)}</div>
+              <div className="text-sm text-gray-500 mt-1">{formatCurrency((sb.cancelled?.amount || 0) + (sb.refunded?.amount || 0))}</div>
+            </div>
+            <div className="bg-white rounded-2xl shadow-sm border p-5">
+              <div className="text-xs font-medium text-gray-400 uppercase">Total Area</div>
+              <div className="mt-2 text-2xl font-semibold text-gray-900">{(sum.total_marlas || 0).toFixed(1)} <span className="text-sm font-normal text-gray-400">Marla</span></div>
+              <div className="text-sm text-gray-500 mt-1">Avg {sum.total_eois_count ? formatCurrency(sum.total_eois_amount / sum.total_eois_count) : 0}/EOI</div>
+            </div>
+          </div>
+
+          {/* Broker Leaderboard + Marla Slabs */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Broker Leaderboard */}
+            {dashboard?.leaderboard?.brokers?.length > 0 && (
+              <div className="bg-white rounded-2xl shadow-sm border p-5">
+                <h3 className="text-sm font-semibold text-gray-900 mb-4">Broker Leaderboard</h3>
+                <div className="space-y-2">
+                  {dashboard.leaderboard.brokers.map((b, i) => (
+                    <div key={i}
+                      className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
+                      onClick={() => setDrilldownFilter({ broker_name: b.broker_name || 'Direct' })}>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                          i === 0 ? 'bg-amber-100 text-amber-700' : i === 1 ? 'bg-gray-200 text-gray-700' : i === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-50 text-gray-500'
+                        }`}>{i + 1}</div>
+                        <div>
+                          <div className="text-sm font-medium">{b.broker_name || 'Direct'}</div>
+                          <div className="text-xs text-gray-400">{b.count} EOIs</div>
+                        </div>
+                      </div>
+                      <div className="text-sm font-semibold text-green-600">{formatCurrency(b.amount)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Marla Slab Breakdown */}
+            {dashboard?.marlas_slabs?.length > 0 && (
+              <div className="bg-white rounded-2xl shadow-sm border p-5">
+                <h3 className="text-sm font-semibold text-gray-900 mb-4">By Area (Marlas)</h3>
+                <div className="space-y-3">
+                  {dashboard.marlas_slabs.filter(s => s.count > 0).map((s, i) => {
+                    const maxCount = Math.max(...dashboard.marlas_slabs.map(x => x.count), 1);
+                    const pct = (s.count / maxCount) * 100;
+                    return (
+                      <div key={i} className="cursor-pointer hover:bg-gray-50 p-3 rounded-lg transition-colors"
+                        onClick={() => setDrilldownFilter({ slab: s.slab })}>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="font-medium">{s.slab} Marla</span>
+                          <span className="text-gray-500">{s.count} EOIs &middot; {formatCurrency(s.amount)}</span>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-2">
+                          <div className="bg-gray-900 h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Drilldown banner */}
+      {drilldownFilter && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 flex items-center justify-between">
+          <span className="text-sm text-blue-700">
+            Filtered: {drilldownFilter.status && `Status = ${drilldownFilter.status}`}
+            {drilldownFilter.broker_name !== undefined && `Broker = ${drilldownFilter.broker_name}`}
+            {drilldownFilter.slab && `Area = ${drilldownFilter.slab} Marla`}
+          </span>
+          <button onClick={() => setDrilldownFilter(null)} className="text-sm text-blue-600 hover:text-blue-800 font-medium">Clear</button>
+        </div>
+      )}
+
+      {/* Search Filters */}
+      <div className="bg-white rounded-2xl shadow-sm border p-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Party Name</label>
+            <input type="text" placeholder="Search name..." value={partyFilter} onChange={e => setPartyFilter(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Broker</label>
+            <input type="text" placeholder="Search broker..." value={brokerFilter} onChange={e => setBrokerFilter(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">EOI ID</label>
+            <input type="text" placeholder="EOI-001..." value={eoiIdFilter} onChange={e => setEoiIdFilter(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">All</option>
+              <option value="active">Active</option>
+              <option value="converted">Converted</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="refunded">Refunded</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">From</label>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">To</label>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div className="flex items-center">
+            {hasActiveFilters && (
+              <button onClick={clearFilters} className="px-3 py-2 text-sm text-red-600 hover:text-red-800 font-medium">Clear All</button>
+            )}
+          </div>
+        </div>
+        {hasActiveFilters && (
+          <div className="mt-3 pt-3 border-t flex items-center justify-between text-sm">
+            <div className="text-gray-600"><span className="font-medium">{filteredEois.length}</span> EOIs found</div>
+            <div className="text-gray-600">Total: <span className="font-semibold text-green-600">{formatCurrency(filteredEois.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0))}</span></div>
+          </div>
+        )}
+      </div>
+
+      {/* EOI Table */}
+      {loading ? <Loader /> : eois.length === 0 ? <Empty msg="No EOIs recorded yet" /> : filteredEois.length === 0 ? (
+        <div className="bg-white rounded-2xl shadow-sm border p-12 text-center">
+          <div className="text-gray-400 mb-2">No EOIs match your filters</div>
+          <button onClick={clearFilters} className="text-sm text-blue-600 hover:text-blue-800">Clear filters</button>
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+          <table className="w-full">
+            <thead><tr className="border-b border-gray-100">
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">EOI</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Party</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Broker</th>
+              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Amount</th>
+              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Marlas</th>
+              <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Recorded</th>
+              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4"></th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-50">
+              {filteredEois.map(e => (
+                <tr key={e.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedEoi(e); setShowDetailModal(true); }}>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-mono text-gray-900">{e.eoi_id}</div>
+                    {e.unit_number && <div className="text-xs text-gray-400">Unit: {e.unit_number}</div>}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-medium">{e.party_name}</div>
+                    {e.party_mobile && <div className="text-xs text-gray-400">{e.party_mobile}</div>}
+                  </td>
+                  <td className="px-6 py-4 text-sm">{e.broker_name || <span className="text-gray-400">Direct</span>}</td>
+                  <td className="px-6 py-4 text-right text-sm font-semibold text-green-600">{formatCurrency(e.amount)}</td>
+                  <td className="px-6 py-4 text-right text-sm">{e.marlas || '-'}</td>
+                  <td className="px-6 py-4 text-center">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(e.status)}`}>{e.status}</span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm text-gray-600">{e.eoi_date}</div>
+                    <div className="text-xs text-gray-400">{e.created_at ? formatTimestamp(e.created_at) : ''}</div>
+                  </td>
+                  <td className="px-6 py-4 text-right" onClick={ev => ev.stopPropagation()}>
+                    <div className="flex items-center justify-end gap-1">
+                      {e.status === 'active' && (
+                        <>
+                          <button onClick={() => openEdit(e)} className="px-2 py-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded">Edit</button>
+                          <button onClick={() => openConvert(e)} className="px-2 py-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded">Convert</button>
+                          <button onClick={() => handleCancel(e)} className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded">Cancel</button>
+                        </>
+                      )}
+                      {e.status === 'cancelled' && (
+                        <button onClick={() => handleRefund(e)} className="px-2 py-1 text-xs text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded">Refund</button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Create / Edit Modal */}
+      {showModal && (
+        <Modal title={editingEoi ? `Edit ${editingEoi.eoi_id}` : 'Record New EOI'} onClose={() => { setShowModal(false); setEditingEoi(null); }} wide>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Party Name" required value={form.party_name} onChange={e => setForm({...form, party_name: e.target.value})} />
+              <Input label="Party Mobile" value={form.party_mobile} onChange={e => setForm({...form, party_mobile: e.target.value})} placeholder="03XX-XXXXXXX" />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Party CNIC" value={form.party_cnic} onChange={e => setForm({...form, party_cnic: e.target.value})} placeholder="XXXXX-XXXXXXX-X" />
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Broker</label>
+                <input type="text" placeholder="Broker name (leave empty for direct)" value={form.broker_name}
+                  onChange={e => setForm({...form, broker_name: e.target.value})}
+                  className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+                  list="eoi-broker-suggestions" />
+                <datalist id="eoi-broker-suggestions">
+                  {brokers.map(b => <option key={b.id} value={b.name}>{b.broker_id}</option>)}
+                </datalist>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <Input label="Amount (PKR)" type="number" required value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} />
+              <Input label="Marlas" type="number" step="0.01" value={form.marlas} onChange={e => setForm({...form, marlas: e.target.value})} />
+              <Input label="Unit # (optional)" value={form.unit_number} onChange={e => setForm({...form, unit_number: e.target.value})} placeholder="Shop-15" />
+            </div>
+            <div className="grid grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
+                <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="cash">Cash</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="bank_transfer">Bank Transfer</option>
+                  <option value="online">Online</option>
+                </select>
+              </div>
+              <Input label="Reference #" value={form.reference_number} onChange={e => setForm({...form, reference_number: e.target.value})} />
+              <Input label="EOI Date" type="date" value={form.eoi_date} onChange={e => setForm({...form, eoi_date: e.target.value})} />
+              <Input label="Time" type="time" value={form.eoi_time} onChange={e => setForm({...form, eoi_time: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+              <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} rows={2}
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10" />
+            </div>
+            <div className="flex justify-end gap-3 pt-4 border-t">
+              <button type="button" onClick={() => { setShowModal(false); setEditingEoi(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="submit" className="px-6 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800">
+                {editingEoi ? 'Update EOI' : 'Record EOI'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Detail Modal */}
+      {showDetailModal && selectedEoi && (
+        <Modal title={`EOI: ${selectedEoi.eoi_id}`} onClose={() => { setShowDetailModal(false); setSelectedEoi(null); }} wide>
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Party Name</label>
+                <div className="text-sm text-gray-900 font-medium">{selectedEoi.party_name}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Mobile</label>
+                <div className="text-sm text-gray-900">{selectedEoi.party_mobile || '-'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">CNIC</label>
+                <div className="text-sm text-gray-900">{selectedEoi.party_cnic || '-'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Broker</label>
+                <div className="text-sm text-gray-900">{selectedEoi.broker_name || 'Direct'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Amount</label>
+                <div className="text-sm font-semibold text-green-600">{formatCurrency(selectedEoi.amount)}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Marlas</label>
+                <div className="text-sm text-gray-900">{selectedEoi.marlas || '-'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Unit #</label>
+                <div className="text-sm text-gray-900">{selectedEoi.unit_number || '-'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getMethodBadge(selectedEoi.payment_method)}`}>{selectedEoi.payment_method || '-'}</span>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Reference #</label>
+                <div className="text-sm text-gray-900">{selectedEoi.reference_number || '-'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(selectedEoi.status)}`}>{selectedEoi.status}</span>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">EOI Date</label>
+                <div className="text-sm text-gray-900">{selectedEoi.eoi_date}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Recorded At</label>
+                <div className="text-sm text-gray-900">{formatTimestamp(selectedEoi.created_at)}</div>
+              </div>
+              {selectedEoi.updated_at && selectedEoi.updated_at !== selectedEoi.created_at && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Last Updated</label>
+                  <div className="text-sm text-gray-900">{formatTimestamp(selectedEoi.updated_at)}</div>
+                </div>
+              )}
+              {selectedEoi.created_by_name && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Created By</label>
+                  <div className="text-sm text-gray-900">{selectedEoi.created_by_name}</div>
+                </div>
+              )}
+            </div>
+            {selectedEoi.notes && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+                <div className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3">{selectedEoi.notes}</div>
+              </div>
+            )}
+            {/* Attachments */}
+            <div className="border-t pt-4">
+              <MediaManager
+                entityType="eoi"
+                entityId={selectedEoi.id || selectedEoi.eoi_id}
+                onUpload={() => {}}
+              />
+            </div>
+            {/* Actions */}
+            {selectedEoi.status === 'active' && (
+              <div className="flex justify-end gap-3 pt-4 border-t">
+                <button onClick={() => { setShowDetailModal(false); openEdit(selectedEoi); }} className="px-4 py-2 text-sm text-gray-600 border rounded-lg hover:bg-gray-50">Edit</button>
+                <button onClick={() => { setShowDetailModal(false); openConvert(selectedEoi); }} className="px-4 py-2 text-sm text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">Convert to Transaction</button>
+                <button onClick={() => { handleCancel(selectedEoi); setShowDetailModal(false); }} className="px-4 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50">Cancel EOI</button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Convert to Transaction Modal */}
+      {showConvertModal && convertingEoi && (
+        <Modal title={`Convert ${convertingEoi.eoi_id} to Transaction`} onClose={() => { setShowConvertModal(false); setConvertingEoi(null); }} wide>
+          <div className="bg-blue-50 rounded-lg p-3 mb-4 text-sm text-blue-700">
+            Converting EOI for <strong>{convertingEoi.party_name}</strong> — {formatCurrency(convertingEoi.amount)} token will become the first receipt against the new transaction.
+          </div>
+          <form onSubmit={handleConvert} className="space-y-4">
+            {/* Customer Selection */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Customer *</label>
+              <input type="text" placeholder="Search by name, mobile or ID..." value={customerSearch}
+                onChange={e => { setCustomerSearch(e.target.value); setConvertForm({...convertForm, customer_id: ''}); }}
+                className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />
+              {customerSearch && !convertForm.customer_id && (
+                <div className="border rounded-lg max-h-32 overflow-y-auto">
+                  {filteredCustomers.length === 0 ? (
+                    <div className="p-3 text-sm text-gray-400 text-center">No customers found — create one first in Customers tab</div>
+                  ) : filteredCustomers.slice(0, 5).map(c => (
+                    <button key={c.id} type="button" onClick={() => { setConvertForm({...convertForm, customer_id: c.customer_id || c.id}); setCustomerSearch(c.name); }}
+                      className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:bg-gray-50">
+                      <div className="font-medium">{c.name}</div>
+                      <div className="text-xs text-gray-500">{c.customer_id} &middot; {c.mobile}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {convertForm.customer_id && <div className="bg-blue-50 rounded-lg p-2 text-sm">Selected: {customerSearch}</div>}
+            </div>
+            {/* Inventory Selection */}
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Inventory Unit (optional)</label>
+              <select value={convertForm.inventory_id} onChange={e => setConvertForm({...convertForm, inventory_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                <option value="">No specific unit</option>
+                {inventoryList.map(inv => (
+                  <option key={inv.id} value={inv.inventory_id || inv.id}>{inv.unit_number} — {inv.block || ''} ({inv.area_marla} marla)</option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Area (Marla)" type="number" step="0.01" required value={convertForm.area_marla} onChange={e => setConvertForm({...convertForm, area_marla: e.target.value})} />
+              <Input label="Rate per Marla (PKR)" type="number" required value={convertForm.rate_per_marla} onChange={e => setConvertForm({...convertForm, rate_per_marla: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <Input label="# Installments" type="number" value={convertForm.num_installments} onChange={e => setConvertForm({...convertForm, num_installments: parseInt(e.target.value) || 4})} />
+              <Input label="First Due Date" type="date" value={convertForm.first_due_date} onChange={e => setConvertForm({...convertForm, first_due_date: e.target.value})} />
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Installment Cycle</label>
+                <select value={convertForm.installment_cycle} onChange={e => setConvertForm({...convertForm, installment_cycle: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                  <option value="bi-annual">Bi-Annual</option>
+                  <option value="annual">Annual</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <Input label="Unit #" value={convertForm.unit_number} onChange={e => setConvertForm({...convertForm, unit_number: e.target.value})} />
+              <Input label="Block" value={convertForm.block} onChange={e => setConvertForm({...convertForm, block: e.target.value})} />
+              <Input label="Broker Commission %" type="number" step="0.1" value={convertForm.broker_commission_rate} onChange={e => setConvertForm({...convertForm, broker_commission_rate: e.target.value})} />
+            </div>
+            <Input label="Notes" value={convertForm.notes} onChange={e => setConvertForm({...convertForm, notes: e.target.value})} />
+            {convertForm.rate_per_marla && convertForm.area_marla && (
+              <div className="bg-gray-50 rounded-lg p-3 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Total Value:</span>
+                  <span className="font-semibold">{formatCurrency(parseFloat(convertForm.rate_per_marla) * parseFloat(convertForm.area_marla))}</span>
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span className="text-gray-500">EOI Token (auto-receipt):</span>
+                  <span className="font-semibold text-green-600">{formatCurrency(convertingEoi.amount)}</span>
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end gap-3 pt-4 border-t">
+              <button type="button" onClick={() => { setShowConvertModal(false); setConvertingEoi(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+              <button type="submit" className="px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Convert to Transaction</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============================================
 // INTERACTIONS VIEW (McKinsey-style dashboard)
 // ============================================
 function InteractionsView() {
@@ -3384,7 +4135,7 @@ function InteractionsView() {
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">{i.status || '-'}</td>
                   <td className="px-6 py-4 text-sm">{i.next_follow_up || '-'}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{new Date(i.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{new Date(i.created_at + (i.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
                 </tr>
               ))}
             </tbody>
@@ -5313,6 +6064,9 @@ function ReportsView() {
   const [reportType, setReportType] = useState('customer');
   const [expandedTransactions, setExpandedTransactions] = useState(new Set());
   const [expandedInventory, setExpandedInventory] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [projectSearch, setProjectSearch] = useState('');
+  const [brokerSearch, setBrokerSearch] = useState('');
 
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
@@ -5435,8 +6189,14 @@ function ReportsView() {
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
             <div className="bg-white rounded-lg border p-4">
               <h3 className="text-sm font-medium text-gray-600 mb-2">Select Customer</h3>
+              <input type="text" placeholder="Search name or ID..." value={customerSearch} onChange={e => setCustomerSearch(e.target.value)}
+                className="w-full border rounded-lg px-3 py-2 text-xs mb-2 focus:outline-none focus:ring-1 focus:ring-gray-400" />
               <div className="space-y-1 max-h-96 overflow-y-auto">
-                {customers.map(c => (
+                {customers.filter(c => {
+                  if (!customerSearch.trim()) return true;
+                  const q = customerSearch.toLowerCase();
+                  return (c.name || '').toLowerCase().includes(q) || (c.customer_id || '').toLowerCase().includes(q) || (c.mobile || '').includes(q);
+                }).map(c => (
                   <button key={c.id} onClick={() => loadCustomerReport(c.id)}
                     className={`w-full text-left p-2 rounded text-xs ${selectedCustomer === c.id ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'}`}>
                     <div className="font-medium">{c.name}</div>
@@ -5611,7 +6371,7 @@ function ReportsView() {
                       <tbody className="divide-y">
                         {customerReport.interactions.history.map((interaction, idx) => (
                           <tr key={idx} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 text-xs">{new Date(interaction.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                            <td className="px-4 py-3 text-xs">{new Date((interaction.date || interaction.created_at) + (String(interaction.date || interaction.created_at).endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
                             <td className="px-4 py-3">{interaction.type}</td>
                             <td className="px-4 py-3">{interaction.rep_name || '-'}</td>
                             <td className="px-4 py-3">
@@ -5761,8 +6521,14 @@ function ReportsView() {
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
             <div className="bg-white rounded-lg border p-4">
               <h3 className="text-sm font-medium text-gray-600 mb-2">Select Project</h3>
+              <input type="text" placeholder="Search name or ID..." value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
+                className="w-full border rounded-lg px-3 py-2 text-xs mb-2 focus:outline-none focus:ring-1 focus:ring-gray-400" />
               <div className="space-y-1 max-h-96 overflow-y-auto">
-                {projects.map(p => (
+                {projects.filter(p => {
+                  if (!projectSearch.trim()) return true;
+                  const q = projectSearch.toLowerCase();
+                  return (p.name || '').toLowerCase().includes(q) || (p.project_id || '').toLowerCase().includes(q);
+                }).map(p => (
                   <button key={p.id} onClick={() => loadProjectReport(p.id)}
                     className={`w-full text-left p-2 rounded text-xs ${selectedProject === p.id ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'}`}>
                     <div className="font-medium">{p.name}</div>
@@ -6063,8 +6829,14 @@ function ReportsView() {
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
             <div className="bg-white rounded-lg border p-4">
               <h3 className="text-sm font-medium text-gray-600 mb-2">Select Broker</h3>
+              <input type="text" placeholder="Search name or ID..." value={brokerSearch} onChange={e => setBrokerSearch(e.target.value)}
+                className="w-full border rounded-lg px-3 py-2 text-xs mb-2 focus:outline-none focus:ring-1 focus:ring-gray-400" />
               <div className="space-y-1 max-h-96 overflow-y-auto">
-                {brokers.map(b => (
+                {brokers.filter(b => {
+                  if (!brokerSearch.trim()) return true;
+                  const q = brokerSearch.toLowerCase();
+                  return (b.name || '').toLowerCase().includes(q) || (b.broker_id || '').toLowerCase().includes(q) || (b.mobile || '').includes(q);
+                }).map(b => (
                   <button key={b.id} onClick={() => loadBrokerReport(b.id)}
                     className={`w-full text-left p-2 rounded text-xs ${selectedBroker === b.id ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'}`}>
                     <div className="font-medium">{b.name}</div>
@@ -6251,7 +7023,7 @@ function ReportsView() {
                         <tbody className="divide-y">
                           {brokerReport.interactions.history.map((interaction, idx) => (
                             <tr key={idx} className="hover:bg-gray-50">
-                              <td className="px-4 py-3 text-xs">{new Date(interaction.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                              <td className="px-4 py-3 text-xs">{new Date((interaction.date || interaction.created_at) + (String(interaction.date || interaction.created_at).endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
                               <td className="px-4 py-3">{interaction.type}</td>
                               <td className="px-4 py-3">{interaction.rep_name || '-'}</td>
                               <td className="px-4 py-3">

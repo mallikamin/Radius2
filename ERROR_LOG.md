@@ -206,3 +206,24 @@ docker restart orbit_dev_web
 2. Run migration on test, validate
 3. Only then run on production
 4. Drop test DB after
+
+### 2026-02-25 — EOI create endpoint failed on non-UUID project/customer/broker refs
+- **Error**: `EOI create error: invalid input syntax for type uuid: "PRJ-0999"`
+- **Context**: Smoke test using business IDs like `PRJ-0999`, `CUST-0001`, `INV-99901`
+- **Root Cause**: EOI resolver helpers compared UUID columns directly against non-UUID business keys in OR filters, forcing invalid casts in PostgreSQL.
+- **Fix**: Added UUID-safe resolvers (`_resolve_eoi_project/_broker/_customer/_inventory`, `_resolve_eoi_record`) using parse-first fallback logic.
+- **Rule**: Never OR-compare UUID columns with string business IDs directly; use UUID parsing fallback or helper like `find_entity`.
+
+### 2026-02-25 — Media upload 500 for `uploaded_by_rep_id=REP-0001`
+- **Error**: `/api/media/upload` returned 500 with `invalid input syntax for type uuid: "REP-0001"`
+- **Context**: EOI attachment upload during smoke test
+- **Root Cause**: Uploader lookup queried `(CompanyRep.id == uploaded_by_rep_id) | (CompanyRep.rep_id == uploaded_by_rep_id)` where first predicate attempted UUID cast of rep code.
+- **Fix**: Switched uploader lookup to UUID-safe helper `find_entity(db, CompanyRep, "rep_id", uploaded_by_rep_id)`.
+- **Rule**: For mixed UUID/business-key inputs, always use UUID-safe entity resolver helpers in upload/action endpoints.
+
+### 2026-02-25 — Receipts list filter failed when transaction_id passed as TXN code
+- **Error**: `/api/receipts?transaction_id=TXN-...` returned empty due hidden UUID cast failure path.
+- **Context**: Smoke verification after EOI conversion.
+- **Root Cause**: Query compared `Transaction.id` UUID directly with string code in OR clause.
+- **Fix**: Switched transaction lookup in receipts list to UUID-safe helper `find_entity(db, Transaction, "transaction_id", transaction_id)`.
+- **Rule**: Use UUID-safe entity resolvers for all query filters that accept business IDs.

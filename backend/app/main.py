@@ -281,6 +281,31 @@ class ReceiptAllocation(Base):
     amount = Column(Numeric(15, 2), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
+class EOICollection(Base):
+    __tablename__ = "eoi_collections"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    eoi_id = Column(String(20), unique=True, nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"))
+    broker_id = Column(UUID(as_uuid=True), ForeignKey("brokers.id"))
+    party_name = Column(String(255), nullable=False)
+    party_mobile = Column(String(20))
+    party_cnic = Column(String(20))
+    broker_name = Column(String(255))
+    amount = Column(Numeric(15, 2), nullable=False)
+    marlas = Column(Numeric(8, 2))
+    unit_number = Column(String(50))
+    inventory_id = Column(UUID(as_uuid=True), ForeignKey("inventory.id"))
+    payment_method = Column(String(50))
+    reference_number = Column(String(100))
+    eoi_date = Column(Date, default=date.today, nullable=False)
+    notes = Column(Text)
+    status = Column(String(20), default="active", nullable=False)  # active|converted|cancelled|refunded
+    converted_transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id"))
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
 class Creditor(Base):
     __tablename__ = "creditors"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -864,6 +889,107 @@ def notify_duplicate_attempt(db, duplicates, attempted_by_user, action_type, cam
                 data={"attempted_by": attempted_by_user.rep_id, "attempted_by_name": attempted_by_user.name,
                       "duplicate_count": len(duplicates), "campaign": campaign_name}
             )
+
+def _generate_eoi_code(db: Session) -> str:
+    """Generate EOI-XXXXX with collision retry safety."""
+    count = db.query(func.count(EOICollection.id)).scalar() or 0
+    candidate = f"EOI-{str(count + 1).zfill(5)}"
+    while db.query(EOICollection).filter(EOICollection.eoi_id == candidate).first():
+        count += 1
+        candidate = f"EOI-{str(count + 1).zfill(5)}"
+    return candidate
+
+def _resolve_eoi_project(db: Session, project_id: str):
+    try:
+        pid = uuid.UUID(str(project_id))
+        return db.query(Project).filter(
+            (Project.id == pid) | (Project.project_id == project_id)
+        ).first()
+    except ValueError:
+        return db.query(Project).filter(Project.project_id == project_id).first()
+
+def _resolve_eoi_broker(db: Session, broker_id: Optional[str]):
+    if not broker_id:
+        return None
+    try:
+        bid = uuid.UUID(str(broker_id))
+        return db.query(Broker).filter(
+            (Broker.id == bid) | (Broker.broker_id == broker_id)
+        ).first()
+    except ValueError:
+        return db.query(Broker).filter(Broker.broker_id == broker_id).first()
+
+def _resolve_eoi_customer(db: Session, customer_id: Optional[str]):
+    if not customer_id:
+        return None
+    try:
+        cid = uuid.UUID(str(customer_id))
+        return db.query(Customer).filter(
+            (Customer.id == cid) | (Customer.customer_id == customer_id) | (Customer.mobile == customer_id)
+        ).first()
+    except ValueError:
+        return db.query(Customer).filter(
+            (Customer.customer_id == customer_id) | (Customer.mobile == customer_id)
+        ).first()
+
+def _resolve_eoi_inventory(db: Session, inventory_id: Optional[str]):
+    if not inventory_id:
+        return None
+    try:
+        iid = uuid.UUID(str(inventory_id))
+        return db.query(Inventory).filter(
+            (Inventory.id == iid) | (Inventory.inventory_id == inventory_id)
+        ).first()
+    except ValueError:
+        return db.query(Inventory).filter(Inventory.inventory_id == inventory_id).first()
+
+def _eoi_row_dict(eoi: EOICollection, db: Session):
+    project = db.query(Project).filter(Project.id == eoi.project_id).first() if eoi.project_id else None
+    customer = db.query(Customer).filter(Customer.id == eoi.customer_id).first() if eoi.customer_id else None
+    broker = db.query(Broker).filter(Broker.id == eoi.broker_id).first() if eoi.broker_id else None
+    inv = db.query(Inventory).filter(Inventory.id == eoi.inventory_id).first() if eoi.inventory_id else None
+    creator = db.query(CompanyRep).filter(CompanyRep.id == eoi.created_by).first() if eoi.created_by else None
+    converted_txn = db.query(Transaction).filter(Transaction.id == eoi.converted_transaction_id).first() if eoi.converted_transaction_id else None
+    return {
+        "id": str(eoi.id),
+        "eoi_id": eoi.eoi_id,
+        "project_id": project.project_id if project else None,
+        "project_uuid": str(eoi.project_id) if eoi.project_id else None,
+        "project_name": project.name if project else None,
+        "customer_id": customer.customer_id if customer else None,
+        "customer_uuid": str(eoi.customer_id) if eoi.customer_id else None,
+        "broker_id": broker.broker_id if broker else None,
+        "broker_uuid": str(eoi.broker_id) if eoi.broker_id else None,
+        "party_name": eoi.party_name,
+        "party_mobile": eoi.party_mobile,
+        "party_cnic": eoi.party_cnic,
+        "broker_name": broker.name if broker else (eoi.broker_name or "Direct"),
+        "amount": float(eoi.amount or 0),
+        "marlas": float(eoi.marlas) if eoi.marlas is not None else None,
+        "unit_number": eoi.unit_number or (inv.unit_number if inv else None),
+        "inventory_id": inv.inventory_id if inv else None,
+        "inventory_uuid": str(eoi.inventory_id) if eoi.inventory_id else None,
+        "payment_method": eoi.payment_method,
+        "reference_number": eoi.reference_number,
+        "eoi_date": str(eoi.eoi_date) if eoi.eoi_date else None,
+        "notes": eoi.notes,
+        "status": eoi.status,
+        "converted_transaction_id": converted_txn.transaction_id if converted_txn else None,
+        "converted_transaction_uuid": str(eoi.converted_transaction_id) if eoi.converted_transaction_id else None,
+        "created_by_rep_id": creator.rep_id if creator else None,
+        "created_by_name": creator.name if creator else None,
+        "created_at": str(eoi.created_at) if eoi.created_at else None,
+        "updated_at": str(eoi.updated_at) if eoi.updated_at else None,
+    }
+
+def _resolve_eoi_record(db: Session, eoi_ref: str):
+    try:
+        eid = uuid.UUID(str(eoi_ref))
+        return db.query(EOICollection).filter(
+            (EOICollection.id == eid) | (EOICollection.eoi_id == eoi_ref)
+        ).first()
+    except ValueError:
+        return db.query(EOICollection).filter(EOICollection.eoi_id == eoi_ref).first()
 
 def check_duplicate_mobile(db, mobile, exclude_lead_id=None, exclude_customer_id=None, exclude_broker_id=None, include_converted=False):
     """Check if mobile exists in customers, leads, or brokers tables. Returns list of matches."""
@@ -3294,7 +3420,7 @@ def list_receipts(customer_id: str = None, transaction_id: str = None, limit: in
             c = db.query(Customer).filter((Customer.id == customer_id) | (Customer.customer_id == customer_id)).first()
             if c: q = q.filter(Receipt.customer_id == c.id)
         if transaction_id and transaction_id.strip():
-            t = db.query(Transaction).filter((Transaction.id == transaction_id) | (Transaction.transaction_id == transaction_id)).first()
+            t = find_entity(db, Transaction, "transaction_id", transaction_id)
             if t: q = q.filter(Receipt.transaction_id == t.id)
         
         receipts = q.order_by(Receipt.created_at.desc()).limit(limit).all()
@@ -3568,6 +3694,571 @@ def delete_receipt(rid: str, db: Session = Depends(get_db), current_user: Compan
     req = DeletionRequest(entity_type="receipt", entity_id=r.id, entity_name=r.receipt_id, requested_by=current_user.id)
     db.add(req); db.commit(); db.refresh(req)
     return {"message": "Deletion request submitted", "request_id": req.request_id, "pending": True}
+
+# ============================================
+# EOI COLLECTION API
+# ============================================
+VALID_EOI_STATUSES = {"active", "converted", "cancelled", "refunded"}
+
+def _eoi_slab_label(marlas_val: Optional[float]) -> str:
+    if marlas_val is None:
+        return "Unknown"
+    if marlas_val >= 3 and marlas_val <= 5:
+        return "3-5"
+    if marlas_val > 5 and marlas_val <= 8:
+        return "5-8"
+    if marlas_val > 8:
+        return "8+"
+    return "Other"
+
+@app.get("/api/eoi")
+def list_eoi_collections(
+    project_id: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    rep_id: Optional[str] = None,
+    broker_id: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    try:
+        q = db.query(EOICollection)
+        isolation = get_rep_isolation_filter(current_user, db)
+        scoped_rep_ids = None
+        if isolation["isolated"]:
+            scoped_rep_ids = isolation["team_rep_uuids"]
+            q = q.filter(EOICollection.created_by.in_(scoped_rep_ids))
+
+        if project_id:
+            proj = _resolve_eoi_project(db, project_id)
+            if proj:
+                q = q.filter(EOICollection.project_id == proj.id)
+            else:
+                q = q.filter(literal(False))
+
+        if status:
+            status_list = [s.strip().lower() for s in status.split(",") if s.strip()]
+            valid = [s for s in status_list if s in VALID_EOI_STATUSES]
+            if valid:
+                q = q.filter(EOICollection.status.in_(valid))
+
+        if date_from:
+            q = q.filter(EOICollection.eoi_date >= date.fromisoformat(date_from))
+        if date_to:
+            q = q.filter(EOICollection.eoi_date <= date.fromisoformat(date_to))
+
+        if rep_id:
+            rep_obj = db.query(CompanyRep).filter(
+                (CompanyRep.rep_id == rep_id) | (func.cast(CompanyRep.id, String) == rep_id)
+            ).first()
+            if rep_obj:
+                if not isolation["isolated"] or rep_obj.id in (scoped_rep_ids or []):
+                    q = q.filter(EOICollection.created_by == rep_obj.id)
+                else:
+                    q = q.filter(literal(False))
+
+        if broker_id:
+            broker = _resolve_eoi_broker(db, broker_id)
+            if broker:
+                q = q.filter(EOICollection.broker_id == broker.id)
+            elif broker_id.lower() == "direct":
+                q = q.filter(EOICollection.broker_id.is_(None))
+            else:
+                q = q.filter(literal(False))
+
+        if search:
+            term = f"%{search.strip()}%"
+            q = q.filter(
+                or_(
+                    EOICollection.eoi_id.ilike(term),
+                    EOICollection.party_name.ilike(term),
+                    EOICollection.party_mobile.ilike(term),
+                    EOICollection.reference_number.ilike(term),
+                    EOICollection.broker_name.ilike(term),
+                    EOICollection.unit_number.ilike(term),
+                )
+            )
+
+        rows = q.order_by(EOICollection.eoi_date.desc(), EOICollection.created_at.desc()).limit(limit).all()
+        payload = [_eoi_row_dict(row, db) for row in rows]
+        return {
+            "items": payload,
+            "total": len(payload),
+            "filters": {
+                "project_id": project_id,
+                "status": status,
+                "date_from": date_from,
+                "date_to": date_to,
+                "rep_id": rep_id,
+                "broker_id": broker_id,
+                "search": search,
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"EOI list error: {str(e)}")
+
+@app.post("/api/eoi")
+def create_eoi_collection(
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    try:
+        proj_raw = data.get("project_id")
+        if not proj_raw:
+            raise HTTPException(400, "project_id is required")
+        proj = _resolve_eoi_project(db, proj_raw)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+
+        amount = float(data.get("amount") or 0)
+        if amount <= 0:
+            raise HTTPException(400, "amount must be greater than 0")
+
+        party_name = (data.get("party_name") or "").strip()
+        if not party_name:
+            raise HTTPException(400, "party_name is required")
+
+        status = (data.get("status") or "active").lower()
+        if status not in VALID_EOI_STATUSES:
+            raise HTTPException(400, "Invalid status")
+
+        customer = _resolve_eoi_customer(db, data.get("customer_id"))
+        broker = _resolve_eoi_broker(db, data.get("broker_id"))
+        inventory = _resolve_eoi_inventory(db, data.get("inventory_id"))
+
+        eoi = EOICollection(
+            eoi_id=_generate_eoi_code(db),
+            project_id=proj.id,
+            customer_id=customer.id if customer else None,
+            broker_id=broker.id if broker else None,
+            party_name=party_name,
+            party_mobile=normalize_mobile(data.get("party_mobile")) if data.get("party_mobile") else None,
+            party_cnic=data.get("party_cnic"),
+            broker_name=(broker.name if broker else data.get("broker_name")),
+            amount=amount,
+            marlas=float(data["marlas"]) if data.get("marlas") not in (None, "") else None,
+            unit_number=data.get("unit_number"),
+            inventory_id=inventory.id if inventory else None,
+            payment_method=data.get("payment_method"),
+            reference_number=data.get("reference_number"),
+            eoi_date=date.fromisoformat(data["eoi_date"]) if data.get("eoi_date") else date.today(),
+            notes=data.get("notes"),
+            status=status,
+            created_by=current_user.id,
+        )
+        db.add(eoi)
+        db.commit()
+        db.refresh(eoi)
+        return {"message": "EOI created", "item": _eoi_row_dict(eoi, db)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"EOI create error: {str(e)}")
+
+@app.put("/api/eoi/{eoi_id}")
+def update_eoi_collection(
+    eoi_id: str,
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    try:
+        eoi = _resolve_eoi_record(db, eoi_id)
+        if not eoi:
+            raise HTTPException(404, "EOI not found")
+
+        isolation = get_rep_isolation_filter(current_user, db)
+        if isolation["isolated"] and eoi.created_by not in isolation["team_rep_uuids"]:
+            raise HTTPException(403, "Access denied")
+
+        if eoi.status == "converted":
+            raise HTTPException(400, "Converted EOI cannot be edited")
+
+        if "project_id" in data and data["project_id"]:
+            proj = _resolve_eoi_project(db, data["project_id"])
+            if not proj:
+                raise HTTPException(404, "Project not found")
+            eoi.project_id = proj.id
+
+        if "customer_id" in data:
+            customer = _resolve_eoi_customer(db, data.get("customer_id"))
+            eoi.customer_id = customer.id if customer else None
+        if "broker_id" in data:
+            broker = _resolve_eoi_broker(db, data.get("broker_id"))
+            eoi.broker_id = broker.id if broker else None
+            if broker:
+                eoi.broker_name = broker.name
+        if "inventory_id" in data:
+            inv = _resolve_eoi_inventory(db, data.get("inventory_id"))
+            eoi.inventory_id = inv.id if inv else None
+        if "party_name" in data and data["party_name"]:
+            eoi.party_name = data["party_name"].strip()
+        for key in ["party_cnic", "broker_name", "unit_number", "payment_method", "reference_number", "notes"]:
+            if key in data:
+                setattr(eoi, key, data[key])
+        if "party_mobile" in data:
+            eoi.party_mobile = normalize_mobile(data["party_mobile"]) if data["party_mobile"] else None
+        if "amount" in data:
+            amt = float(data["amount"] or 0)
+            if amt <= 0:
+                raise HTTPException(400, "amount must be greater than 0")
+            eoi.amount = amt
+        if "marlas" in data:
+            eoi.marlas = float(data["marlas"]) if data["marlas"] not in (None, "") else None
+        if "eoi_date" in data and data["eoi_date"]:
+            eoi.eoi_date = date.fromisoformat(data["eoi_date"])
+        if "status" in data and data["status"]:
+            status = data["status"].lower()
+            if status not in VALID_EOI_STATUSES:
+                raise HTTPException(400, "Invalid status")
+            eoi.status = status
+
+        eoi.updated_at = func.now()
+        db.commit()
+        db.refresh(eoi)
+        return {"message": "EOI updated", "item": _eoi_row_dict(eoi, db)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"EOI update error: {str(e)}")
+
+@app.post("/api/eoi/{eoi_id}/cancel")
+def cancel_eoi_collection(
+    eoi_id: str,
+    data: dict = None,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    eoi = _resolve_eoi_record(db, eoi_id)
+    if not eoi:
+        raise HTTPException(404, "EOI not found")
+    if eoi.status == "converted":
+        raise HTTPException(400, "Converted EOI cannot be cancelled")
+    eoi.status = "cancelled"
+    reason = (data or {}).get("reason") if data else None
+    if reason:
+        eoi.notes = ((eoi.notes or "") + f"\n[Cancelled] {reason}").strip()
+    eoi.updated_at = func.now()
+    db.commit()
+    db.refresh(eoi)
+    return {"message": "EOI cancelled", "item": _eoi_row_dict(eoi, db)}
+
+@app.post("/api/eoi/{eoi_id}/refund")
+def refund_eoi_collection(
+    eoi_id: str,
+    data: dict = None,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    eoi = _resolve_eoi_record(db, eoi_id)
+    if not eoi:
+        raise HTTPException(404, "EOI not found")
+    if eoi.status == "converted":
+        raise HTTPException(400, "Converted EOI cannot be refunded")
+    eoi.status = "refunded"
+    reason = (data or {}).get("reason") if data else None
+    if reason:
+        eoi.notes = ((eoi.notes or "") + f"\n[Refunded] {reason}").strip()
+    eoi.updated_at = func.now()
+    db.commit()
+    db.refresh(eoi)
+    return {"message": "EOI refunded", "item": _eoi_row_dict(eoi, db)}
+
+@app.post("/api/eoi/{eoi_id}/convert")
+def convert_eoi_to_transaction(
+    eoi_id: str,
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    try:
+        eoi = _resolve_eoi_record(db, eoi_id)
+        if not eoi:
+            raise HTTPException(404, "EOI not found")
+        if eoi.status != "active":
+            raise HTTPException(400, "Only active EOI can be converted")
+
+        customer = _resolve_eoi_customer(db, data.get("customer_id")) or (
+            db.query(Customer).filter(Customer.id == eoi.customer_id).first() if eoi.customer_id else None
+        )
+        if not customer:
+            raise HTTPException(400, "customer_id is required for conversion")
+
+        inv = _resolve_eoi_inventory(db, data.get("inventory_id")) or (
+            db.query(Inventory).filter(Inventory.id == eoi.inventory_id).first() if eoi.inventory_id else None
+        )
+        if not inv:
+            raise HTTPException(400, "inventory_id is required for conversion")
+
+        proj = db.query(Project).filter(Project.id == eoi.project_id).first()
+        if not proj:
+            raise HTTPException(404, "EOI project not found")
+
+        broker = _resolve_eoi_broker(db, data.get("broker_id")) or (
+            db.query(Broker).filter(Broker.id == eoi.broker_id).first() if eoi.broker_id else None
+        )
+
+        area = float(data.get("area_marla") or inv.area_marla or eoi.marlas or 0)
+        rate = float(data.get("rate_per_marla") or inv.rate_per_marla or 0)
+        if area <= 0 or rate <= 0:
+            raise HTTPException(400, "area_marla and rate_per_marla must be provided")
+
+        num_inst = int(data.get("num_installments") or 4)
+        if num_inst <= 0:
+            raise HTTPException(400, "num_installments must be > 0")
+
+        first_due = date.fromisoformat(data["first_due_date"]) if data.get("first_due_date") else date.today()
+        booking_date = date.fromisoformat(data["booking_date"]) if data.get("booking_date") else (eoi.eoi_date or date.today())
+
+        txn = Transaction(
+            customer_id=customer.id,
+            broker_id=broker.id if broker else None,
+            project_id=proj.id,
+            inventory_id=inv.id,
+            company_rep_id=current_user.id,
+            broker_commission_rate=float(data.get("broker_commission_rate") or 2.0),
+            unit_number=data.get("unit_number") or inv.unit_number,
+            block=data.get("block") or inv.block,
+            area_marla=area,
+            rate_per_marla=rate,
+            total_value=area * rate,
+            installment_cycle=data.get("installment_cycle") or "bi-annual",
+            num_installments=num_inst,
+            first_due_date=first_due,
+            status=data.get("transaction_status") or "active",
+            notes=((data.get("notes") or "") + f" Converted from {eoi.eoi_id}").strip(),
+            booking_date=booking_date,
+        )
+        db.add(txn)
+        db.flush()
+
+        cycle = data.get("installment_cycle") or "bi-annual"
+        cycle_months = {"monthly": 1, "quarterly": 3, "bi-annual": 6, "annual": 12}.get(cycle, 6)
+        installment_amount = round((area * rate) / num_inst, 2)
+        for n in range(num_inst):
+            due = first_due + relativedelta(months=cycle_months * n)
+            amt = installment_amount if n < num_inst - 1 else round((area * rate) - installment_amount * (num_inst - 1), 2)
+            db.add(Installment(
+                transaction_id=txn.id,
+                installment_number=n + 1,
+                due_date=due,
+                amount=amt,
+            ))
+
+        inv.status = "sold"
+
+        # Carry token as first receipt + allocation to earliest unpaid installments
+        if float(eoi.amount or 0) > 0:
+            r = Receipt(
+                customer_id=customer.id,
+                transaction_id=txn.id,
+                amount=float(eoi.amount),
+                payment_method=eoi.payment_method,
+                reference_number=eoi.reference_number,
+                payment_date=eoi.eoi_date or date.today(),
+                notes=f"Auto-created from EOI {eoi.eoi_id}",
+                created_by_rep_id=current_user.id
+            )
+            db.add(r)
+            db.flush()
+
+            remaining = float(eoi.amount)
+            installments = db.query(Installment).filter(
+                Installment.transaction_id == txn.id
+            ).order_by(Installment.installment_number).all()
+            for inst in installments:
+                if remaining <= 0:
+                    break
+                balance = float(inst.amount) - float(inst.amount_paid or 0)
+                alloc_amount = min(remaining, balance)
+                db.add(ReceiptAllocation(receipt_id=r.id, installment_id=inst.id, amount=alloc_amount))
+                inst.amount_paid = float(inst.amount_paid or 0) + alloc_amount
+                if float(inst.amount_paid) >= float(inst.amount):
+                    inst.status = "paid"
+                elif float(inst.amount_paid) > 0:
+                    inst.status = "partial"
+                remaining -= alloc_amount
+
+        eoi.status = "converted"
+        eoi.converted_transaction_id = txn.id
+        eoi.updated_at = func.now()
+        db.commit()
+        db.refresh(eoi)
+        return {
+            "message": "EOI converted to transaction",
+            "eoi": _eoi_row_dict(eoi, db),
+            "transaction": {"id": str(txn.id), "transaction_id": txn.transaction_id}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"EOI conversion error: {str(e)}")
+
+@app.get("/api/eoi/dashboard")
+def get_eoi_dashboard(
+    project_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    status: Optional[str] = None,
+    rep_id: Optional[str] = None,
+    broker_id: Optional[str] = None,
+    slab: Optional[str] = None,
+    export_format: Optional[str] = "json",
+    db: Session = Depends(get_db),
+    current_user: CompanyRep = Depends(get_current_user)
+):
+    try:
+        q = db.query(EOICollection)
+        isolation = get_rep_isolation_filter(current_user, db)
+        scoped_rep_ids = None
+        if isolation["isolated"]:
+            scoped_rep_ids = isolation["team_rep_uuids"]
+            q = q.filter(EOICollection.created_by.in_(scoped_rep_ids))
+
+        if project_id:
+            proj = _resolve_eoi_project(db, project_id)
+            if proj:
+                q = q.filter(EOICollection.project_id == proj.id)
+            else:
+                q = q.filter(literal(False))
+        if date_from:
+            q = q.filter(EOICollection.eoi_date >= date.fromisoformat(date_from))
+        if date_to:
+            q = q.filter(EOICollection.eoi_date <= date.fromisoformat(date_to))
+        if status:
+            statuses = [s.strip().lower() for s in status.split(",") if s.strip()]
+            valid = [s for s in statuses if s in VALID_EOI_STATUSES]
+            if valid:
+                q = q.filter(EOICollection.status.in_(valid))
+        if rep_id:
+            rep_obj = db.query(CompanyRep).filter(
+                (CompanyRep.rep_id == rep_id) | (func.cast(CompanyRep.id, String) == rep_id)
+            ).first()
+            if rep_obj:
+                if not isolation["isolated"] or rep_obj.id in (scoped_rep_ids or []):
+                    q = q.filter(EOICollection.created_by == rep_obj.id)
+                else:
+                    q = q.filter(literal(False))
+        if broker_id:
+            broker = _resolve_eoi_broker(db, broker_id)
+            if broker:
+                q = q.filter(EOICollection.broker_id == broker.id)
+            elif broker_id.lower() == "direct":
+                q = q.filter(EOICollection.broker_id.is_(None))
+            else:
+                q = q.filter(literal(False))
+
+        rows = q.order_by(EOICollection.eoi_date.desc(), EOICollection.created_at.desc()).all()
+        items = [_eoi_row_dict(row, db) for row in rows]
+        if slab:
+            items = [i for i in items if _eoi_slab_label(i.get("marlas")) == slab]
+
+        total_amount = sum(i["amount"] for i in items)
+        marlas_total = sum((i["marlas"] or 0) for i in items)
+
+        status_breakdown = {k: {"count": 0, "amount": 0.0} for k in ["active", "converted", "cancelled", "refunded"]}
+        broker_map = {}
+        rep_map = {}
+        slab_map = {"3-5": {"count": 0, "amount": 0.0}, "5-8": {"count": 0, "amount": 0.0}, "8+": {"count": 0, "amount": 0.0}, "Unknown": {"count": 0, "amount": 0.0}, "Other": {"count": 0, "amount": 0.0}}
+        for item in items:
+            st = item["status"]
+            if st in status_breakdown:
+                status_breakdown[st]["count"] += 1
+                status_breakdown[st]["amount"] += item["amount"]
+
+            bname = item["broker_name"] or "Direct"
+            if bname not in broker_map:
+                broker_map[bname] = {"broker_name": bname, "count": 0, "amount": 0.0}
+            broker_map[bname]["count"] += 1
+            broker_map[bname]["amount"] += item["amount"]
+
+            rep_name = item["created_by_name"] or "Unknown"
+            rep_key = item["created_by_rep_id"] or "unknown"
+            if rep_key not in rep_map:
+                rep_map[rep_key] = {"rep_id": rep_key, "rep_name": rep_name, "count": 0, "amount": 0.0}
+            rep_map[rep_key]["count"] += 1
+            rep_map[rep_key]["amount"] += item["amount"]
+
+            slab_name = _eoi_slab_label(item.get("marlas"))
+            slab_map[slab_name]["count"] += 1
+            slab_map[slab_name]["amount"] += item["amount"]
+
+        broker_leaderboard = sorted(broker_map.values(), key=lambda x: (x["amount"], x["count"]), reverse=True)
+        rep_summary = sorted(rep_map.values(), key=lambda x: (x["amount"], x["count"]), reverse=True)
+        slab_breakdown = [{"slab": k, "count": v["count"], "amount": round(v["amount"], 2)} for k, v in slab_map.items()]
+
+        if export_format == "csv":
+            import csv as csv_mod
+            from io import StringIO
+            output = StringIO()
+            if items:
+                writer = csv_mod.DictWriter(output, fieldnames=list(items[0].keys()))
+                writer.writeheader()
+                writer.writerows(items)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": "attachment; filename=eoi_dashboard.csv"}
+            )
+
+        if export_format == "excel":
+            import openpyxl
+            from io import BytesIO
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "EOI Dashboard"
+            if items:
+                headers = list(items[0].keys())
+                ws.append(headers)
+                for row in items:
+                    ws.append([row.get(h, "") for h in headers])
+            buf = BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+            return StreamingResponse(
+                buf,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": "attachment; filename=eoi_dashboard.xlsx"}
+            )
+
+        return {
+            "summary": {
+                "total_eois_count": len(items),
+                "total_eois_amount": round(total_amount, 2),
+                "average_eoi_amount": round((total_amount / len(items)), 2) if items else 0.0,
+                "total_marlas": round(marlas_total, 2),
+                "status_breakdown": {
+                    k: {"count": v["count"], "amount": round(v["amount"], 2)} for k, v in status_breakdown.items()
+                },
+            },
+            "leaderboard": {
+                "brokers": [{"broker_name": b["broker_name"], "count": b["count"], "amount": round(b["amount"], 2)} for b in broker_leaderboard],
+                "reps": [{"rep_id": r["rep_id"], "rep_name": r["rep_name"], "count": r["count"], "amount": round(r["amount"], 2)} for r in rep_summary],
+            },
+            "marlas_slabs": slab_breakdown,
+            "drilldown": {
+                "items": items,
+                "total": len(items),
+            },
+            "filters": {
+                "project_id": project_id,
+                "date_from": date_from,
+                "date_to": date_to,
+                "status": status,
+                "rep_id": rep_id,
+                "broker_id": broker_id,
+                "slab": slab,
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"EOI dashboard error: {str(e)}")
 
 # ============================================
 # CREDITORS API
@@ -5056,7 +5747,7 @@ from pathlib import Path
 
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "media"))
 MEDIA_ROOT.mkdir(exist_ok=True)
-for entity_type in ["transactions", "interactions", "projects", "receipts", "payments"]:
+for entity_type in ["transactions", "interactions", "projects", "receipts", "payments", "eois"]:
     (MEDIA_ROOT / entity_type).mkdir(exist_ok=True)
 
 def get_file_type(filename: str) -> str:
@@ -5157,6 +5848,11 @@ def get_media_library(
                     else:
                         entity_name = "Interaction"
                     entity_ref = entity.interaction_id
+            elif f.entity_type == "eoi":
+                entity = db.query(EOICollection).filter(EOICollection.id == f.entity_id).first()
+                if entity:
+                    entity_name = entity.party_name
+                    entity_ref = entity.eoi_id
             
             # Get uploader info
             rep = db.query(CompanyRep).filter(CompanyRep.id == f.uploaded_by_rep_id).first() if f.uploaded_by_rep_id else None
@@ -5198,7 +5894,7 @@ async def upload_media(
     db: Session = Depends(get_db)
 ):
     """Upload media file"""
-    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report"]:
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report", "eoi"]:
         raise HTTPException(400, "Invalid entity_type")
 
     # Verify entity exists
@@ -5222,6 +5918,8 @@ async def upload_media(
     elif entity_type == "report":
         # Reports are stored against rep.id; skip entity lookup, use entity_id directly
         entity = db.query(CompanyRep).filter((CompanyRep.id == entity_id) | (CompanyRep.rep_id == entity_id)).first()
+    elif entity_type == "eoi":
+        entity = db.query(EOICollection).filter((EOICollection.id == entity_id) | (EOICollection.eoi_id == entity_id)).first()
 
     if not entity:
         raise HTTPException(404, f"{entity_type} not found")
@@ -5229,7 +5927,7 @@ async def upload_media(
     # Get rep if provided
     rep = None
     if uploaded_by_rep_id:
-        rep = db.query(CompanyRep).filter((CompanyRep.id == uploaded_by_rep_id) | (CompanyRep.rep_id == uploaded_by_rep_id)).first()
+        rep = find_entity(db, CompanyRep, "rep_id", uploaded_by_rep_id)
     
     # Save file
     file_ext = file.filename.split('.')[-1] if '.' in file.filename else ''
@@ -5360,7 +6058,7 @@ def download_media_file(file_id: str, db: Session = Depends(get_db)):
 @app.get("/api/media/{entity_type}/{entity_id}")
 def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get_db)):
     """List media files for an entity"""
-    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report"]:
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report", "eoi"]:
         raise HTTPException(400, "Invalid entity_type")
 
     # Get entity
@@ -5383,6 +6081,8 @@ def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get
         entity = db.query(Task).filter((Task.id == entity_id) | (Task.task_id == entity_id)).first()
     elif entity_type == "report":
         entity = db.query(CompanyRep).filter((CompanyRep.id == entity_id) | (CompanyRep.rep_id == entity_id)).first()
+    elif entity_type == "eoi":
+        entity = db.query(EOICollection).filter((EOICollection.id == entity_id) | (EOICollection.eoi_id == entity_id)).first()
 
     if not entity:
         raise HTTPException(404, f"{entity_type} not found")
@@ -8776,7 +9476,9 @@ def delete_lookup_value(vid: str, db: Session = Depends(get_db),
 # ============================================
 @app.get("/api/leads/pipeline")
 def get_leads_pipeline(rep_id: str = None, campaign_id: str = None,
-                       stale_only: bool = False, db: Session = Depends(get_db),
+                       stale_only: bool = False, search: str = None,
+                       stage: str = None, page: int = 1, page_size: int = 50,
+                       db: Session = Depends(get_db),
                        current_user: CompanyRep = Depends(get_current_user)):
     # User role only sees their own leads
     effective_rep_id = None
@@ -8788,12 +9490,11 @@ def get_leads_pipeline(rep_id: str = None, campaign_id: str = None,
 
     # Include active leads + recently Won/Lost (last 90 days) so they appear in terminal stages
     cutoff = datetime.utcnow() - timedelta(days=90)
-    q = db.query(Lead).filter(
-        or_(
-            Lead.status.notin_(["converted", "lost"]),
-            and_(Lead.status.in_(["converted", "lost"]), Lead.updated_at >= cutoff)
-        )
+    base_filter = or_(
+        Lead.status.notin_(["converted", "lost"]),
+        and_(Lead.status.in_(["converted", "lost"]), Lead.updated_at >= cutoff)
     )
+    q = db.query(Lead).filter(base_filter)
     if effective_rep_id:
         q = q.filter(Lead.assigned_rep_id == effective_rep_id)
     if campaign_id:
@@ -8802,28 +9503,60 @@ def get_leads_pipeline(rep_id: str = None, campaign_id: str = None,
     if stale_only:
         q = q.filter(Lead.is_stale == True)
 
-    leads = q.order_by(Lead.created_at.desc()).all()
+    # Stage counts (fast SQL) — always computed from base query before search/stage filter
+    from sqlalchemy import func as sa_func
+    count_q = q.with_entities(
+        sa_func.coalesce(Lead.pipeline_stage, 'New').label('stage'),
+        sa_func.count(Lead.id)
+    ).group_by(sa_func.coalesce(Lead.pipeline_stage, 'New'))
+    stage_counts = dict(count_q.all())
+    total_count = sum(stage_counts.values())
 
-    # Pre-fetch all reps and campaigns to avoid N+1 queries
+    # Build pipeline stage metadata with counts
+    stages_db = db.query(PipelineStage).order_by(PipelineStage.display_order).all()
+    pipeline = []
+    for s in stages_db:
+        pipeline.append({
+            "stage": s.name, "color": s.color, "is_terminal": bool(s.is_terminal),
+            "count": stage_counts.get(s.name, 0), "leads": []
+        })
+
+    # Apply search filter
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        q = q.filter(or_(
+            Lead.name.ilike(term),
+            Lead.mobile.ilike(term),
+            Lead.lead_id.ilike(term),
+            Lead.email.ilike(term),
+            Lead.source.ilike(term)
+        ))
+
+    # Apply stage filter
+    if stage and stage != 'all':
+        q = q.filter(sa_func.coalesce(Lead.pipeline_stage, 'New') == stage)
+
+    # Get filtered total for pagination
+    filtered_total = q.count()
+
+    # Paginate
+    offset = (max(page, 1) - 1) * page_size
+    leads = q.order_by(Lead.created_at.desc()).offset(offset).limit(page_size).all()
+
+    # Pre-fetch reps and campaigns for this page only
     rep_ids = set(l.assigned_rep_id for l in leads if l.assigned_rep_id)
     camp_ids = set(l.campaign_id for l in leads if l.campaign_id)
     reps_map = {r.id: r for r in db.query(CompanyRep).filter(CompanyRep.id.in_(rep_ids)).all()} if rep_ids else {}
     camps_map = {c.id: c for c in db.query(Campaign).filter(Campaign.id.in_(camp_ids)).all()} if camp_ids else {}
 
-    # Group by pipeline_stage
-    stages = db.query(PipelineStage).order_by(PipelineStage.display_order).all()
-    pipeline = {}
-    for s in stages:
-        pipeline[s.name] = {"stage": s.name, "color": s.color, "is_terminal": bool(s.is_terminal), "leads": [], "count": 0}
-
+    leads_data = []
     for l in leads:
         rep = reps_map.get(l.assigned_rep_id)
         camp = camps_map.get(l.campaign_id)
         days_since_contact = None
         if l.last_contacted_at:
             days_since_contact = (datetime.utcnow() - l.last_contacted_at).days
-
-        lead_data = {
+        leads_data.append({
             "id": str(l.id), "lead_id": l.lead_id, "name": l.name,
             "mobile": l.mobile, "email": l.email,
             "additional_mobiles": l.additional_mobiles or [],
@@ -8840,18 +9573,14 @@ def get_leads_pipeline(rep_id: str = None, campaign_id: str = None,
             "source": l.source, "source_details": l.source_details,
             "temperature": l.temperature,
             "notes": l.notes, "created_at": str(l.created_at)
-        }
+        })
 
-        stage_name = l.pipeline_stage or "New"
-        if stage_name in pipeline:
-            pipeline[stage_name]["leads"].append(lead_data)
-            pipeline[stage_name]["count"] += 1
-        else:
-            if "New" in pipeline:
-                pipeline["New"]["leads"].append(lead_data)
-                pipeline["New"]["count"] += 1
-
-    return {"pipeline": list(pipeline.values()), "total": len(leads)}
+    return {
+        "pipeline": pipeline, "total": total_count,
+        "leads": leads_data, "filtered_total": filtered_total,
+        "page": page, "page_size": page_size,
+        "total_pages": max(1, -(-filtered_total // page_size))
+    }
 
 @app.put("/api/leads/{lid}/stage")
 def update_lead_stage(lid: str, data: dict, db: Session = Depends(get_db),
