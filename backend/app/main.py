@@ -298,10 +298,51 @@ class EOICollection(Base):
     inventory_id = Column(UUID(as_uuid=True), ForeignKey("inventory.id"))
     payment_method = Column(String(50))
     reference_number = Column(String(100))
+    payment_received = Column(Boolean, default=False, server_default="false")
+    payment_received_at = Column(DateTime)
     eoi_date = Column(Date, default=date.today, nullable=False)
     notes = Column(Text)
     status = Column(String(20), default="active", nullable=False)  # active|converted|cancelled|refunded
     converted_transaction_id = Column(UUID(as_uuid=True), ForeignKey("transactions.id"))
+    created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class ZakatBeneficiary(Base):
+    __tablename__ = "zakat_beneficiaries"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    beneficiary_id = Column(String(20), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    cnic = Column(String(20))
+    mobile = Column(String(20))
+    address = Column(Text)
+    notes = Column(Text)
+    status = Column(String(20), default="active")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+class ZakatRecord(Base):
+    __tablename__ = "zakat_records"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    zakat_id = Column(String(20), unique=True, nullable=False)
+    beneficiary_id = Column(UUID(as_uuid=True), ForeignKey("zakat_beneficiaries.id"))
+    beneficiary_name = Column(String(255), nullable=False)
+    beneficiary_cnic = Column(String(20))
+    beneficiary_mobile = Column(String(20))
+    beneficiary_address = Column(Text)
+    amount = Column(Numeric(15, 2), nullable=False)
+    category = Column(String(50), nullable=False)
+    purpose = Column(Text)
+    approval_reference = Column(Text)
+    approved_by = Column(String(255))
+    payment_method = Column(String(50))
+    reference_number = Column(String(100))
+    receipt_number = Column(String(100))
+    disbursed_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    disbursement_date = Column(Date)
+    status = Column(String(20), default="active")
+    notes = Column(Text)
+    payment_id = Column(UUID(as_uuid=True), ForeignKey("payments.id"))
     created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
@@ -971,6 +1012,8 @@ def _eoi_row_dict(eoi: EOICollection, db: Session):
         "inventory_uuid": str(eoi.inventory_id) if eoi.inventory_id else None,
         "payment_method": eoi.payment_method,
         "reference_number": eoi.reference_number,
+        "payment_received": bool(eoi.payment_received) if eoi.payment_received is not None else False,
+        "payment_received_at": str(eoi.payment_received_at) if eoi.payment_received_at else None,
         "eoi_date": str(eoi.eoi_date) if eoi.eoi_date else None,
         "notes": eoi.notes,
         "status": eoi.status,
@@ -3845,6 +3888,8 @@ def create_eoi_collection(
             inventory_id=inventory.id if inventory else None,
             payment_method=data.get("payment_method"),
             reference_number=data.get("reference_number"),
+            payment_received=bool(data.get("payment_received", False)),
+            payment_received_at=datetime.utcnow() if data.get("payment_received") else None,
             eoi_date=date.fromisoformat(data["eoi_date"]) if data.get("eoi_date") else date.today(),
             notes=data.get("notes"),
             status=status,
@@ -3910,6 +3955,12 @@ def update_eoi_collection(
             eoi.amount = amt
         if "marlas" in data:
             eoi.marlas = float(data["marlas"]) if data["marlas"] not in (None, "") else None
+        if "payment_received" in data:
+            eoi.payment_received = bool(data["payment_received"])
+            if data["payment_received"] and not eoi.payment_received_at:
+                eoi.payment_received_at = datetime.utcnow()
+            elif not data["payment_received"]:
+                eoi.payment_received_at = None
         if "eoi_date" in data and data["eoi_date"]:
             eoi.eoi_date = date.fromisoformat(data["eoi_date"])
         if "status" in data and data["status"]:
@@ -4086,6 +4137,9 @@ def convert_eoi_to_transaction(
                 remaining -= alloc_amount
 
         eoi.status = "converted"
+        eoi.payment_received = True  # Auto-sync: conversion implies payment received
+        if not eoi.payment_received_at:
+            eoi.payment_received_at = datetime.utcnow()
         eoi.converted_transaction_id = txn.id
         eoi.updated_at = func.now()
         db.commit()
@@ -4259,6 +4313,524 @@ def get_eoi_dashboard(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"EOI dashboard error: {str(e)}")
+
+# ============================================
+# ZAKAT DISBURSEMENT MODULE
+# ============================================
+
+ZAKAT_ALLOWED_REPS = ['REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020']
+
+def _check_zakat_access(current_user):
+    if current_user.role == "admin":
+        return True
+    if current_user.rep_id in ZAKAT_ALLOWED_REPS:
+        return True
+    raise HTTPException(status_code=403, detail="Zakat module access denied")
+
+def _generate_zakat_code(db: Session) -> str:
+    count = db.query(func.count(ZakatRecord.id)).scalar() or 0
+    candidate = f"ZKT-{str(count + 1).zfill(5)}"
+    while db.query(ZakatRecord).filter(ZakatRecord.zakat_id == candidate).first():
+        count += 1
+        candidate = f"ZKT-{str(count + 1).zfill(5)}"
+    return candidate
+
+def _generate_beneficiary_code(db: Session) -> str:
+    count = db.query(func.count(ZakatBeneficiary.id)).scalar() or 0
+    candidate = f"ZBN-{str(count + 1).zfill(5)}"
+    while db.query(ZakatBeneficiary).filter(ZakatBeneficiary.beneficiary_id == candidate).first():
+        count += 1
+        candidate = f"ZBN-{str(count + 1).zfill(5)}"
+    return candidate
+
+def _generate_payment_code(db: Session) -> str:
+    count = db.query(func.count(Payment.id)).scalar() or 0
+    candidate = f"PAY-{str(count + 1).zfill(5)}"
+    while db.query(Payment).filter(Payment.payment_id == candidate).first():
+        count += 1
+        candidate = f"PAY-{str(count + 1).zfill(5)}"
+    return candidate
+
+def _zakat_row_dict(z: ZakatRecord, db: Session):
+    ben = db.query(ZakatBeneficiary).filter(ZakatBeneficiary.id == z.beneficiary_id).first() if z.beneficiary_id else None
+    creator = db.query(CompanyRep).filter(CompanyRep.id == z.created_by).first() if z.created_by else None
+    disburser = db.query(CompanyRep).filter(CompanyRep.id == z.disbursed_by).first() if z.disbursed_by else None
+    return {
+        "id": str(z.id),
+        "zakat_id": z.zakat_id,
+        "beneficiary_id": str(z.beneficiary_id) if z.beneficiary_id else None,
+        "beneficiary_display_id": ben.beneficiary_id if ben else None,
+        "beneficiary_name": z.beneficiary_name,
+        "beneficiary_cnic": z.beneficiary_cnic,
+        "beneficiary_mobile": z.beneficiary_mobile,
+        "beneficiary_address": z.beneficiary_address,
+        "amount": float(z.amount) if z.amount else 0,
+        "category": z.category,
+        "purpose": z.purpose,
+        "approval_reference": z.approval_reference,
+        "approved_by": z.approved_by,
+        "payment_method": z.payment_method,
+        "reference_number": z.reference_number,
+        "receipt_number": z.receipt_number,
+        "disbursed_by": str(z.disbursed_by) if z.disbursed_by else None,
+        "disbursed_by_rep_id": disburser.rep_id if disburser else None,
+        "disbursed_by_name": disburser.name if disburser else None,
+        "disbursement_date": z.disbursement_date.isoformat() if z.disbursement_date else None,
+        "status": z.status,
+        "notes": z.notes,
+        "payment_id": str(z.payment_id) if z.payment_id else None,
+        "created_by": str(z.created_by) if z.created_by else None,
+        "created_by_rep_id": creator.rep_id if creator else None,
+        "created_by_name": creator.name if creator else None,
+        "created_at": z.created_at.isoformat() if z.created_at else None,
+        "updated_at": z.updated_at.isoformat() if z.updated_at else None,
+    }
+
+# --- Beneficiary endpoints ---
+
+@app.get("/api/zakat/beneficiaries")
+def list_zakat_beneficiaries(
+    search: str = None, status: str = None, limit: int = 200,
+    db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
+):
+    _check_zakat_access(current_user)
+    q = db.query(ZakatBeneficiary)
+    if status:
+        q = q.filter(ZakatBeneficiary.status == status)
+    if search:
+        s = f"%{search}%"
+        q = q.filter(
+            (ZakatBeneficiary.name.ilike(s)) |
+            (ZakatBeneficiary.cnic.ilike(s)) |
+            (ZakatBeneficiary.mobile.ilike(s)) |
+            (ZakatBeneficiary.beneficiary_id.ilike(s))
+        )
+    bens = q.order_by(ZakatBeneficiary.created_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": str(b.id), "beneficiary_id": b.beneficiary_id, "name": b.name,
+            "cnic": b.cnic, "mobile": b.mobile, "address": b.address,
+            "notes": b.notes, "status": b.status,
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+        }
+        for b in bens
+    ]
+
+@app.post("/api/zakat/beneficiaries")
+def create_zakat_beneficiary(data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user)
+    if not data.get("name"):
+        raise HTTPException(400, "Beneficiary name is required")
+    b = ZakatBeneficiary(
+        beneficiary_id=_generate_beneficiary_code(db),
+        name=data["name"],
+        cnic=data.get("cnic"),
+        mobile=data.get("mobile"),
+        address=data.get("address"),
+        notes=data.get("notes"),
+    )
+    db.add(b); db.commit(); db.refresh(b)
+    return {"message": "Beneficiary created", "item": {
+        "id": str(b.id), "beneficiary_id": b.beneficiary_id, "name": b.name,
+        "cnic": b.cnic, "mobile": b.mobile, "address": b.address,
+    }}
+
+@app.put("/api/zakat/beneficiaries/{bid}")
+def update_zakat_beneficiary(bid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user)
+    try:
+        b = db.query(ZakatBeneficiary).filter(
+            (ZakatBeneficiary.id == uuid.UUID(bid)) | (ZakatBeneficiary.beneficiary_id == bid)
+        ).first()
+    except ValueError:
+        b = db.query(ZakatBeneficiary).filter(ZakatBeneficiary.beneficiary_id == bid).first()
+    if not b:
+        raise HTTPException(404, "Beneficiary not found")
+    for field in ["name", "cnic", "mobile", "address", "notes", "status"]:
+        if field in data:
+            setattr(b, field, data[field])
+    b.updated_at = func.now()
+    db.commit(); db.refresh(b)
+    return {"message": "Beneficiary updated", "item": {
+        "id": str(b.id), "beneficiary_id": b.beneficiary_id, "name": b.name,
+        "cnic": b.cnic, "mobile": b.mobile, "address": b.address,
+    }}
+
+# --- Zakat record endpoints ---
+
+@app.get("/api/zakat")
+def list_zakat_records(
+    status: str = None, category: str = None, search: str = None,
+    date_from: str = None, date_to: str = None,
+    disbursed_by: str = None, beneficiary_id: str = None,
+    limit: int = 200,
+    db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
+):
+    _check_zakat_access(current_user)
+    q = db.query(ZakatRecord)
+    if status:
+        statuses = [s.strip() for s in status.split(",")]
+        q = q.filter(ZakatRecord.status.in_(statuses))
+    if category:
+        categories = [c.strip() for c in category.split(",")]
+        q = q.filter(ZakatRecord.category.in_(categories))
+    if search:
+        s = f"%{search}%"
+        q = q.filter(
+            (ZakatRecord.zakat_id.ilike(s)) |
+            (ZakatRecord.beneficiary_name.ilike(s)) |
+            (ZakatRecord.beneficiary_cnic.ilike(s)) |
+            (ZakatRecord.beneficiary_mobile.ilike(s)) |
+            (ZakatRecord.receipt_number.ilike(s)) |
+            (ZakatRecord.reference_number.ilike(s))
+        )
+    if date_from:
+        q = q.filter(ZakatRecord.created_at >= date_from)
+    if date_to:
+        q = q.filter(ZakatRecord.created_at <= date_to + " 23:59:59")
+    if disbursed_by:
+        rep = db.query(CompanyRep).filter(
+            (CompanyRep.rep_id == disbursed_by) | (CompanyRep.id == disbursed_by)
+        ).first()
+        if rep:
+            q = q.filter(ZakatRecord.disbursed_by == rep.id)
+    if beneficiary_id:
+        try:
+            q = q.filter(ZakatRecord.beneficiary_id == uuid.UUID(beneficiary_id))
+        except ValueError:
+            ben = db.query(ZakatBeneficiary).filter(ZakatBeneficiary.beneficiary_id == beneficiary_id).first()
+            if ben:
+                q = q.filter(ZakatRecord.beneficiary_id == ben.id)
+    records = q.order_by(ZakatRecord.created_at.desc()).limit(limit).all()
+    total = q.count()
+    return {
+        "items": [_zakat_row_dict(r, db) for r in records],
+        "total": total,
+    }
+
+@app.post("/api/zakat")
+def create_zakat_record(data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user)
+    if not data.get("beneficiary_name"):
+        raise HTTPException(400, "Beneficiary name is required")
+    if not data.get("amount") or float(data["amount"]) <= 0:
+        raise HTTPException(400, "Amount must be greater than 0")
+    if not data.get("category"):
+        raise HTTPException(400, "Category is required")
+
+    # Resolve or create beneficiary
+    ben_id = None
+    if data.get("beneficiary_id"):
+        try:
+            ben = db.query(ZakatBeneficiary).filter(
+                (ZakatBeneficiary.id == uuid.UUID(data["beneficiary_id"])) |
+                (ZakatBeneficiary.beneficiary_id == data["beneficiary_id"])
+            ).first()
+        except ValueError:
+            ben = db.query(ZakatBeneficiary).filter(ZakatBeneficiary.beneficiary_id == data["beneficiary_id"]).first()
+        if ben:
+            ben_id = ben.id
+    elif data.get("create_beneficiary"):
+        new_ben = ZakatBeneficiary(
+            beneficiary_id=_generate_beneficiary_code(db),
+            name=data["beneficiary_name"],
+            cnic=data.get("beneficiary_cnic"),
+            mobile=data.get("beneficiary_mobile"),
+            address=data.get("beneficiary_address"),
+        )
+        db.add(new_ben); db.flush()
+        ben_id = new_ben.id
+
+    rep = db.query(CompanyRep).filter(CompanyRep.rep_id == current_user.rep_id).first()
+
+    z = ZakatRecord(
+        zakat_id=_generate_zakat_code(db),
+        beneficiary_id=ben_id,
+        beneficiary_name=data["beneficiary_name"],
+        beneficiary_cnic=data.get("beneficiary_cnic"),
+        beneficiary_mobile=data.get("beneficiary_mobile"),
+        beneficiary_address=data.get("beneficiary_address"),
+        amount=float(data["amount"]),
+        category=data["category"],
+        purpose=data.get("purpose"),
+        approval_reference=data.get("approval_reference"),
+        approved_by=data.get("approved_by"),
+        payment_method=data.get("payment_method"),
+        reference_number=data.get("reference_number"),
+        receipt_number=data.get("receipt_number"),
+        notes=data.get("notes"),
+        created_by=rep.id if rep else None,
+    )
+    db.add(z); db.commit(); db.refresh(z)
+
+    # Auto-create disbursement task for tracking
+    try:
+        from app.services.task_service import task_service as _zts
+        amount_str = f"PKR {z.amount:,.0f}" if z.amount else "PKR -"
+        _zts.create_task(
+            db, creator_id=rep.id if rep else z.created_by,
+            title=f"Disburse {amount_str} to {z.beneficiary_name}",
+            description=f"Zakat ID: {z.zakat_id}\nBeneficiary: {z.beneficiary_name}\nCNIC: {z.beneficiary_cnic or '-'}\nMobile: {z.beneficiary_mobile or '-'}\nCategory: {z.category}\nPurpose: {z.purpose or '-'}\nApproval: {z.approval_reference or '-'}",
+            task_type="collection",
+            priority="high",
+            assignee_id=rep.id if rep else None,
+            due_date=date.today() + timedelta(days=7),
+        )
+    except Exception:
+        pass  # Non-critical — task creation failure shouldn't block zakat record
+
+    return {"message": "Zakat record created", "item": _zakat_row_dict(z, db)}
+
+@app.put("/api/zakat/{zid}")
+def update_zakat_record(zid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user)
+    try:
+        z = db.query(ZakatRecord).filter(
+            (ZakatRecord.id == uuid.UUID(zid)) | (ZakatRecord.zakat_id == zid)
+        ).first()
+    except ValueError:
+        z = db.query(ZakatRecord).filter(ZakatRecord.zakat_id == zid).first()
+    if not z:
+        raise HTTPException(404, "Zakat record not found")
+    if z.status == "disbursed":
+        raise HTTPException(400, "Cannot edit a disbursed record")
+
+    # Resolve beneficiary if changed
+    if data.get("beneficiary_id"):
+        try:
+            ben = db.query(ZakatBeneficiary).filter(
+                (ZakatBeneficiary.id == uuid.UUID(data["beneficiary_id"])) |
+                (ZakatBeneficiary.beneficiary_id == data["beneficiary_id"])
+            ).first()
+        except ValueError:
+            ben = db.query(ZakatBeneficiary).filter(ZakatBeneficiary.beneficiary_id == data["beneficiary_id"]).first()
+        if ben:
+            z.beneficiary_id = ben.id
+
+    for field in [
+        "beneficiary_name", "beneficiary_cnic", "beneficiary_mobile", "beneficiary_address",
+        "amount", "category", "purpose", "approval_reference", "approved_by",
+        "payment_method", "reference_number", "receipt_number", "notes",
+    ]:
+        if field in data:
+            val = data[field]
+            if field == "amount":
+                val = float(val) if val else 0
+            setattr(z, field, val)
+    z.updated_at = func.now()
+    db.commit(); db.refresh(z)
+    return {"message": "Zakat record updated", "item": _zakat_row_dict(z, db)}
+
+@app.post("/api/zakat/{zid}/disburse")
+def disburse_zakat(zid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user)
+    try:
+        z = db.query(ZakatRecord).filter(
+            (ZakatRecord.id == uuid.UUID(zid)) | (ZakatRecord.zakat_id == zid)
+        ).first()
+    except ValueError:
+        z = db.query(ZakatRecord).filter(ZakatRecord.zakat_id == zid).first()
+    if not z:
+        raise HTTPException(404, "Zakat record not found")
+    if z.status != "active":
+        raise HTTPException(400, f"Cannot disburse a record with status '{z.status}'")
+
+    # Resolve disbursed_by rep
+    disburser = None
+    if data.get("disbursed_by"):
+        try:
+            did = uuid.UUID(str(data["disbursed_by"]))
+            disburser = db.query(CompanyRep).filter(
+                (CompanyRep.rep_id == data["disbursed_by"]) | (CompanyRep.id == did)
+            ).first()
+        except ValueError:
+            disburser = db.query(CompanyRep).filter(CompanyRep.rep_id == data["disbursed_by"]).first()
+    if not disburser:
+        # Default to current user
+        disburser = db.query(CompanyRep).filter(CompanyRep.rep_id == current_user.rep_id).first()
+
+    payment_method = data.get("payment_method") or z.payment_method
+    reference_number = data.get("reference_number") or z.reference_number
+    receipt_number = data.get("receipt_number") or z.receipt_number
+    disbursement_date = date.fromisoformat(data["disbursement_date"]) if data.get("disbursement_date") else date.today()
+
+    # Auto-create Payment record
+    payment = Payment(
+        payment_id=_generate_payment_code(db),
+        payment_type="zakat",
+        payee_type="beneficiary",
+        amount=float(z.amount),
+        payment_method=payment_method,
+        reference_number=reference_number,
+        payment_date=disbursement_date,
+        notes=f"Zakat disbursement {z.zakat_id} to {z.beneficiary_name}",
+        status="completed",
+    )
+    db.add(payment); db.flush()
+
+    # Update zakat record
+    z.status = "disbursed"
+    z.disbursed_by = disburser.id if disburser else None
+    z.payment_method = payment_method
+    z.reference_number = reference_number
+    z.receipt_number = receipt_number
+    z.disbursement_date = disbursement_date
+    z.payment_id = payment.id
+    if data.get("notes"):
+        z.notes = (z.notes + "\n" if z.notes else "") + data["notes"]
+    z.updated_at = func.now()
+
+    db.commit(); db.refresh(z)
+    return {"message": "Zakat disbursed", "item": _zakat_row_dict(z, db)}
+
+@app.post("/api/zakat/{zid}/cancel")
+def cancel_zakat(zid: str, data: dict = {}, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user)
+    try:
+        z = db.query(ZakatRecord).filter(
+            (ZakatRecord.id == uuid.UUID(zid)) | (ZakatRecord.zakat_id == zid)
+        ).first()
+    except ValueError:
+        z = db.query(ZakatRecord).filter(ZakatRecord.zakat_id == zid).first()
+    if not z:
+        raise HTTPException(404, "Zakat record not found")
+    if z.status == "disbursed":
+        raise HTTPException(400, "Cannot cancel a disbursed record")
+
+    z.status = "cancelled"
+    reason = data.get("reason", "")
+    if reason:
+        z.notes = (z.notes + "\n" if z.notes else "") + f"Cancelled: {reason}"
+    z.updated_at = func.now()
+    db.commit(); db.refresh(z)
+    return {"message": "Zakat record cancelled", "item": _zakat_row_dict(z, db)}
+
+# --- Zakat Dashboard ---
+
+@app.get("/api/zakat/dashboard")
+def get_zakat_dashboard(
+    status: str = None, category: str = None,
+    date_from: str = None, date_to: str = None,
+    quarter: str = None,
+    export_format: str = None,
+    db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
+):
+    _check_zakat_access(current_user)
+    try:
+        q = db.query(ZakatRecord)
+        if status:
+            q = q.filter(ZakatRecord.status.in_([s.strip() for s in status.split(",")]))
+        if category:
+            q = q.filter(ZakatRecord.category.in_([c.strip() for c in category.split(",")]))
+        if date_from:
+            q = q.filter(ZakatRecord.created_at >= date_from)
+        if date_to:
+            q = q.filter(ZakatRecord.created_at <= date_to + " 23:59:59")
+
+        all_records = q.all()
+
+        # Summary
+        total_amount = sum(float(r.amount) for r in all_records)
+        active = [r for r in all_records if r.status == "active"]
+        disbursed = [r for r in all_records if r.status == "disbursed"]
+        cancelled = [r for r in all_records if r.status == "cancelled"]
+
+        summary = {
+            "total_records": len(all_records),
+            "total_amount": total_amount,
+            "active_count": len(active),
+            "active_amount": sum(float(r.amount) for r in active),
+            "disbursed_count": len(disbursed),
+            "disbursed_amount": sum(float(r.amount) for r in disbursed),
+            "cancelled_count": len(cancelled),
+            "cancelled_amount": sum(float(r.amount) for r in cancelled),
+        }
+
+        # By category
+        cat_map = {}
+        for r in all_records:
+            cat = r.category or "other"
+            if cat not in cat_map:
+                cat_map[cat] = {"category": cat, "count": 0, "amount": 0}
+            cat_map[cat]["count"] += 1
+            cat_map[cat]["amount"] += float(r.amount)
+        by_category = sorted(cat_map.values(), key=lambda x: x["amount"], reverse=True)
+
+        # By quarter (calendar quarters)
+        quarter_map = {}
+        for r in all_records:
+            dt = r.disbursement_date or (r.created_at.date() if r.created_at else None)
+            if dt:
+                q_num = (dt.month - 1) // 3 + 1
+                q_label = f"Q{q_num} {dt.year}"
+                if q_label not in quarter_map:
+                    quarter_map[q_label] = {"quarter": q_label, "count": 0, "amount": 0}
+                quarter_map[q_label]["count"] += 1
+                quarter_map[q_label]["amount"] += float(r.amount)
+        by_quarter = sorted(quarter_map.values(), key=lambda x: x["quarter"])
+
+        # By rep (disbursed_by)
+        rep_map = {}
+        for r in disbursed:
+            if r.disbursed_by:
+                rep = db.query(CompanyRep).filter(CompanyRep.id == r.disbursed_by).first()
+                key = str(r.disbursed_by)
+                if key not in rep_map:
+                    rep_map[key] = {
+                        "rep_id": rep.rep_id if rep else "Unknown",
+                        "rep_name": rep.name if rep else "Unknown",
+                        "count": 0, "amount": 0,
+                    }
+                rep_map[key]["count"] += 1
+                rep_map[key]["amount"] += float(r.amount)
+        by_rep = sorted(rep_map.values(), key=lambda x: x["amount"], reverse=True)
+
+        # Export
+        if export_format in ("csv", "excel"):
+            import io, csv
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow([
+                "Zakat ID", "Beneficiary", "CNIC", "Mobile", "Address",
+                "Amount (PKR)", "Category", "Purpose", "Approval Reference",
+                "Approved By", "Payment Method", "Reference #", "Receipt #",
+                "Disbursed By", "Disbursement Date", "Status", "Notes", "Created At",
+            ])
+            for r in all_records:
+                disburser = db.query(CompanyRep).filter(CompanyRep.id == r.disbursed_by).first() if r.disbursed_by else None
+                writer.writerow([
+                    r.zakat_id, r.beneficiary_name, r.beneficiary_cnic or "",
+                    r.beneficiary_mobile or "", r.beneficiary_address or "",
+                    float(r.amount), r.category, r.purpose or "",
+                    r.approval_reference or "", r.approved_by or "",
+                    r.payment_method or "", r.reference_number or "",
+                    r.receipt_number or "", disburser.name if disburser else "",
+                    r.disbursement_date.isoformat() if r.disbursement_date else "",
+                    r.status, r.notes or "",
+                    r.created_at.isoformat() if r.created_at else "",
+                ])
+            from starlette.responses import StreamingResponse
+            output.seek(0)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": "attachment; filename=zakat_register.csv"},
+            )
+
+        return {
+            "summary": summary,
+            "by_category": by_category,
+            "by_quarter": by_quarter,
+            "by_rep": by_rep,
+            "drilldown": {
+                "items": [_zakat_row_dict(r, db) for r in all_records[:200]],
+                "total": len(all_records),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Zakat dashboard error: {str(e)}")
 
 # ============================================
 # CREDITORS API
@@ -4567,6 +5139,7 @@ def create_payment(data: dict, db: Session = Depends(get_db)):
     elif creditor: payee_type = "creditor"
     
     p = Payment(
+        payment_id=_generate_payment_code(db),
         payment_type=data["payment_type"],
         payee_type=payee_type,
         broker_id=broker.id if broker else None,
@@ -5747,7 +6320,7 @@ from pathlib import Path
 
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "media"))
 MEDIA_ROOT.mkdir(exist_ok=True)
-for entity_type in ["transactions", "interactions", "projects", "receipts", "payments", "eois"]:
+for entity_type in ["transactions", "interactions", "projects", "receipts", "payments", "eois", "zakats"]:
     (MEDIA_ROOT / entity_type).mkdir(exist_ok=True)
 
 def get_file_type(filename: str) -> str:
@@ -5894,7 +6467,7 @@ async def upload_media(
     db: Session = Depends(get_db)
 ):
     """Upload media file"""
-    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report", "eoi"]:
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report", "eoi", "zakat"]:
         raise HTTPException(400, "Invalid entity_type")
 
     # Verify entity exists
@@ -5920,6 +6493,8 @@ async def upload_media(
         entity = db.query(CompanyRep).filter((CompanyRep.id == entity_id) | (CompanyRep.rep_id == entity_id)).first()
     elif entity_type == "eoi":
         entity = db.query(EOICollection).filter((EOICollection.id == entity_id) | (EOICollection.eoi_id == entity_id)).first()
+    elif entity_type == "zakat":
+        entity = db.query(ZakatRecord).filter((ZakatRecord.id == entity_id) | (ZakatRecord.zakat_id == entity_id)).first()
 
     if not entity:
         raise HTTPException(404, f"{entity_type} not found")
@@ -6058,7 +6633,7 @@ def download_media_file(file_id: str, db: Session = Depends(get_db)):
 @app.get("/api/media/{entity_type}/{entity_id}")
 def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get_db)):
     """List media files for an entity"""
-    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report", "eoi"]:
+    if entity_type not in ["transaction", "interaction", "project", "receipt", "payment", "customer", "broker", "task", "report", "eoi", "zakat"]:
         raise HTTPException(400, "Invalid entity_type")
 
     # Get entity
@@ -6083,6 +6658,8 @@ def list_media_files(entity_type: str, entity_id: str, db: Session = Depends(get
         entity = db.query(CompanyRep).filter((CompanyRep.id == entity_id) | (CompanyRep.rep_id == entity_id)).first()
     elif entity_type == "eoi":
         entity = db.query(EOICollection).filter((EOICollection.id == entity_id) | (EOICollection.eoi_id == entity_id)).first()
+    elif entity_type == "zakat":
+        entity = db.query(ZakatRecord).filter((ZakatRecord.id == entity_id) | (ZakatRecord.zakat_id == entity_id)).first()
 
     if not entity:
         raise HTTPException(404, f"{entity_type} not found")

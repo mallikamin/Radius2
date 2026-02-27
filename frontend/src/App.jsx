@@ -7,6 +7,7 @@ import EntityTaskWidget from './components/Tasks/EntityTaskWidget';
 import ChatWidget from './components/Voice/ChatWidget';
 import PhoneInput from './components/PhoneInput';
 import { fetchLookupValues, LOOKUP_KEYS } from './utils/lookupValues';
+import { SBL_LOGO_BASE64 } from './sblLogo';
 
 const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
@@ -341,12 +342,14 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showMoreMenu, showNotifPanel]);
 
-  // Show login if not authenticated
-  if (!user) {
-    return <LoginView onLogin={setUser} />;
-  }
-  
   // Role-based access control
+  const ZAKAT_ALLOWED_REPS = ['REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020'];
+  const hasZakatAccess = (u) => {
+    if (!u) return false;
+    if ((u.role || '') === 'admin') return true;
+    return ZAKAT_ALLOWED_REPS.includes(u.rep_id || '');
+  };
+
   const canAccess = (tabId) => {
     if (!user) return false;
     const role = user.role || 'user';
@@ -358,9 +361,9 @@ export default function App() {
     
     // Role-based access rules
     const roleAccess = {
-      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'eoi', 'settings'],
+      admin: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'eoi', 'zakat', 'settings'],
       director: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
-      cco: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'settings'],
+      cco: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'eoi', 'settings'],
       coo: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector', 'eoi', 'settings'],
       manager: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'tasks', 'media', 'vector'],
       creator: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'payments', 'reports', 'interactions', 'customers', 'brokers', 'campaigns', 'tasks', 'media', 'vector'],
@@ -368,6 +371,8 @@ export default function App() {
       viewer: ['dashboard', 'projects', 'inventory', 'transactions', 'receipts', 'tasks', 'media', 'vector']
     };
     
+    if (tabId === 'zakat') return hasZakatAccess(user);
+
     const allowedByRole = roleAccess[role]?.includes(tabId) || false;
     if (!allowedByRole) return false;
 
@@ -385,15 +390,20 @@ export default function App() {
   
   // Team-based focused headers
   const TEAM_HEADER_CONFIG = {
-    // Finance team: CFO + Luqman (consultant reporting to CFO)
+    // Zakat/Finance team
     finance: {
-      members: ['REP-0010', 'REP-0011'],
-      primaryIds: ['tasks', 'reports', 'dashboard'],
+      members: ['REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020'],
+      primaryIds: ['zakat', 'tasks', 'reports', 'dashboard'],
     },
     // Operations team: COO Hassan Danish, Ahsan Ejaz (Director Land), Sarosh Javed (CEO)
     operations: {
       members: ['REP-0003', 'REP-0004', 'REP-0009'],
       primaryIds: ['eoi', 'tasks', 'inventory', 'transactions', 'vector', 'dashboard', 'reports'],
+    },
+    // CCO: Syed Faisal
+    cco: {
+      members: ['REP-0008'],
+      primaryIds: ['eoi', 'reports', 'dashboard', 'customers', 'campaigns'],
     },
   };
 
@@ -402,6 +412,7 @@ export default function App() {
 
   // Primary tabs - always visible in header
   const allPrimaryTabs = [
+    { id: 'zakat', label: 'Zakat' },
     { id: 'customers', label: 'Customers & Leads' },
     { id: 'campaigns', label: 'Campaigns' },
     { id: 'tasks', label: 'Tasks' },
@@ -423,7 +434,7 @@ export default function App() {
   ];
 
   // Icon map for tabs that can appear in either primary or more menu
-  const TAB_ICONS = { customers: '\u{1F465}', campaigns: '\u{1F4E3}', interactions: '\u{1F4DE}', vector: '\u{1F5FA}', inventory: '\u{1F4E6}', transactions: '\u{1F4B1}', tasks: '\u{2705}', reports: '\u{1F4CA}', dashboard: '\u{1F4C8}', eoi: '\u{1F4DD}' };
+  const TAB_ICONS = { zakat: '\u{1FA99}', customers: '\u{1F465}', campaigns: '\u{1F4E3}', interactions: '\u{1F4DE}', vector: '\u{1F5FA}', inventory: '\u{1F4E6}', transactions: '\u{1F4B1}', tasks: '\u{2705}', reports: '\u{1F4CA}', dashboard: '\u{1F4C8}', eoi: '\u{1F4DD}' };
 
   // All known tabs (primary + more) for team-based selection
   const allKnownTabs = [...allPrimaryTabs, ...defaultMoreTabs];
@@ -445,6 +456,11 @@ export default function App() {
   // All tabs for reference
   const allTabs = [...primaryTabs, ...moreTabs];
   if (canAccess('settings')) allTabs.push({ id: 'settings', label: 'Settings' });
+
+  useEffect(() => {
+    if (activeTab !== 'projects') return;
+    if (hasZakatAccess(user)) setActiveTab('zakat');
+  }, [user, activeTab]);
   
   // Show loading while checking auth, then show login if not authenticated
   // ALL HOOKS MUST BE ABOVE THIS POINT
@@ -571,6 +587,7 @@ export default function App() {
           deepLink={taskDeepLink}
           onDeepLinkHandled={() => setTaskDeepLink(null)}
         />}
+        {activeTab === 'zakat' && <ZakatView />}
         {activeTab === 'eoi' && <EOICollectionView />}
         {activeTab === 'vector' && <VectorView />}
         {activeTab === 'settings' && <SettingsView />}
@@ -2942,7 +2959,7 @@ function ReceiptsView() {
             <SummaryCard label="Today" value={summary.today_count} sub={formatCurrency(summary.today_amount)} />
             <SummaryCard label="This Month" value={summary.month_count} sub={formatCurrency(summary.month_amount)} />
           </div>
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div className="bg-white rounded-xl border p-4">
               <div className="text-xs text-gray-400 uppercase">Cash</div>
               <div className="text-lg font-semibold text-green-600">{formatCurrency(summary.by_method?.cash || 0)}</div>
@@ -3300,8 +3317,8 @@ function EOICollectionView() {
   const emptyForm = {
     party_name: '', party_mobile: '', party_cnic: '',
     broker_name: '', broker_id: '',
-    amount: '', marlas: '', unit_number: '',
-    payment_method: 'cash', reference_number: '',
+    amount: '', marlas: '',
+    payment_method: 'cash', reference_number: '', payment_received: false,
     eoi_date: new Date().toISOString().split('T')[0],
     eoi_time: new Date().toTimeString().slice(0, 5),
     notes: '', project_id: ''
@@ -3405,8 +3422,8 @@ function EOICollectionView() {
       party_cnic: eoi.party_cnic || '', broker_name: eoi.broker_name || '',
       broker_id: eoi.broker_id || eoi.broker_uuid || '',
       amount: eoi.amount || '', marlas: eoi.marlas || '',
-      unit_number: eoi.unit_number || '', payment_method: eoi.payment_method || 'cash',
-      reference_number: eoi.reference_number || '',
+      payment_method: eoi.payment_method || 'cash',
+      reference_number: eoi.reference_number || '', payment_received: !!eoi.payment_received,
       eoi_date: eoi.eoi_date || new Date().toISOString().split('T')[0],
       eoi_time: eoi.created_at ? eoi.created_at.slice(11, 16) : '',
       notes: eoi.notes || '', project_id: eoi.project_uuid || eoi.project_id || selectedProjectId
@@ -3416,7 +3433,7 @@ function EOICollectionView() {
 
   const handleSubmit = async (ev) => {
     ev.preventDefault();
-    if (!form.party_name) { window.showToast?.('Error', 'Party name is required', 'error'); return; }
+    if (!form.party_name) { window.showToast?.('Error', 'Customer name is required', 'error'); return; }
     if (!form.amount || parseFloat(form.amount) <= 0) { window.showToast?.('Error', 'Enter valid amount', 'error'); return; }
     try {
       const payload = { ...form };
@@ -3494,15 +3511,182 @@ function EOICollectionView() {
   // Export CSV
   const handleExport = () => {
     const data = filteredEois.map(e => ({
-      'EOI ID': e.eoi_id, 'Party Name': e.party_name,
-      'Mobile': e.party_mobile || '', 'CNIC': e.party_cnic || '',
-      'Broker': e.broker_name || 'Direct', 'Amount (PKR)': e.amount,
-      'Marlas': e.marlas || '', 'Unit #': e.unit_number || '',
+      'EOI ID': e.eoi_id, 'Customer Name': e.party_name,
+      'Contact No': e.party_mobile || '', 'CNIC': e.party_cnic || '',
+      'Dealing Through': e.broker_name || 'Direct', 'Amount (PKR)': e.amount,
+      'Marlas': e.marlas || '',
+      'Payment Received': e.payment_received ? 'Yes' : 'No',
+      'Payment Received Time': e.payment_received_at ? new Date(String(e.payment_received_at).endsWith('Z') ? e.payment_received_at : e.payment_received_at + 'Z').toLocaleString('en-PK', { timeZone: 'Asia/Karachi' }) : '',
       'Method': e.payment_method || '', 'Reference': e.reference_number || '',
-      'Date': e.eoi_date, 'Recorded At': e.created_at || '',
+      'Date': e.eoi_date, 'EOI Created Time': e.created_at ? new Date(String(e.created_at).endsWith('Z') ? e.created_at : e.created_at + 'Z').toLocaleString('en-PK', { timeZone: 'Asia/Karachi' }) : '',
       'Status': e.status, 'Notes': e.notes || ''
     }));
     downloadCSV(data, `eoi_collection_${new Date().toISOString().split('T')[0]}.csv`);
+  };
+
+  // PDF Acknowledgment Slip — Sitara Grand Bazaar
+  const generateEOIPDF = (eoi) => {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const pw = 210; // page width
+    const teal = [21, 71, 81]; // #154751 dark teal brand color
+    const black = [30, 30, 30];
+    const gray = [120, 120, 120];
+    const lightGray = [200, 200, 200];
+    let y = 20;
+
+    // --- SBL Logo (square, high quality) ---
+    try { doc.addImage(SBL_LOGO_BASE64, 'JPEG', 15, 10, 28, 28); } catch (e) { /* logo load fail — skip */ }
+
+    // Helper: draw a clear checkmark inside a box
+    const drawCheck = (x, yc, size) => {
+      doc.setDrawColor(21, 71, 81);
+      doc.setLineWidth(0.6);
+      // Short stroke down-right, then long stroke up-right (classic ✓)
+      doc.line(x + size * 0.15, yc + size * 0.5, x + size * 0.4, yc + size * 0.75);
+      doc.line(x + size * 0.4, yc + size * 0.75, x + size * 0.85, yc + size * 0.2);
+    };
+
+    // --- Header text ---
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(22);
+    doc.setTextColor(...teal);
+    doc.text('SITARA GRAND BAZAAR', pw / 2 + 10, 28, { align: 'center' });
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...gray);
+    doc.text('EOI ACKNOWLEDGMENT SLIP', pw / 2 + 10, 36, { align: 'center' });
+
+    y = 50;
+    // --- Serial number ---
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(...black);
+    doc.text(`Serial No: ${eoi.eoi_id}`, 20, y);
+    doc.text(`Date: ${eoi.eoi_date || '-'}`, pw - 20, y, { align: 'right' });
+
+    y += 6;
+    doc.setDrawColor(...lightGray);
+    doc.setLineWidth(0.5);
+    doc.line(20, y, pw - 20, y); // separator
+
+    // --- Helper: field row ---
+    const fieldRow = (label, value, x, yPos, width) => {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...gray);
+      doc.text(label, x, yPos);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(...black);
+      doc.text(String(value || '-'), x, yPos + 5.5);
+      // Underline
+      doc.setDrawColor(...lightGray);
+      doc.setLineWidth(0.3);
+      doc.line(x, yPos + 7, x + width, yPos + 7);
+    };
+
+    y += 10;
+    // Row 1: Customer Name + CNIC
+    fieldRow('Customer Name', eoi.party_name, 20, y, 80);
+    fieldRow('CNIC', eoi.party_cnic, 112, y, 78);
+
+    y += 18;
+    // Row 2: Contact No + Dealing Through
+    fieldRow('Contact No', eoi.party_mobile, 20, y, 80);
+    fieldRow('Dealing Through', eoi.broker_name || 'Direct', 112, y, 78);
+
+    y += 24;
+    // --- Payment section ---
+    doc.setDrawColor(...lightGray);
+    doc.setLineWidth(0.3);
+    doc.rect(20, y - 3, pw - 40, 40, 'S');
+
+    // Payment received/not received
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...black);
+    doc.text('Payment:', 25, y + 5);
+    // Checkboxes
+    const isReceived = !!eoi.payment_received;
+    const cbSize = 3.5;
+    // Received
+    doc.rect(52, y + 1.5, cbSize, cbSize, 'S');
+    if (isReceived) { drawCheck(52, y + 1.5, cbSize); }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.text('Received', 57.5, y + 5);
+    // Not Received
+    doc.rect(76, y + 1.5, cbSize, cbSize, 'S');
+    if (!isReceived) { drawCheck(76, y + 1.5, cbSize); }
+    doc.setFont('helvetica', 'normal');
+    doc.text('Not Received', 81.5, y + 5);
+
+    // Mode checkboxes
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('Mode:', 108, y + 5);
+    const modes = [
+      { key: 'cheque', label: 'Cheque', x: 122 },
+      { key: 'cash', label: 'Cash', x: 144 },
+      { key: 'bank_transfer', label: 'Bank Transfer', x: 160 },
+    ];
+    modes.forEach(m => {
+      doc.rect(m.x, y + 1.5, cbSize, cbSize, 'S');
+      if ((eoi.payment_method || '').toLowerCase() === m.key) {
+        drawCheck(m.x, y + 1.5, cbSize);
+      }
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.text(m.label, m.x + 5, y + 5);
+    });
+
+    // Amount row
+    const ay = y + 16;
+    const fmtAmt = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 0 }).format(parseFloat(eoi.amount) || 0);
+    fieldRow('Amount (PKR)', `Rs. ${fmtAmt}`, 25, ay, 50);
+    fieldRow('Txn/Cheque No', eoi.reference_number, 85, ay, 50);
+    fieldRow('Marlas', eoi.marlas || '-', 145, ay, 40);
+
+    y += 48;
+    // --- Datetime Stamps ---
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...gray);
+    const fmtDT = (ts) => { if (!ts) return '-'; try { const d = new Date(String(ts).endsWith('Z') ? ts : ts + 'Z'); return d.toLocaleString('en-PK', { timeZone: 'Asia/Karachi', dateStyle: 'medium', timeStyle: 'short' }); } catch { return ts; } };
+    doc.text(`EOI Created: ${fmtDT(eoi.created_at)}`, 20, y);
+    doc.text(`Payment Received: ${eoi.payment_received_at ? fmtDT(eoi.payment_received_at) : 'Pending'}`, 112, y);
+
+    y += 8;
+    // --- Disclaimer ---
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(150, 50, 50);
+    doc.text('Disclaimer: This slip confirms receipt of EOI only and does not constitute unit allocation. Allocation subject to company approval.', 20, y);
+
+    y += 14;
+    // --- Authorized Signatory ---
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(...black);
+    doc.text('Authorized Signatory:', 20, y);
+    doc.setDrawColor(...lightGray);
+    doc.line(65, y + 1, 120, y + 1);
+
+    y += 20;
+    // --- Footer: IBAN ---
+    doc.setDrawColor(...teal);
+    doc.setLineWidth(0.8);
+    doc.line(20, y, pw - 20, y);
+    y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(...teal);
+    doc.text('SITARA BUILDERS (PVT) LTD', 20, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text('|  IBAN: PK89FAYS3597499000006331  |  Faysal Bank Ltd', 72, y);
+
+    doc.save(`EOI_Acknowledgment_${eoi.eoi_id}.pdf`);
   };
 
   const getStatusBadge = (status) => {
@@ -3516,7 +3700,7 @@ function EOICollectionView() {
 
   const formatTimestamp = (ts) => {
     if (!ts) return '-';
-    try { return new Date(ts).toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }); } catch { return ts; }
+    try { const d = new Date(String(ts).endsWith('Z') ? ts : ts + 'Z'); return d.toLocaleString('en-PK', { timeZone: 'Asia/Karachi', dateStyle: 'medium', timeStyle: 'short' }); } catch { return ts; }
   };
 
   const selectedProject = projects.find(p => p.id === selectedProjectId);
@@ -3656,7 +3840,7 @@ function EOICollectionView() {
       <div className="bg-white rounded-2xl shadow-sm border p-4">
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Party Name</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Customer Name</label>
             <input type="text" placeholder="Search name..." value={partyFilter} onChange={e => setPartyFilter(e.target.value)}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" />
           </div>
@@ -3713,11 +3897,12 @@ function EOICollectionView() {
           <table className="w-full">
             <thead><tr className="border-b border-gray-100">
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">EOI</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Party</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Customer</th>
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Broker</th>
               <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Amount</th>
               <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Marlas</th>
               <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
+              <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Paid</th>
               <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Recorded</th>
               <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4"></th>
             </tr></thead>
@@ -3726,7 +3911,6 @@ function EOICollectionView() {
                 <tr key={e.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelectedEoi(e); setShowDetailModal(true); }}>
                   <td className="px-6 py-4">
                     <div className="text-sm font-mono text-gray-900">{e.eoi_id}</div>
-                    {e.unit_number && <div className="text-xs text-gray-400">Unit: {e.unit_number}</div>}
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-sm font-medium">{e.party_name}</div>
@@ -3738,12 +3922,18 @@ function EOICollectionView() {
                   <td className="px-6 py-4 text-center">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(e.status)}`}>{e.status}</span>
                   </td>
+                  <td className="px-6 py-4 text-center text-lg">
+                    {e.payment_received
+                      ? <span className="text-emerald-600" title="Payment Received">☑</span>
+                      : <span className="text-red-400" title="Payment Not Received">☐</span>}
+                  </td>
                   <td className="px-6 py-4">
                     <div className="text-sm text-gray-600">{e.eoi_date}</div>
                     <div className="text-xs text-gray-400">{e.created_at ? formatTimestamp(e.created_at) : ''}</div>
                   </td>
                   <td className="px-6 py-4 text-right" onClick={ev => ev.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1">
+                      <button onClick={() => generateEOIPDF(e)} className="px-2 py-1 text-xs text-teal-600 hover:text-teal-800 hover:bg-teal-50 rounded" title="Download PDF">PDF</button>
                       {e.status === 'active' && (
                         <>
                           <button onClick={() => openEdit(e)} className="px-2 py-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded">Edit</button>
@@ -3768,11 +3958,11 @@ function EOICollectionView() {
         <Modal title={editingEoi ? `Edit ${editingEoi.eoi_id}` : 'Record New EOI'} onClose={() => { setShowModal(false); setEditingEoi(null); }} wide>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Party Name" required value={form.party_name} onChange={e => setForm({...form, party_name: e.target.value})} />
-              <Input label="Party Mobile" value={form.party_mobile} onChange={e => setForm({...form, party_mobile: e.target.value})} placeholder="03XX-XXXXXXX" />
+              <Input label="Customer Name" required value={form.party_name} onChange={e => setForm({...form, party_name: e.target.value})} />
+              <Input label="Contact No" value={form.party_mobile} onChange={e => setForm({...form, party_mobile: e.target.value})} placeholder="03XX-XXXXXXX" />
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <Input label="Party CNIC" value={form.party_cnic} onChange={e => setForm({...form, party_cnic: e.target.value})} placeholder="XXXXX-XXXXXXX-X" />
+              <Input label="CNIC" value={form.party_cnic} onChange={e => setForm({...form, party_cnic: e.target.value})} placeholder="XXXXX-XXXXXXX-X" />
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Broker</label>
                 <input type="text" placeholder="Broker name (leave empty for direct)" value={form.broker_name}
@@ -3784,12 +3974,11 @@ function EOICollectionView() {
                 </datalist>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <Input label="Amount (PKR)" type="number" required value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} />
               <Input label="Marlas" type="number" step="0.01" value={form.marlas} onChange={e => setForm({...form, marlas: e.target.value})} />
-              <Input label="Unit # (optional)" value={form.unit_number} onChange={e => setForm({...form, unit_number: e.target.value})} placeholder="Shop-15" />
             </div>
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-5 gap-4">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
                 <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
@@ -3800,6 +3989,13 @@ function EOICollectionView() {
                 </select>
               </div>
               <Input label="Reference #" value={form.reference_number} onChange={e => setForm({...form, reference_number: e.target.value})} />
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Payment Received</label>
+                <button type="button" onClick={() => setForm({...form, payment_received: !form.payment_received})}
+                  className={`w-full border rounded-lg px-3 py-2 text-sm font-medium transition-colors ${form.payment_received ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-red-50 text-red-600 border-red-200'}`}>
+                  {form.payment_received ? '☑ Received' : '☐ Not Received'}
+                </button>
+              </div>
               <Input label="EOI Date" type="date" value={form.eoi_date} onChange={e => setForm({...form, eoi_date: e.target.value})} />
               <Input label="Time" type="time" value={form.eoi_time} onChange={e => setForm({...form, eoi_time: e.target.value})} />
             </div>
@@ -3824,11 +4020,11 @@ function EOICollectionView() {
           <div className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Party Name</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Customer Name</label>
                 <div className="text-sm text-gray-900 font-medium">{selectedEoi.party_name}</div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Mobile</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Contact No</label>
                 <div className="text-sm text-gray-900">{selectedEoi.party_mobile || '-'}</div>
               </div>
               <div>
@@ -3848,16 +4044,18 @@ function EOICollectionView() {
                 <div className="text-sm text-gray-900">{selectedEoi.marlas || '-'}</div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Unit #</label>
-                <div className="text-sm text-gray-900">{selectedEoi.unit_number || '-'}</div>
-              </div>
-              <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
                 <span className={`px-2 py-1 rounded-full text-xs font-medium ${getMethodBadge(selectedEoi.payment_method)}`}>{selectedEoi.payment_method || '-'}</span>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Reference #</label>
                 <div className="text-sm text-gray-900">{selectedEoi.reference_number || '-'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Payment Received</label>
+                <span className={`text-xl ${selectedEoi.payment_received ? 'text-emerald-600' : 'text-red-400'}`}>
+                  {selectedEoi.payment_received ? '☑' : '☐'} <span className="text-sm text-gray-600">{selectedEoi.payment_received ? 'Received' : 'Not Received'}</span>
+                </span>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
@@ -3901,6 +4099,7 @@ function EOICollectionView() {
             {/* Actions */}
             {selectedEoi.status === 'active' && (
               <div className="flex justify-end gap-3 pt-4 border-t">
+                <button onClick={() => generateEOIPDF(selectedEoi)} className="px-4 py-2 text-sm text-teal-700 border border-teal-200 rounded-lg hover:bg-teal-50">Download PDF</button>
                 <button onClick={() => { setShowDetailModal(false); openEdit(selectedEoi); }} className="px-4 py-2 text-sm text-gray-600 border rounded-lg hover:bg-gray-50">Edit</button>
                 <button onClick={() => { setShowDetailModal(false); openConvert(selectedEoi); }} className="px-4 py-2 text-sm text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">Convert to Transaction</button>
                 <button onClick={() => { handleCancel(selectedEoi); setShowDetailModal(false); }} className="px-4 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50">Cancel EOI</button>
@@ -3990,6 +4189,235 @@ function EOICollectionView() {
           </form>
         </Modal>
       )}
+    </div>
+  );
+}
+
+// ============================================
+// ZAKAT VIEW
+// ============================================
+function ZakatView() {
+  const [rows, setRows] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
+  const [beneficiaries, setBeneficiaries] = useState([]);
+  const [reps, setReps] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [showDisburse, setShowDisburse] = useState(false);
+  const [disbursing, setDisbursing] = useState(null);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const categories = ['medical', 'education', 'hardship', 'other'];
+  const paymentMethods = ['bank_transfer', 'cash', 'online'];
+
+  const emptyForm = {
+    beneficiary_id: '', beneficiary_name: '', beneficiary_cnic: '', beneficiary_mobile: '', beneficiary_address: '',
+    amount: '', category: 'medical', purpose: '', approval_reference: '', approved_by: '', notes: '',
+  };
+  const [form, setForm] = useState(emptyForm);
+  const [beneficiarySearch, setBeneficiarySearch] = useState('');
+  const [createBeneficiary, setCreateBeneficiary] = useState(false);
+  const [disburseForm, setDisburseForm] = useState({
+    disbursed_by: '', payment_method: 'bank_transfer', reference_number: '', receipt_number: '',
+    disbursement_date: new Date().toISOString().split('T')[0], notes: '',
+  });
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [listRes, dashRes, benRes, repRes] = await Promise.all([
+        api.get('/zakat', { params: { limit: 500 } }).catch(() => ({ data: { items: [] } })),
+        api.get('/zakat/dashboard').catch(() => ({ data: null })),
+        api.get('/zakat/beneficiaries', { params: { limit: 300 } }).catch(() => ({ data: { items: [] } })),
+        api.get('/company-reps').catch(() => ({ data: [] })),
+      ]);
+      setRows(listRes.data?.items || listRes.data || []);
+      setDashboard(dashRes.data || null);
+      setBeneficiaries(benRes.data?.items || benRes.data || []);
+      setReps(repRes.data || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  };
+
+  const filteredRows = rows.filter((r) => {
+    const q = search.trim().toLowerCase();
+    if (q) {
+      const hay = `${r.zakat_id || ''} ${r.beneficiary_name || ''} ${r.beneficiary_cnic || ''} ${r.beneficiary_mobile || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (statusFilter && r.status !== statusFilter) return false;
+    if (categoryFilter && r.category !== categoryFilter) return false;
+    const rowDate = (r.disbursement_date || (r.created_at || '').slice(0, 10));
+    if (dateFrom && rowDate < dateFrom) return false;
+    if (dateTo && rowDate > dateTo) return false;
+    return true;
+  });
+  const beneficiaryOptions = beneficiaries.filter((b) => {
+    const q = beneficiarySearch.trim().toLowerCase();
+    if (!q) return true;
+    return `${b.name || ''} ${b.mobile || ''} ${b.cnic || ''} ${b.beneficiary_id || ''}`.toLowerCase().includes(q);
+  });
+  const openCreate = () => {
+    setEditing(null);
+    setCreateBeneficiary(false);
+    setBeneficiarySearch('');
+    setForm(emptyForm);
+    setShowModal(true);
+  };
+  const openEdit = (r) => {
+    if (r.status === 'disbursed') return window.showToast?.('Locked', 'Disbursed records cannot be edited', 'warning');
+    setEditing(r);
+    setForm({
+      beneficiary_id: r.beneficiary_id || '', beneficiary_name: r.beneficiary_name || '',
+      beneficiary_cnic: r.beneficiary_cnic || '', beneficiary_mobile: r.beneficiary_mobile || '', beneficiary_address: r.beneficiary_address || '',
+      amount: r.amount || '', category: r.category || 'medical', purpose: r.purpose || '', approval_reference: r.approval_reference || '',
+      approved_by: r.approved_by || '', notes: r.notes || '',
+    });
+    setShowModal(true);
+  };
+  const saveRecord = async (e) => {
+    e.preventDefault();
+    if (!form.beneficiary_name && !form.beneficiary_id) return window.showToast?.('Error', 'Beneficiary is required', 'error');
+    if (!form.amount || parseFloat(form.amount) <= 0) return window.showToast?.('Error', 'Valid amount is required', 'error');
+    try {
+      const payload = { ...form, amount: parseFloat(form.amount) };
+      if (editing) {
+        await api.put(`/zakat/${editing.id || editing.zakat_id}`, payload);
+        window.showToast?.('Updated', 'Zakat record updated', 'success');
+        setShowModal(false);
+        setEditing(null);
+        setForm(emptyForm);
+      } else {
+        const res = await api.post('/zakat', payload);
+        window.showToast?.('Created', 'Zakat record created — attach documents below', 'success');
+        setShowModal(false);
+        setEditing(null);
+        setForm(emptyForm);
+        // Auto-open detail modal for the new record so user can attach files
+        const newItem = res.data?.item;
+        if (newItem) {
+          setSelected(newItem);
+          setShowDetail(true);
+        }
+      }
+      load();
+    } catch (err) {
+      window.showToast?.('Error', err.response?.data?.detail || 'Failed to save', 'error');
+    }
+  };
+  const cancelRecord = async (r) => {
+    if (r.status === 'disbursed') return window.showToast?.('Locked', 'Disbursed records cannot be cancelled', 'warning');
+    const reason = prompt(`Cancel ${r.zakat_id}? Enter reason (optional):`);
+    if (reason === null) return;
+    try {
+      await api.post(`/zakat/${r.id || r.zakat_id}/cancel`, { reason });
+      window.showToast?.('Cancelled', 'Zakat record cancelled', 'success');
+      load();
+    } catch (err) { window.showToast?.('Error', err.response?.data?.detail || 'Failed to cancel', 'error'); }
+  };
+  const disburseRecord = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post(`/zakat/${disbursing.id || disbursing.zakat_id}/disburse`, disburseForm);
+      window.showToast?.('Disbursed', 'Zakat disbursed and payment created', 'success');
+      setShowDisburse(false);
+      setDisbursing(null);
+      load();
+    } catch (err) { window.showToast?.('Error', err.response?.data?.detail || 'Failed to disburse', 'error'); }
+  };
+  const exportCsv = () => downloadCSV(filteredRows.map((r) => ({
+    'Zakat ID': r.zakat_id, 'Date': r.disbursement_date || (r.created_at || '').slice(0, 10), 'Beneficiary': r.beneficiary_name,
+    'CNIC': r.beneficiary_cnic || '', 'Mobile': r.beneficiary_mobile || '', 'Address': r.beneficiary_address || '',
+    'Amount (PKR)': r.amount || 0, 'Category': r.category || '', 'Purpose': r.purpose || '', 'Approval Reference': r.approval_reference || '',
+    'Approved By': r.approved_by || '', 'Method': r.payment_method || '', 'Reference #': r.reference_number || '', 'Receipt #': r.receipt_number || '',
+    'Status': r.status || '', 'Disbursed By': r.disbursed_by_name || '', 'Notes': r.notes || '',
+  })), `zakat_register_${new Date().toISOString().split('T')[0]}.csv`);
+
+  const summary = dashboard?.summary || {};
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div><h2 className="text-2xl font-semibold text-gray-900">Zakat Disbursement Register</h2><p className="text-sm text-gray-500 mt-1">Create, track, disburse, and document zakat records.</p></div>
+        <div className="flex items-center gap-3"><button onClick={exportCsv} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 text-gray-700">Export CSV</button><button onClick={openCreate} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Record Zakat</button></div>
+      </div>
+
+      {summary && <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-gray-400 uppercase">Total</div><div className="mt-2 text-2xl font-semibold">{summary.total_records || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.total_amount || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-emerald-500 uppercase">Active</div><div className="mt-2 text-2xl font-semibold text-emerald-600">{summary.active_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.active_amount || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-blue-500 uppercase">Disbursed</div><div className="mt-2 text-2xl font-semibold text-blue-600">{summary.disbursed_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.disbursed_amount || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-red-500 uppercase">Cancelled</div><div className="mt-2 text-2xl font-semibold text-red-600">{summary.cancelled_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.cancelled_amount || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-gray-400 uppercase">Quarterly</div><div className="mt-2 text-sm text-gray-700">{dashboard?.by_quarter?.[0]?.quarter || '-'}</div><div className="text-sm text-gray-500">{formatCurrency(dashboard?.by_quarter?.[0]?.amount || 0)}</div></div>
+      </div>}
+
+      <div className="bg-white rounded-2xl shadow-sm border p-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 items-end">
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Search</label><input value={search} onChange={e => setSearch(e.target.value)} placeholder="ZKT / Name / CNIC" className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">All</option><option value="active">Active</option><option value="disbursed">Disbursed</option><option value="cancelled">Cancelled</option></select></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Category</label><select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">All</option>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">From</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">To</label><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div><button onClick={() => { setSearch(''); setStatusFilter(''); setCategoryFilter(''); setDateFrom(''); setDateTo(''); }} className="px-3 py-2 text-sm text-red-600 hover:text-red-800 font-medium">Clear</button></div>
+        </div>
+      </div>
+
+      {loading ? <Loader /> : rows.length === 0 ? <Empty msg="No zakat records yet" /> : filteredRows.length === 0 ? <Empty msg="No records match current filters" /> : (
+        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+          <table className="w-full"><thead><tr className="border-b border-gray-100"><th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Zakat</th><th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Beneficiary</th><th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Category</th><th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Amount</th><th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th><th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4"></th></tr></thead>
+            <tbody className="divide-y divide-gray-50">{filteredRows.map((r) => <tr key={r.id || r.zakat_id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelected(r); setShowDetail(true); }}>
+              <td className="px-6 py-4"><div className="text-sm font-mono text-gray-900">{r.zakat_id}</div><div className="text-xs text-gray-400">{(r.disbursement_date || (r.created_at || '').slice(0, 10)) || '-'}</div></td>
+              <td className="px-6 py-4"><div className="text-sm font-medium">{r.beneficiary_name}</div><div className="text-xs text-gray-400">{r.beneficiary_mobile || '-'}</div></td>
+              <td className="px-6 py-4 text-sm">{r.category || '-'}</td>
+              <td className="px-6 py-4 text-right text-sm font-semibold text-green-600">{formatCurrency(r.amount)}</td>
+              <td className="px-6 py-4 text-center"><span className={`px-2 py-1 rounded-full text-xs font-medium ${r.status === 'active' ? 'bg-emerald-50 text-emerald-700' : r.status === 'disbursed' ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700'}`}>{r.status}</span></td>
+              <td className="px-6 py-4 text-right" onClick={(ev) => ev.stopPropagation()}><div className="flex items-center justify-end gap-1">{r.status === 'active' && <><button onClick={() => openEdit(r)} className="px-2 py-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded">Edit</button><button onClick={() => { setDisbursing(r); setDisburseForm({ ...disburseForm, disbursement_date: new Date().toISOString().split('T')[0] }); setShowDisburse(true); }} className="px-2 py-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded">Disburse</button><button onClick={() => cancelRecord(r)} className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded">Cancel</button></>}</div></td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+      )}
+
+      {showModal && <Modal title={editing ? `Edit ${editing.zakat_id}` : 'Record New Zakat'} onClose={() => { setShowModal(false); setEditing(null); }} wide>
+        <form onSubmit={saveRecord} className="space-y-4">
+          <div className="flex items-center justify-between border-b pb-3"><div className="text-sm font-medium text-gray-700">Beneficiary</div><label className="text-sm flex items-center gap-2"><input type="checkbox" checked={createBeneficiary} onChange={e => setCreateBeneficiary(e.target.checked)} />Create New</label></div>
+          {!createBeneficiary && <div>{form.beneficiary_id ? <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-2"><div><div className="text-sm font-medium text-blue-900">{form.beneficiary_name}</div><div className="text-xs text-blue-600">{form.beneficiary_cnic || '-'} · {form.beneficiary_mobile || '-'}</div></div><button type="button" onClick={() => { setForm({ ...form, beneficiary_id: '', beneficiary_name: '', beneficiary_cnic: '', beneficiary_mobile: '', beneficiary_address: '' }); setBeneficiarySearch(''); }} className="text-xs text-red-500 hover:text-red-700 font-medium">Clear</button></div> : <><input type="text" placeholder="Search beneficiary by name, CNIC, mobile..." value={beneficiarySearch} onChange={e => setBeneficiarySearch(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />{beneficiarySearch && <div className="border rounded-lg max-h-40 overflow-y-auto">{beneficiaryOptions.length === 0 ? <div className="px-3 py-2 text-sm text-gray-400">No matches</div> : beneficiaryOptions.slice(0, 6).map((b) => <button key={b.id || b.beneficiary_id} type="button" onClick={() => { setForm({ ...form, beneficiary_id: b.beneficiary_id || b.id, beneficiary_name: b.name || '', beneficiary_cnic: b.cnic || '', beneficiary_mobile: b.mobile || '', beneficiary_address: b.address || '' }); setBeneficiarySearch(''); }} className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:bg-gray-50"><div className="font-medium">{b.name}</div><div className="text-xs text-gray-500">{b.beneficiary_id || '-'} · {b.mobile || '-'}</div></button>)}</div>}</>}</div>}
+          <div className="grid grid-cols-2 gap-4"><Input label="Beneficiary Name" required value={form.beneficiary_name} onChange={e => setForm({ ...form, beneficiary_name: e.target.value })} /><Input label="CNIC" value={form.beneficiary_cnic} onChange={e => setForm({ ...form, beneficiary_cnic: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-4"><Input label="Mobile" value={form.beneficiary_mobile} onChange={e => setForm({ ...form, beneficiary_mobile: e.target.value })} /><Input label="Amount (PKR)" type="number" required value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
+          <Input label="Address" value={form.beneficiary_address} onChange={e => setForm({ ...form, beneficiary_address: e.target.value })} />
+          <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-medium text-gray-500 mb-1">Category</label><select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm">{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></div><Input label="Approved By" value={form.approved_by} onChange={e => setForm({ ...form, approved_by: e.target.value })} /></div>
+          <Input label="Approval Reference" value={form.approval_reference} onChange={e => setForm({ ...form, approval_reference: e.target.value })} />
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Purpose</label><textarea value={form.purpose} onChange={e => setForm({ ...form, purpose: e.target.value })} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label><textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div className="flex justify-end gap-3 pt-4 border-t"><button type="button" onClick={() => { setShowModal(false); setEditing(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button><button type="submit" className="px-6 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800">{editing ? 'Update Record' : 'Create Record'}</button></div>
+        </form>
+      </Modal>}
+
+      {showDetail && selected && <Modal title={`Zakat: ${selected.zakat_id}`} onClose={() => { setShowDetail(false); setSelected(null); }} wide>
+        <div className="space-y-6"><div className="grid grid-cols-2 gap-4">
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Beneficiary</label><div className="text-sm font-medium">{selected.beneficiary_name}</div></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">CNIC</label><div className="text-sm">{selected.beneficiary_cnic || '-'}</div></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Mobile</label><div className="text-sm">{selected.beneficiary_mobile || '-'}</div></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Address</label><div className="text-sm">{selected.beneficiary_address || '-'}</div></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Amount</label><div className="text-sm font-semibold text-green-600">{formatCurrency(selected.amount)}</div></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label><div className="text-sm">{selected.status || '-'}</div></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Approval Reference</label><div className="text-sm">{selected.approval_reference || '-'}</div></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Signed Receipt #</label><div className="text-sm">{selected.receipt_number || '-'}</div></div>
+        </div><div className="border-t pt-4"><MediaManager entityType="zakat" entityId={selected.id || selected.zakat_id} onUpload={() => {}} /></div></div>
+      </Modal>}
+
+      {showDisburse && disbursing && <Modal title={`Disburse ${disbursing.zakat_id}`} onClose={() => { setShowDisburse(false); setDisbursing(null); }} wide>
+        <form onSubmit={disburseRecord} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-medium text-gray-500 mb-1">Disbursed By</label><select value={disburseForm.disbursed_by} onChange={e => setDisburseForm({ ...disburseForm, disbursed_by: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">Select rep</option>{reps.map(r => <option key={r.id} value={r.rep_id}>{r.name} ({r.rep_id})</option>)}</select></div><div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label><select value={disburseForm.payment_method} onChange={e => setDisburseForm({ ...disburseForm, payment_method: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm">{paymentMethods.map(m => <option key={m} value={m}>{m}</option>)}</select></div></div>
+          <div className="grid grid-cols-3 gap-4"><Input label="Reference #" value={disburseForm.reference_number} onChange={e => setDisburseForm({ ...disburseForm, reference_number: e.target.value })} /><Input label="Receipt #" value={disburseForm.receipt_number} onChange={e => setDisburseForm({ ...disburseForm, receipt_number: e.target.value })} /><Input label="Date" type="date" value={disburseForm.disbursement_date} onChange={e => setDisburseForm({ ...disburseForm, disbursement_date: e.target.value })} /></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label><textarea value={disburseForm.notes} onChange={e => setDisburseForm({ ...disburseForm, notes: e.target.value })} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div className="flex justify-end gap-3 pt-4 border-t"><button type="button" onClick={() => { setShowDisburse(false); setDisbursing(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button><button type="submit" className="px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Confirm Disbursement</button></div>
+        </form>
+      </Modal>}
     </div>
   );
 }
@@ -5075,7 +5503,7 @@ function PaymentsView() {
     setForm({
       ...form,
       payment_type: type,
-      payee_type: type === 'broker_commission' ? 'broker' : type === 'rep_incentive' ? 'company_rep' : 'creditor',
+      payee_type: type === 'broker_commission' ? 'broker' : type === 'rep_incentive' ? 'company_rep' : type === 'creditor' ? 'creditor' : 'beneficiary',
       broker_id: type === 'broker_commission' ? form.broker_id : '',
       company_rep_id: type === 'rep_incentive' ? form.company_rep_id : '',
       creditor_id: type === 'creditor' ? form.creditor_id : '',
@@ -5116,6 +5544,10 @@ function PaymentsView() {
             <div className="bg-white rounded-xl border p-4">
               <div className="text-xs text-gray-400 uppercase">Creditor Payments</div>
               <div className="text-lg font-semibold text-orange-600">{formatCurrency(summary.by_type?.creditor || 0)}</div>
+            </div>
+            <div className="bg-white rounded-xl border p-4">
+              <div className="text-xs text-gray-400 uppercase">Zakat Payments</div>
+              <div className="text-lg font-semibold text-emerald-700">{formatCurrency(summary.by_type?.zakat || 0)}</div>
             </div>
             <div className="bg-white rounded-xl border p-4">
               <div className="text-xs text-gray-400 uppercase">Pending</div>
@@ -5177,6 +5609,7 @@ function PaymentsView() {
               <option value="broker_commission">Broker Commission</option>
               <option value="rep_incentive">Rep Incentive</option>
               <option value="creditor">Creditor</option>
+              <option value="zakat">Zakat</option>
               <option value="other">Other</option>
             </select>
           </div>
@@ -5253,7 +5686,8 @@ function PaymentsView() {
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       p.payment_type === 'broker_commission' ? 'bg-blue-50 text-blue-700' :
                       p.payment_type === 'rep_incentive' ? 'bg-purple-50 text-purple-700' :
-                      p.payment_type === 'creditor' ? 'bg-orange-50 text-orange-700' : 'bg-gray-100'
+                      p.payment_type === 'creditor' ? 'bg-orange-50 text-orange-700' :
+                      p.payment_type === 'zakat' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100'
                     }`}>{p.payment_type.replace('_', ' ')}</span>
                   </td>
                   <td className="px-6 py-4 text-right text-sm font-semibold text-red-600">{formatCurrency(p.amount)}</td>
@@ -5279,10 +5713,11 @@ function PaymentsView() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Type *</label>
               <select required value={form.payment_type} onChange={e => updatePaymentType(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
-                <option value="broker_commission">💰 Broker Commission</option>
-                <option value="rep_incentive">🎯 Rep Incentive</option>
-                <option value="creditor">🏦 Creditor Payment</option>
-                <option value="other">📋 Other</option>
+                <option value="broker_commission">Broker Commission</option>
+                <option value="rep_incentive">Rep Incentive</option>
+                <option value="creditor">Creditor Payment</option>
+                <option value="zakat">Zakat Payment</option>
+                <option value="other">Other</option>
               </select>
             </div>
 
@@ -10065,4 +10500,3 @@ function AnnotationEditor({ annotation, plots, onSave, onClose }) {
     </div>
   );
 }
-

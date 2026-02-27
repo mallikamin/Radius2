@@ -1316,6 +1316,18 @@ class TaskService:
         db.add(task)
         db.flush()
 
+        # Auto-add CFO as collaborator on collection/recovery tasks for oversight
+        if task_type in ("collection", "recovery"):
+            try:
+                cfo = db.query(CompanyRep).filter(
+                    CompanyRep.title.ilike("%CFO%"),
+                    CompanyRep.status == "active"
+                ).first()
+                if cfo and cfo.id != task.created_by and cfo.id != assignee_id:
+                    task.collaborator_ids = [str(cfo.id)]
+            except Exception:
+                pass  # Non-critical — skip if CFO not found
+
         # Log activity
         self._log_activity(db, task.id, task.created_by, "created", None, task.title)
 
@@ -1331,6 +1343,23 @@ class TaskService:
                     category="task", entity_type="task", entity_id=task.task_id,
                     data={"task_id": task.task_id}
                 )
+
+        # Notify CFO collaborator on collection/recovery tasks
+        if task.collaborator_ids:
+            creator = db.query(CompanyRep).filter(CompanyRep.id == task.created_by).first()
+            for cid in task.collaborator_ids:
+                try:
+                    collab = db.query(CompanyRep).filter(CompanyRep.id == uuid_lib.UUID(cid)).first()
+                    if collab and str(collab.id) != str(task.created_by):
+                        create_notification(
+                            db, collab.rep_id, "task_assigned",
+                            f"Collection task: {title}",
+                            f"You've been added as collaborator by {creator.name if creator else 'System'}",
+                            category="task", entity_type="task", entity_id=task.task_id,
+                            data={"task_id": task.task_id}
+                        )
+                except Exception:
+                    pass
 
         db.commit()
         db.refresh(task)
