@@ -5,6 +5,7 @@
 ## Agent Onboarding (READ FIRST)
 
 Before making any changes, read these files:
+- **`LLM_START_HERE.md`** - Canonical startup context and sanity checklist for all LLM agents.
 - **`ERROR_LOG.md`** — Known errors and fixes. Avoid repeating past mistakes.
 - **`HANDOFF_NOTES.md`** — Cross-agent handoff context from last session.
 - **`PAUSE_CHECKPOINT_*.md`** — Latest session state (if exists).

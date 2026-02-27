@@ -166,3 +166,30 @@ See `HANDOFF_NOTES.md` Section 1 for full branch naming convention.
 - `wip/*` → deploy → merge to master → rename to `archive/wip-*`
 - Create `prod/<date>-<HHMM>` snapshot at deploy time
 - NEVER work directly on master
+
+## Incident Addendum (2026-02-27) - Orbit SSL CN mismatch due missing voice.conf mount
+- Symptom: `https://orbit-voice.duckdns.org/` returned browser warning `ERR_CERT_COMMON_NAME_INVALID`.
+- External probe showed cert CN `pos-demo.duckdns.org`, not `orbit-voice.duckdns.org`.
+- Root cause: POS nginx only loaded `default.conf`; `voice.conf` existed on host but was not mounted into container.
+- Failed quick fix: `docker cp` into `pos-system-nginx-1` failed because container rootfs is read-only.
+
+### Corrective Action
+1. Add mount in POS demo compose nginx volumes:
+```yaml
+- ./docker/nginx/voice.conf:/etc/nginx/conf.d/voice.conf:ro
+```
+2. Recreate nginx with env file:
+```bash
+docker compose -f docker-compose.demo.yml --env-file .env.demo up -d nginx
+```
+3. Verify config + cert:
+```bash
+docker exec pos-system-nginx-1 nginx -t
+docker exec pos-system-nginx-1 nginx -T | grep -i orbit
+echo | openssl s_client -connect orbit-voice.duckdns.org:443 -servername orbit-voice.duckdns.org 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+```
+
+### New hard rules
+- Do not assume host config files are active; verify mounts in running container (`ls /etc/nginx/conf.d`).
+- Do not use `docker cp` for POS nginx runtime config when rootfs is read-only.
+- For POS demo compose operations on this host, always pass `--env-file .env.demo`.

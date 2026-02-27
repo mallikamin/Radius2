@@ -343,10 +343,9 @@ export default function App() {
   }, [showMoreMenu, showNotifPanel]);
 
   // Role-based access control
-  const ZAKAT_ALLOWED_REPS = ['REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020'];
+  const ZAKAT_ALLOWED_REPS = ['REP-0002', 'REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020'];
   const hasZakatAccess = (u) => {
     if (!u) return false;
-    if ((u.role || '') === 'admin') return true;
     return ZAKAT_ALLOWED_REPS.includes(u.rep_id || '');
   };
 
@@ -459,7 +458,14 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab !== 'projects') return;
-    if (hasZakatAccess(user)) setActiveTab('zakat');
+    // Redirect to user's team default tab, or EOI as global fallback
+    if (userTeam) {
+      setActiveTab(userTeam.primaryIds[0]);
+    } else if (hasZakatAccess(user)) {
+      setActiveTab('zakat');
+    } else if (canAccess('eoi')) {
+      setActiveTab('eoi');
+    }
   }, [user, activeTab]);
   
   // Show loading while checking auth, then show login if not authenticated
@@ -3318,7 +3324,7 @@ function EOICollectionView() {
     party_name: '', party_mobile: '', party_cnic: '',
     broker_name: '', broker_id: '',
     amount: '', marlas: '',
-    payment_method: 'cash', reference_number: '', payment_received: false,
+    payment_method: '', reference_number: '', payment_received: false,
     eoi_date: new Date().toISOString().split('T')[0],
     eoi_time: new Date().toTimeString().slice(0, 5),
     notes: '', project_id: ''
@@ -3435,6 +3441,7 @@ function EOICollectionView() {
     ev.preventDefault();
     if (!form.party_name) { window.showToast?.('Error', 'Customer name is required', 'error'); return; }
     if (!form.amount || parseFloat(form.amount) <= 0) { window.showToast?.('Error', 'Enter valid amount', 'error'); return; }
+    if (form.payment_received && !form.payment_method) { window.showToast?.('Error', 'Select payment mode when payment is received', 'error'); return; }
     try {
       const payload = { ...form };
       // Resolve broker_id from name if needed
@@ -3633,7 +3640,7 @@ function EOICollectionView() {
     ];
     modes.forEach(m => {
       doc.rect(m.x, y + 1.5, cbSize, cbSize, 'S');
-      if ((eoi.payment_method || '').toLowerCase() === m.key) {
+      if (isReceived && (eoi.payment_method || '').toLowerCase() === m.key) {
         drawCheck(m.x, y + 1.5, cbSize);
       }
       doc.setFont('helvetica', 'normal');
@@ -3966,7 +3973,7 @@ function EOICollectionView() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Broker</label>
                 <input type="text" placeholder="Broker name (leave empty for direct)" value={form.broker_name}
-                  onChange={e => setForm({...form, broker_name: e.target.value})}
+                  onChange={e => setForm({...form, broker_name: e.target.value, broker_id: ''})}
                   className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10"
                   list="eoi-broker-suggestions" />
                 <datalist id="eoi-broker-suggestions">
@@ -3981,7 +3988,8 @@ function EOICollectionView() {
             <div className="grid grid-cols-5 gap-4">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
-                <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
+                <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className={`w-full border rounded-lg px-3 py-2 text-sm ${form.payment_received && !form.payment_method ? 'border-red-300' : ''}`}>
+                  <option value="">— Select —</option>
                   <option value="cash">Cash</option>
                   <option value="cheque">Cheque</option>
                   <option value="bank_transfer">Bank Transfer</option>

@@ -191,3 +191,17 @@ When you fix a new error, **append it to `ERROR_LOG.md`** with:
 - Root cause
 - Fix applied
 - Rule to prevent recurrence
+
+## 8. 2026-02-27 SSL Incident Learnings (POS nginx)
+
+- Symptom: `orbit-voice.duckdns.org` served `pos-demo.duckdns.org` certificate (`ERR_CERT_COMMON_NAME_INVALID`).
+- Confirmed cause: `voice.conf` existed on host but was not mounted into POS nginx `/etc/nginx/conf.d/`.
+- Important constraint: POS nginx container uses read-only root filesystem; `docker cp` hotfix into container will fail.
+- Required permanent fix: add volume mount in `~/pos-system/docker-compose.demo.yml`:
+  - `./docker/nginx/voice.conf:/etc/nginx/conf.d/voice.conf:ro`
+- POS compose commands must include env file on this host:
+  - `docker compose -f docker-compose.demo.yml --env-file .env.demo ...`
+- After nginx recreate, always verify:
+  1. `docker exec pos-system-nginx-1 nginx -t`
+  2. `docker exec pos-system-nginx-1 nginx -T | grep -i orbit`
+  3. `echo | openssl s_client -connect orbit-voice.duckdns.org:443 -servername orbit-voice.duckdns.org 2>/dev/null | openssl x509 -noout -subject -dates`

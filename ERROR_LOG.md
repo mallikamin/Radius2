@@ -227,3 +227,19 @@ docker restart orbit_dev_web
 - **Root Cause**: Query compared `Transaction.id` UUID directly with string code in OR clause.
 - **Fix**: Switched transaction lookup in receipts list to UUID-safe helper `find_entity(db, Transaction, "transaction_id", transaction_id)`.
 - **Rule**: Use UUID-safe entity resolvers for all query filters that accept business IDs.
+
+### 2026-02-27 - SSL cert mismatch on Orbit domain (wrong cert served)
+- **Error**: Browser showed `net::ERR_CERT_COMMON_NAME_INVALID` on `https://orbit-voice.duckdns.org/`; served cert CN was `pos-demo.duckdns.org`.
+- **Context**: Nginx on `pos-system-nginx-1` was expected to serve Orbit TLS config from `voice.conf`.
+- **Root Cause**:
+  - `~/pos-system/docker/nginx/voice.conf` existed but was not mounted into `/etc/nginx/conf.d/` in `docker-compose.demo.yml`.
+  - `docker cp` quick fix failed because container root filesystem is read-only (`read_only: true`).
+  - Running `docker compose` without `--env-file .env.demo` caused service startup failures due missing env vars.
+- **Fix**:
+  - Added compose mount: `./docker/nginx/voice.conf:/etc/nginx/conf.d/voice.conf:ro` under POS nginx service.
+  - Recreated nginx with env file: `docker compose -f docker-compose.demo.yml --env-file .env.demo up -d nginx`.
+  - Verified active cert via `openssl s_client` shows `subject=CN = orbit-voice.duckdns.org`.
+- **Rule**:
+  - Never rely on `docker cp` for `pos-system-nginx-1`; config is immutable at runtime due read-only rootfs.
+  - For POS demo compose actions, always include `--env-file .env.demo`.
+  - If Orbit shows CN mismatch, first verify `voice.conf` is mounted in `/etc/nginx/conf.d/` and loaded by `nginx -T`.
