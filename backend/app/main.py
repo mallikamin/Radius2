@@ -340,12 +340,38 @@ class ZakatRecord(Base):
     receipt_number = Column(String(100))
     disbursed_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     disbursement_date = Column(Date)
-    status = Column(String(20), default="active")
+    status = Column(String(20), default="pending")
+    approval_status = Column(String(20), default="pending")  # pending|approved|rejected
+    approved_amount = Column(Numeric(15, 2))
+    approved_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    approved_at = Column(DateTime)
+    approval_decision = Column(String(20))  # full|partial|rejected
+    approval_notes = Column(Text)
+    case_status = Column(String(20), default="pending")  # pending|open|closed
+    disbursement_approval_status = Column(String(20), default="pending")  # pending|approved|postponed
+    disbursement_approved_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    disbursement_approved_at = Column(DateTime)
+    disbursement_approval_notes = Column(Text)
     notes = Column(Text)
     payment_id = Column(UUID(as_uuid=True), ForeignKey("payments.id"))
     created_by = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
+
+class ZakatDisbursement(Base):
+    __tablename__ = "zakat_disbursements"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    zakat_record_id = Column(UUID(as_uuid=True), ForeignKey("zakat_records.id"), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    disbursed_by_rep_id = Column(UUID(as_uuid=True), ForeignKey("company_reps.id"))
+    payment_id = Column(UUID(as_uuid=True), ForeignKey("payments.id"))
+    payment_method = Column(String(50))
+    reference_number = Column(String(100))
+    receipt_number = Column(String(100))
+    notes = Column(Text)
+    disbursement_date = Column(Date)
+    disbursed_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now())
 
 class Creditor(Base):
     __tablename__ = "creditors"
@@ -4318,14 +4344,82 @@ def get_eoi_dashboard(
 # ZAKAT DISBURSEMENT MODULE
 # ============================================
 
-ZAKAT_ALLOWED_REPS = ['REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020']
+ZAKAT_ALLOWED_REPS = ["REP-0002", "REP-0010", "REP-0011", "REP-0012", "REP-0013"]
+ZAKAT_APPROVER_REPS = ["REP-0009", "REP-0010"]  # CEO, CFO
+ZAKAT_DISBURSER_REPS = ["REP-0002", "REP-0011", "REP-0012", "REP-0013"]  # Malik, Luqman, Mujtaba, Afaaq
+ZAKAT_CANCELLER_REPS = ["REP-0002", "REP-0009", "REP-0010"]  # Malik, CEO, CFO
+ZAKAT_FUNDS_APPROVER_REPS = ["REP-0010", "REP-0002"]  # CFO + Malik override
+_zakat_schema_ready = False
 
-def _check_zakat_access(current_user):
-    if current_user.role == "admin":
-        return True
-    if current_user.rep_id in ZAKAT_ALLOWED_REPS:
+def _ensure_zakat_workflow_schema(db: Session):
+    global _zakat_schema_ready
+    if _zakat_schema_ready:
+        return
+    db.execute(text("""
+        ALTER TABLE zakat_records
+        ADD COLUMN IF NOT EXISTS approval_status VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS approved_amount NUMERIC(15,2),
+        ADD COLUMN IF NOT EXISTS approved_by_rep_id UUID REFERENCES company_reps(id),
+        ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS approval_decision VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS approval_notes TEXT,
+        ADD COLUMN IF NOT EXISTS case_status VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS disbursement_approval_status VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS disbursement_approved_by_rep_id UUID REFERENCES company_reps(id),
+        ADD COLUMN IF NOT EXISTS disbursement_approved_at TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS disbursement_approval_notes TEXT;
+    """))
+    db.execute(text("""
+        ALTER TABLE zakat_records DROP CONSTRAINT IF EXISTS zakat_records_status_check;
+        ALTER TABLE zakat_records
+        ADD CONSTRAINT zakat_records_status_check
+        CHECK (status IN ('active','pending','approved','rejected','disbursed','cancelled'));
+    """))
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS zakat_disbursements (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            zakat_record_id UUID NOT NULL REFERENCES zakat_records(id) ON DELETE CASCADE,
+            amount NUMERIC(15,2) NOT NULL,
+            disbursed_by_rep_id UUID REFERENCES company_reps(id) ON DELETE SET NULL,
+            payment_id UUID REFERENCES payments(id) ON DELETE SET NULL,
+            payment_method VARCHAR(50),
+            reference_number VARCHAR(100),
+            receipt_number VARCHAR(100),
+            notes TEXT,
+            disbursement_date DATE,
+            disbursed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_zakat_disbursements_zakat_record_id ON zakat_disbursements(zakat_record_id);
+    """))
+    db.commit()
+    _zakat_schema_ready = True
+
+def _check_zakat_access(current_user, db: Session):
+    _ensure_zakat_workflow_schema(db)
+    if current_user and current_user.rep_id in ZAKAT_ALLOWED_REPS:
         return True
     raise HTTPException(status_code=403, detail="Zakat module access denied")
+
+def _check_zakat_approver(current_user):
+    if current_user and current_user.rep_id in ZAKAT_APPROVER_REPS:
+        return True
+    raise HTTPException(status_code=403, detail="Only CEO/CFO can approve Zakat requests")
+
+def _check_zakat_disburser(current_user):
+    if current_user and current_user.rep_id in ZAKAT_DISBURSER_REPS:
+        return True
+    raise HTTPException(status_code=403, detail="Only authorized disbursers can disburse Zakat")
+
+def _check_zakat_canceller(current_user):
+    if current_user and current_user.rep_id in ZAKAT_CANCELLER_REPS:
+        return True
+    raise HTTPException(status_code=403, detail="Only authorized users can cancel approved Zakat records")
+
+def _check_zakat_funds_approver(current_user):
+    if current_user and current_user.rep_id in ZAKAT_FUNDS_APPROVER_REPS:
+        return True
+    raise HTTPException(status_code=403, detail="Only CFO can approve disbursement readiness")
 
 def _generate_zakat_code(db: Session) -> str:
     count = db.query(func.count(ZakatRecord.id)).scalar() or 0
@@ -4351,10 +4445,53 @@ def _generate_payment_code(db: Session) -> str:
         candidate = f"PAY-{str(count + 1).zfill(5)}"
     return candidate
 
+def _zakat_disbursement_dict(d: ZakatDisbursement, db: Session):
+    disburser = db.query(CompanyRep).filter(CompanyRep.id == d.disbursed_by_rep_id).first() if d.disbursed_by_rep_id else None
+    return {
+        "id": str(d.id),
+        "amount": float(d.amount) if d.amount else 0,
+        "disbursed_by_rep_id": disburser.rep_id if disburser else None,
+        "disbursed_by_name": disburser.name if disburser else None,
+        "payment_method": d.payment_method,
+        "reference_number": d.reference_number,
+        "receipt_number": d.receipt_number,
+        "notes": d.notes,
+        "disbursement_date": d.disbursement_date.isoformat() if d.disbursement_date else None,
+        "disbursed_at": d.disbursed_at.isoformat() if d.disbursed_at else None,
+        "created_at": d.created_at.isoformat() if d.created_at else None,
+    }
+
 def _zakat_row_dict(z: ZakatRecord, db: Session):
     ben = db.query(ZakatBeneficiary).filter(ZakatBeneficiary.id == z.beneficiary_id).first() if z.beneficiary_id else None
     creator = db.query(CompanyRep).filter(CompanyRep.id == z.created_by).first() if z.created_by else None
     disburser = db.query(CompanyRep).filter(CompanyRep.id == z.disbursed_by).first() if z.disbursed_by else None
+    approver = db.query(CompanyRep).filter(CompanyRep.id == z.approved_by_rep_id).first() if z.approved_by_rep_id else None
+    disbursement_approver = db.query(CompanyRep).filter(CompanyRep.id == z.disbursement_approved_by_rep_id).first() if z.disbursement_approved_by_rep_id else None
+    disbursements = db.query(ZakatDisbursement).filter(ZakatDisbursement.zakat_record_id == z.id).order_by(ZakatDisbursement.created_at.asc()).all()
+    disbursed_total = sum(float(d.amount or 0) for d in disbursements)
+    approved_amount = float(z.approved_amount) if z.approved_amount is not None else None
+    requested_amount = float(z.amount) if z.amount else 0
+    remaining_amount = (approved_amount - disbursed_total) if approved_amount is not None else 0
+    approval_type = None
+    if z.approval_status == "approved" and approved_amount is not None:
+        approval_type = "full" if approved_amount >= requested_amount else "partial"
+
+    history_rows = []
+    if z.beneficiary_cnic or z.beneficiary_mobile:
+        history_q = db.query(ZakatRecord).filter(ZakatRecord.id != z.id)
+        if z.beneficiary_cnic and z.beneficiary_mobile:
+            history_q = history_q.filter(
+                or_(
+                    ZakatRecord.beneficiary_cnic == z.beneficiary_cnic,
+                    ZakatRecord.beneficiary_mobile == z.beneficiary_mobile
+                )
+            )
+        elif z.beneficiary_cnic:
+            history_q = history_q.filter(ZakatRecord.beneficiary_cnic == z.beneficiary_cnic)
+        else:
+            history_q = history_q.filter(ZakatRecord.beneficiary_mobile == z.beneficiary_mobile)
+        history_rows = history_q.order_by(ZakatRecord.created_at.desc()).limit(10).all()
+
     return {
         "id": str(z.id),
         "zakat_id": z.zakat_id,
@@ -4364,11 +4501,33 @@ def _zakat_row_dict(z: ZakatRecord, db: Session):
         "beneficiary_cnic": z.beneficiary_cnic,
         "beneficiary_mobile": z.beneficiary_mobile,
         "beneficiary_address": z.beneficiary_address,
-        "amount": float(z.amount) if z.amount else 0,
+        "amount": requested_amount,
+        "requested_amount": requested_amount,
         "category": z.category,
         "purpose": z.purpose,
         "approval_reference": z.approval_reference,
         "approved_by": z.approved_by,
+        "approval_status": z.approval_status or "pending",
+        "approved_amount": approved_amount,
+        "approved_by_rep_id": approver.rep_id if approver else None,
+        "approved_by_name": approver.name if approver else (z.approved_by or None),
+        "approved_at": z.approved_at.isoformat() if z.approved_at else None,
+        "approval_decision": z.approval_decision or approval_type,
+        "approval_notes": z.approval_notes,
+        "case_status": z.case_status or "pending",
+        "disbursement_approval_status": z.disbursement_approval_status or "pending",
+        "disbursement_approved_by_rep_id": disbursement_approver.rep_id if disbursement_approver else None,
+        "disbursement_approved_by_name": disbursement_approver.name if disbursement_approver else None,
+        "disbursement_approved_at": z.disbursement_approved_at.isoformat() if z.disbursement_approved_at else None,
+        "disbursement_approval_notes": z.disbursement_approval_notes,
+        "disbursed_total": disbursed_total,
+        "remaining_amount": max(remaining_amount, 0),
+        "disbursement_count": len(disbursements),
+        "can_disburse": (
+            z.approval_status == "approved" and
+            (z.disbursement_approval_status or "pending") == "approved" and
+            remaining_amount > 0
+        ),
         "payment_method": z.payment_method,
         "reference_number": z.reference_number,
         "receipt_number": z.receipt_number,
@@ -4382,6 +4541,19 @@ def _zakat_row_dict(z: ZakatRecord, db: Session):
         "created_by": str(z.created_by) if z.created_by else None,
         "created_by_rep_id": creator.rep_id if creator else None,
         "created_by_name": creator.name if creator else None,
+        "disbursements": [_zakat_disbursement_dict(d, db) for d in disbursements],
+        "beneficiary_history": [
+            {
+                "id": str(h.id),
+                "zakat_id": h.zakat_id,
+                "requested_amount": float(h.amount) if h.amount else 0,
+                "approved_amount": float(h.approved_amount) if h.approved_amount is not None else None,
+                "approval_status": h.approval_status or "pending",
+                "case_status": h.case_status or "pending",
+                "created_at": h.created_at.isoformat() if h.created_at else None,
+            }
+            for h in history_rows
+        ],
         "created_at": z.created_at.isoformat() if z.created_at else None,
         "updated_at": z.updated_at.isoformat() if z.updated_at else None,
     }
@@ -4393,7 +4565,7 @@ def list_zakat_beneficiaries(
     search: str = None, status: str = None, limit: int = 200,
     db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
 ):
-    _check_zakat_access(current_user)
+    _check_zakat_access(current_user, db)
     q = db.query(ZakatBeneficiary)
     if status:
         q = q.filter(ZakatBeneficiary.status == status)
@@ -4418,7 +4590,7 @@ def list_zakat_beneficiaries(
 
 @app.post("/api/zakat/beneficiaries")
 def create_zakat_beneficiary(data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    _check_zakat_access(current_user)
+    _check_zakat_access(current_user, db)
     if not data.get("name"):
         raise HTTPException(400, "Beneficiary name is required")
     b = ZakatBeneficiary(
@@ -4437,7 +4609,7 @@ def create_zakat_beneficiary(data: dict, db: Session = Depends(get_db), current_
 
 @app.put("/api/zakat/beneficiaries/{bid}")
 def update_zakat_beneficiary(bid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    _check_zakat_access(current_user)
+    _check_zakat_access(current_user, db)
     try:
         b = db.query(ZakatBeneficiary).filter(
             (ZakatBeneficiary.id == uuid.UUID(bid)) | (ZakatBeneficiary.beneficiary_id == bid)
@@ -4466,7 +4638,7 @@ def list_zakat_records(
     limit: int = 200,
     db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
 ):
-    _check_zakat_access(current_user)
+    _check_zakat_access(current_user, db)
     q = db.query(ZakatRecord)
     if status:
         statuses = [s.strip() for s in status.split(",")]
@@ -4510,7 +4682,7 @@ def list_zakat_records(
 
 @app.post("/api/zakat")
 def create_zakat_record(data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    _check_zakat_access(current_user)
+    _check_zakat_access(current_user, db)
     if not data.get("beneficiary_name"):
         raise HTTPException(400, "Beneficiary name is required")
     if not data.get("amount") or float(data["amount"]) <= 0:
@@ -4559,6 +4731,10 @@ def create_zakat_record(data: dict, db: Session = Depends(get_db), current_user:
         reference_number=data.get("reference_number"),
         receipt_number=data.get("receipt_number"),
         notes=data.get("notes"),
+        status="pending",
+        approval_status="pending",
+        case_status="pending",
+        disbursement_approval_status="pending",
         created_by=rep.id if rep else None,
     )
     db.add(z); db.commit(); db.refresh(z)
@@ -4579,11 +4755,24 @@ def create_zakat_record(data: dict, db: Session = Depends(get_db), current_user:
     except Exception:
         pass  # Non-critical — task creation failure shouldn't block zakat record
 
+    for approver_rep_id in ZAKAT_APPROVER_REPS:
+        create_notification(
+            db,
+            approver_rep_id,
+            "zakat_approval_required",
+            f"Zakat approval required: {z.zakat_id}",
+            f"{z.beneficiary_name} requested PKR {float(z.amount):,.0f}. Please review and approve/reject.",
+            category="zakat",
+            entity_type="zakat",
+            entity_id=z.id,
+            data={"zakat_id": z.zakat_id},
+        )
+    db.commit()
     return {"message": "Zakat record created", "item": _zakat_row_dict(z, db)}
 
 @app.put("/api/zakat/{zid}")
 def update_zakat_record(zid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    _check_zakat_access(current_user)
+    _check_zakat_access(current_user, db)
     try:
         z = db.query(ZakatRecord).filter(
             (ZakatRecord.id == uuid.UUID(zid)) | (ZakatRecord.zakat_id == zid)
@@ -4592,8 +4781,8 @@ def update_zakat_record(zid: str, data: dict, db: Session = Depends(get_db), cur
         z = db.query(ZakatRecord).filter(ZakatRecord.zakat_id == zid).first()
     if not z:
         raise HTTPException(404, "Zakat record not found")
-    if z.status == "disbursed":
-        raise HTTPException(400, "Cannot edit a disbursed record")
+    if (z.approval_status or "pending") != "pending":
+        raise HTTPException(400, "Cannot edit post-approval/rejection record")
 
     # Resolve beneficiary if changed
     if data.get("beneficiary_id"):
@@ -4621,9 +4810,10 @@ def update_zakat_record(zid: str, data: dict, db: Session = Depends(get_db), cur
     db.commit(); db.refresh(z)
     return {"message": "Zakat record updated", "item": _zakat_row_dict(z, db)}
 
-@app.post("/api/zakat/{zid}/disburse")
-def disburse_zakat(zid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    _check_zakat_access(current_user)
+@app.post("/api/zakat/{zid}/approve")
+def approve_zakat(zid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user, db)
+    _check_zakat_approver(current_user)
     try:
         z = db.query(ZakatRecord).filter(
             (ZakatRecord.id == uuid.UUID(zid)) | (ZakatRecord.zakat_id == zid)
@@ -4632,8 +4822,170 @@ def disburse_zakat(zid: str, data: dict, db: Session = Depends(get_db), current_
         z = db.query(ZakatRecord).filter(ZakatRecord.zakat_id == zid).first()
     if not z:
         raise HTTPException(404, "Zakat record not found")
-    if z.status != "active":
+    if z.status == "cancelled":
+        raise HTTPException(400, "Cancelled record cannot be approved/rejected")
+
+    action = (data.get("action") or "approve").strip().lower()
+    approver = db.query(CompanyRep).filter(CompanyRep.rep_id == current_user.rep_id).first()
+    creator = db.query(CompanyRep).filter(CompanyRep.id == z.created_by).first() if z.created_by else None
+
+    if action == "reject":
+        z.approval_status = "rejected"
+        z.approval_decision = "rejected"
+        z.case_status = "closed"
+        z.status = "rejected"
+        z.approved_amount = 0
+        z.approved_by_rep_id = approver.id if approver else None
+        z.approved_by = approver.name if approver else current_user.name
+        z.approved_at = datetime.utcnow()
+        z.approval_notes = data.get("notes")
+        z.disbursement_approval_status = "pending"
+        z.disbursement_approved_by_rep_id = None
+        z.disbursement_approved_at = None
+        z.disbursement_approval_notes = None
+        z.updated_at = func.now()
+        db.commit(); db.refresh(z)
+        for rep_id in ZAKAT_ALLOWED_REPS:
+            create_notification(
+                db,
+                rep_id,
+                "zakat_rejected",
+                f"Zakat rejected: {z.zakat_id}",
+                f"{z.zakat_id} was rejected by {z.approved_by}.",
+                category="zakat",
+                entity_type="zakat",
+                entity_id=z.id,
+                data={"zakat_id": z.zakat_id},
+            )
+        db.commit()
+        return {"message": "Zakat request rejected", "item": _zakat_row_dict(z, db)}
+
+    approved_amount = data.get("approved_amount")
+    if approved_amount is None:
+        raise HTTPException(400, "approved_amount is required")
+    approved_amount = float(approved_amount)
+    if approved_amount <= 0:
+        raise HTTPException(400, "approved_amount must be greater than 0")
+    if approved_amount > float(z.amount):
+        raise HTTPException(400, "approved_amount cannot exceed requested amount")
+
+    existing_disbursed_total = db.query(func.coalesce(func.sum(ZakatDisbursement.amount), 0)).filter(
+        ZakatDisbursement.zakat_record_id == z.id
+    ).scalar() or 0
+    if float(existing_disbursed_total) > 0 and (z.approval_status or "pending") == "approved":
+        raise HTTPException(400, "Approval can only be revised before first disbursement")
+    if float(existing_disbursed_total) > approved_amount:
+        raise HTTPException(400, "approved_amount cannot be less than already disbursed amount")
+
+    close_case = bool(data.get("close_case", False))
+    z.approval_status = "approved"
+    z.approved_amount = approved_amount
+    z.approved_by_rep_id = approver.id if approver else None
+    z.approved_by = approver.name if approver else current_user.name
+    z.approved_at = datetime.utcnow()
+    z.approval_notes = data.get("notes")
+    z.approval_decision = "full" if approved_amount >= float(z.amount) else "partial"
+    z.case_status = "closed" if close_case else "open"
+    z.disbursement_approval_status = "pending"
+    z.disbursement_approved_by_rep_id = None
+    z.disbursement_approved_at = None
+    z.disbursement_approval_notes = None
+    z.status = "approved"
+    z.updated_at = func.now()
+    db.commit(); db.refresh(z)
+
+    create_notification(
+        db,
+        "REP-0010",
+        "zakat_disbursement_approval_required",
+        f"Pending disbursement approval: {z.zakat_id}",
+        f"{z.zakat_id} approved for PKR {approved_amount:,.0f}. Please approve or postpone disbursement.",
+        category="zakat",
+        entity_type="zakat",
+        entity_id=z.id,
+        data={"zakat_id": z.zakat_id, "approved_amount": approved_amount},
+    )
+    db.commit()
+    return {"message": "Zakat request approved", "item": _zakat_row_dict(z, db)}
+
+@app.post("/api/zakat/{zid}/approve-disbursement")
+def approve_zakat_disbursement(zid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user, db)
+    _check_zakat_funds_approver(current_user)
+    try:
+        z = db.query(ZakatRecord).filter(
+            (ZakatRecord.id == uuid.UUID(zid)) | (ZakatRecord.zakat_id == zid)
+        ).first()
+    except ValueError:
+        z = db.query(ZakatRecord).filter(ZakatRecord.zakat_id == zid).first()
+    if not z:
+        raise HTTPException(404, "Zakat record not found")
+    if z.approval_status != "approved":
+        raise HTTPException(400, "Case must be approved by CEO/CFO first")
+    if z.status in ["cancelled", "rejected"]:
+        raise HTTPException(400, f"Cannot approve disbursement for status '{z.status}'")
+
+    action = (data.get("action") or "approve").strip().lower()
+    if action not in ["approve", "postpone"]:
+        raise HTTPException(400, "Action must be 'approve' or 'postpone'")
+
+    approver = db.query(CompanyRep).filter(CompanyRep.rep_id == current_user.rep_id).first()
+    z.disbursement_approval_status = "approved" if action == "approve" else "postponed"
+    z.disbursement_approved_by_rep_id = approver.id if approver else None
+    z.disbursement_approved_at = datetime.utcnow()
+    z.disbursement_approval_notes = data.get("notes")
+    z.updated_at = func.now()
+    db.commit(); db.refresh(z)
+
+    if action == "approve":
+        for rep_id in ZAKAT_DISBURSER_REPS:
+            create_notification(
+                db,
+                rep_id,
+                "zakat_ready_for_disbursement",
+                f"Approved disbursement by CFO: {z.zakat_id}",
+                f"{z.zakat_id} is approved by CFO and ready for disbursement.",
+                category="zakat",
+                entity_type="zakat",
+                entity_id=z.id,
+                data={"zakat_id": z.zakat_id, "approved_amount": float(z.approved_amount or 0)},
+            )
+    else:
+        creator = db.query(CompanyRep).filter(CompanyRep.id == z.created_by).first() if z.created_by else None
+        if creator and creator.rep_id:
+            create_notification(
+                db,
+                creator.rep_id,
+                "zakat_disbursement_postponed",
+                f"Disbursement postponed: {z.zakat_id}",
+                f"CFO postponed disbursement readiness for {z.zakat_id}.",
+                category="zakat",
+                entity_type="zakat",
+                entity_id=z.id,
+                data={"zakat_id": z.zakat_id},
+            )
+    db.commit()
+    msg = "Zakat marked ready for disbursement" if action == "approve" else "Zakat disbursement postponed"
+    return {"message": msg, "item": _zakat_row_dict(z, db)}
+
+@app.post("/api/zakat/{zid}/disburse")
+def disburse_zakat(zid: str, data: dict, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    _check_zakat_access(current_user, db)
+    _check_zakat_disburser(current_user)
+    try:
+        z = db.query(ZakatRecord).filter(
+            (ZakatRecord.id == uuid.UUID(zid)) | (ZakatRecord.zakat_id == zid)
+        ).first()
+    except ValueError:
+        z = db.query(ZakatRecord).filter(ZakatRecord.zakat_id == zid).first()
+    if not z:
+        raise HTTPException(404, "Zakat record not found")
+    if z.status in ["cancelled", "rejected"]:
         raise HTTPException(400, f"Cannot disburse a record with status '{z.status}'")
+    if z.approval_status != "approved":
+        raise HTTPException(400, "Approval is required before disbursement")
+    if (z.disbursement_approval_status or "pending") != "approved":
+        raise HTTPException(400, "CFO disbursement approval is required before disbursement")
 
     # Resolve disbursed_by rep
     disburser = None
@@ -4649,6 +5001,23 @@ def disburse_zakat(zid: str, data: dict, db: Session = Depends(get_db), current_
         # Default to current user
         disburser = db.query(CompanyRep).filter(CompanyRep.rep_id == current_user.rep_id).first()
 
+    amount = data.get("amount")
+    if amount is None:
+        raise HTTPException(400, "Disbursed amount is required")
+    amount = float(amount)
+    if amount <= 0:
+        raise HTTPException(400, "Disbursed amount must be greater than 0")
+
+    approved_amount = float(z.approved_amount or 0)
+    disbursed_total = db.query(func.coalesce(func.sum(ZakatDisbursement.amount), 0)).filter(
+        ZakatDisbursement.zakat_record_id == z.id
+    ).scalar() or 0
+    remaining = approved_amount - float(disbursed_total)
+    if remaining <= 0:
+        raise HTTPException(400, "Approved amount is already fully disbursed")
+    if amount > remaining:
+        raise HTTPException(400, f"Disbursement exceeds remaining approved amount ({remaining:,.2f})")
+
     payment_method = data.get("payment_method") or z.payment_method
     reference_number = data.get("reference_number") or z.reference_number
     receipt_number = data.get("receipt_number") or z.receipt_number
@@ -4659,17 +5028,31 @@ def disburse_zakat(zid: str, data: dict, db: Session = Depends(get_db), current_
         payment_id=_generate_payment_code(db),
         payment_type="zakat",
         payee_type="beneficiary",
-        amount=float(z.amount),
+        amount=amount,
         payment_method=payment_method,
         reference_number=reference_number,
         payment_date=disbursement_date,
-        notes=f"Zakat disbursement {z.zakat_id} to {z.beneficiary_name}",
+        notes=f"Zakat disbursement {z.zakat_id} to {z.beneficiary_name} (PKR {amount:,.0f})",
         status="completed",
     )
     db.add(payment); db.flush()
 
+    d = ZakatDisbursement(
+        zakat_record_id=z.id,
+        amount=amount,
+        disbursed_by_rep_id=disburser.id if disburser else None,
+        payment_id=payment.id,
+        payment_method=payment_method,
+        reference_number=reference_number,
+        receipt_number=receipt_number,
+        notes=data.get("notes"),
+        disbursement_date=disbursement_date,
+        disbursed_at=datetime.utcnow(),
+    )
+    db.add(d)
+
     # Update zakat record
-    z.status = "disbursed"
+    z.status = "approved"
     z.disbursed_by = disburser.id if disburser else None
     z.payment_method = payment_method
     z.reference_number = reference_number
@@ -4681,11 +5064,11 @@ def disburse_zakat(zid: str, data: dict, db: Session = Depends(get_db), current_
     z.updated_at = func.now()
 
     db.commit(); db.refresh(z)
-    return {"message": "Zakat disbursed", "item": _zakat_row_dict(z, db)}
+    return {"message": "Zakat disbursement recorded", "item": _zakat_row_dict(z, db)}
 
 @app.post("/api/zakat/{zid}/cancel")
 def cancel_zakat(zid: str, data: dict = {}, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    _check_zakat_access(current_user)
+    _check_zakat_access(current_user, db)
     try:
         z = db.query(ZakatRecord).filter(
             (ZakatRecord.id == uuid.UUID(zid)) | (ZakatRecord.zakat_id == zid)
@@ -4694,10 +5077,16 @@ def cancel_zakat(zid: str, data: dict = {}, db: Session = Depends(get_db), curre
         z = db.query(ZakatRecord).filter(ZakatRecord.zakat_id == zid).first()
     if not z:
         raise HTTPException(404, "Zakat record not found")
-    if z.status == "disbursed":
-        raise HTTPException(400, "Cannot cancel a disbursed record")
+    if z.approval_status == "approved":
+        _check_zakat_canceller(current_user)
+        disbursed_total = db.query(func.coalesce(func.sum(ZakatDisbursement.amount), 0)).filter(
+            ZakatDisbursement.zakat_record_id == z.id
+        ).scalar() or 0
+        if float(disbursed_total) > 0:
+            raise HTTPException(400, "Cannot cancel an already disbursed approved record")
 
     z.status = "cancelled"
+    z.case_status = "closed"
     reason = data.get("reason", "")
     if reason:
         z.notes = (z.notes + "\n" if z.notes else "") + f"Cancelled: {reason}"
@@ -4715,7 +5104,7 @@ def get_zakat_dashboard(
     export_format: str = None,
     db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
 ):
-    _check_zakat_access(current_user)
+    _check_zakat_access(current_user, db)
     try:
         q = db.query(ZakatRecord)
         if status:
@@ -4729,21 +5118,60 @@ def get_zakat_dashboard(
 
         all_records = q.all()
 
-        # Summary
-        total_amount = sum(float(r.amount) for r in all_records)
-        active = [r for r in all_records if r.status == "active"]
-        disbursed = [r for r in all_records if r.status == "disbursed"]
-        cancelled = [r for r in all_records if r.status == "cancelled"]
+        disbursement_totals = {
+            str(x.zakat_record_id): float(x.total_amount or 0)
+            for x in db.query(
+                ZakatDisbursement.zakat_record_id,
+                func.sum(ZakatDisbursement.amount).label("total_amount")
+            ).group_by(ZakatDisbursement.zakat_record_id).all()
+        }
+
+        requested_total_value = sum(float(r.amount or 0) for r in all_records)
+        approved_records = [r for r in all_records if (r.approval_status or "pending") == "approved"]
+        approved_total_value = sum(float(r.approved_amount or 0) for r in approved_records)
+        disbursed_records = [r for r in all_records if disbursement_totals.get(str(r.id), 0) > 0]
+        disbursed_total_value = sum(disbursement_totals.get(str(r.id), 0) for r in all_records)
+        pending_records = [r for r in all_records if (r.approval_status or "pending") == "pending"]
+        open_records = [r for r in approved_records if (r.case_status or "pending") == "open"]
+        closed_records = [r for r in all_records if (r.case_status or "pending") == "closed"]
+        funds_pending_records = [r for r in approved_records if (r.disbursement_approval_status or "pending") in ["pending", "postponed"]]
+        funds_approved_records = [r for r in approved_records if (r.disbursement_approval_status or "pending") == "approved"]
+        ready_for_disbursement_records = [
+            r for r in funds_approved_records
+            if (float(r.approved_amount or 0) - disbursement_totals.get(str(r.id), 0)) > 0
+        ]
 
         summary = {
+            "requested_total_count": len(all_records),
+            "requested_total_value": requested_total_value,
+            "approved_total_count": len(approved_records),
+            "approved_total_value": approved_total_value,
+            "disbursed_total_count": len(disbursed_records),
+            "disbursed_total_value": disbursed_total_value,
+            "pending_count": len(pending_records),
+            "pending_value": sum(float(r.amount or 0) for r in pending_records),
+            "open_cases_count": len(open_records),
+            "open_cases_value": sum(float(r.approved_amount or 0) for r in open_records),
+            "closed_cases_count": len(closed_records),
+            "closed_cases_value": sum(float((r.approved_amount if r.approved_amount is not None else r.amount) or 0) for r in closed_records),
+            "funds_pending_count": len(funds_pending_records),
+            "funds_pending_value": sum(float(r.approved_amount or 0) for r in funds_pending_records),
+            "funds_approved_count": len(funds_approved_records),
+            "funds_approved_value": sum(float(r.approved_amount or 0) for r in funds_approved_records),
+            "ready_for_disbursement_count": len(ready_for_disbursement_records),
+            "ready_for_disbursement_value": sum(
+                max(float(r.approved_amount or 0) - disbursement_totals.get(str(r.id), 0), 0)
+                for r in ready_for_disbursement_records
+            ),
+            # Legacy keys for backward compatibility in UI
             "total_records": len(all_records),
-            "total_amount": total_amount,
-            "active_count": len(active),
-            "active_amount": sum(float(r.amount) for r in active),
-            "disbursed_count": len(disbursed),
-            "disbursed_amount": sum(float(r.amount) for r in disbursed),
-            "cancelled_count": len(cancelled),
-            "cancelled_amount": sum(float(r.amount) for r in cancelled),
+            "total_amount": requested_total_value,
+            "active_count": len(open_records),
+            "active_amount": sum(float(r.approved_amount or 0) for r in open_records),
+            "disbursed_count": len(disbursed_records),
+            "disbursed_amount": disbursed_total_value,
+            "cancelled_count": len([r for r in all_records if r.status == "cancelled"]),
+            "cancelled_amount": sum(float(r.amount or 0) for r in all_records if r.status == "cancelled"),
         }
 
         # By category
@@ -4769,12 +5197,13 @@ def get_zakat_dashboard(
                 quarter_map[q_label]["amount"] += float(r.amount)
         by_quarter = sorted(quarter_map.values(), key=lambda x: x["quarter"])
 
-        # By rep (disbursed_by)
+        # By rep (zakat_disbursements.disbursed_by_rep_id)
         rep_map = {}
-        for r in disbursed:
-            if r.disbursed_by:
-                rep = db.query(CompanyRep).filter(CompanyRep.id == r.disbursed_by).first()
-                key = str(r.disbursed_by)
+        disbursement_rows = db.query(ZakatDisbursement).all()
+        for d in disbursement_rows:
+            if d.disbursed_by_rep_id:
+                rep = db.query(CompanyRep).filter(CompanyRep.id == d.disbursed_by_rep_id).first()
+                key = str(d.disbursed_by_rep_id)
                 if key not in rep_map:
                     rep_map[key] = {
                         "rep_id": rep.rep_id if rep else "Unknown",
@@ -4782,7 +5211,7 @@ def get_zakat_dashboard(
                         "count": 0, "amount": 0,
                     }
                 rep_map[key]["count"] += 1
-                rep_map[key]["amount"] += float(r.amount)
+                rep_map[key]["amount"] += float(d.amount or 0)
         by_rep = sorted(rep_map.values(), key=lambda x: x["amount"], reverse=True)
 
         # Export
@@ -4792,20 +5221,18 @@ def get_zakat_dashboard(
             writer = csv.writer(output)
             writer.writerow([
                 "Zakat ID", "Beneficiary", "CNIC", "Mobile", "Address",
-                "Amount (PKR)", "Category", "Purpose", "Approval Reference",
-                "Approved By", "Payment Method", "Reference #", "Receipt #",
-                "Disbursed By", "Disbursement Date", "Status", "Notes", "Created At",
+                "Requested Amount (PKR)", "Approved Amount (PKR)", "Disbursed Amount (PKR)",
+                "Category", "Purpose", "Approval Reference", "Approved By",
+                "Approval Status", "Disbursement Approval Status", "Case Status", "Status", "Notes", "Created At",
             ])
             for r in all_records:
-                disburser = db.query(CompanyRep).filter(CompanyRep.id == r.disbursed_by).first() if r.disbursed_by else None
                 writer.writerow([
                     r.zakat_id, r.beneficiary_name, r.beneficiary_cnic or "",
                     r.beneficiary_mobile or "", r.beneficiary_address or "",
-                    float(r.amount), r.category, r.purpose or "",
+                    float(r.amount or 0), float(r.approved_amount or 0), disbursement_totals.get(str(r.id), 0),
+                    r.category, r.purpose or "",
                     r.approval_reference or "", r.approved_by or "",
-                    r.payment_method or "", r.reference_number or "",
-                    r.receipt_number or "", disburser.name if disburser else "",
-                    r.disbursement_date.isoformat() if r.disbursement_date else "",
+                    r.approval_status or "pending", r.disbursement_approval_status or "pending", r.case_status or "pending",
                     r.status, r.notes or "",
                     r.created_at.isoformat() if r.created_at else "",
                 ])

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import VectorMap from './components/Vector/VectorMap';
 import OrphanTrackingPanel from './components/OrphanTrackingPanel';
@@ -180,6 +180,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('projects');
   const [taskDeepLink, setTaskDeepLink] = useState(null);
+  const [zakatDeepLink, setZakatDeepLink] = useState(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [toasts, setToasts] = useState([]);
@@ -312,6 +313,32 @@ export default function App() {
       if (!deepLink.taskId && !deepLink.subtaskId && !deepLink.microTaskId) {
         addToast('Notification', 'Opened Tasks. Could not resolve exact item from this notification.', 'info');
       }
+      return;
+    }
+
+    const isZakatNotification =
+      (n.entity_type || '') === 'zakat' ||
+      (n.category || '').toLowerCase() === 'zakat' ||
+      String(n.type || '').startsWith('zakat_');
+
+    if (isZakatNotification) {
+      let status = '';
+      const type = String(n.type || '').toLowerCase();
+      if (type === 'zakat_approval_required') status = 'pending';
+      else if (type === 'zakat_disbursement_approval_required') status = 'funds_pending';
+      else if (type === 'zakat_ready_for_disbursement') status = 'ready_for_disbursement';
+      else if (type === 'zakat_approved') status = 'approved';
+      else if (type === 'zakat_rejected') status = 'rejected';
+      else if (type === 'zakat_disbursement_postponed') status = 'funds_pending';
+
+      setZakatDeepLink({
+        entityId: n.entity_id || null,
+        zakatId: n.data?.zakat_id || null,
+        statusFilter: status,
+        ts: Date.now(),
+      });
+      setActiveTab('zakat');
+      return;
     }
   };
   const markAllRead = async () => {
@@ -343,7 +370,7 @@ export default function App() {
   }, [showMoreMenu, showNotifPanel]);
 
   // Role-based access control
-  const ZAKAT_ALLOWED_REPS = ['REP-0002', 'REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020'];
+  const ZAKAT_ALLOWED_REPS = ['REP-0002', 'REP-0010', 'REP-0011', 'REP-0012', 'REP-0013'];
   const hasZakatAccess = (u) => {
     if (!u) return false;
     return ZAKAT_ALLOWED_REPS.includes(u.rep_id || '');
@@ -391,7 +418,7 @@ export default function App() {
   const TEAM_HEADER_CONFIG = {
     // Zakat/Finance team
     finance: {
-      members: ['REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020'],
+      members: ['REP-0002', 'REP-0010', 'REP-0011', 'REP-0012', 'REP-0013'],
       primaryIds: ['zakat', 'tasks', 'reports', 'dashboard'],
     },
     // Operations team: COO Hassan Danish, Ahsan Ejaz (Director Land), Sarosh Javed (CEO)
@@ -593,7 +620,7 @@ export default function App() {
           deepLink={taskDeepLink}
           onDeepLinkHandled={() => setTaskDeepLink(null)}
         />}
-        {activeTab === 'zakat' && <ZakatView />}
+        {activeTab === 'zakat' && <ZakatView deepLink={zakatDeepLink} />}
         {activeTab === 'eoi' && <EOICollectionView />}
         {activeTab === 'vector' && <VectorView />}
         {activeTab === 'settings' && <SettingsView />}
@@ -1004,7 +1031,7 @@ function InventoryView() {
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{i.inventory_id}</td>
                   <td className="px-6 py-4 text-sm">{i.project_name}</td>
                   <td className="px-6 py-4 text-sm font-medium">{i.unit_number}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{i.block || '—'}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{i.block || 'â€”'}</td>
                   <td className="px-6 py-4 text-sm text-right">{i.area_marla} M</td>
                   <td className="px-6 py-4 text-sm text-right">{formatCurrency(i.rate_per_marla)}</td>
                   <td className="px-6 py-4 text-sm text-right font-medium">{formatCurrency(i.total_value)}</td>
@@ -1098,7 +1125,7 @@ function SellModal({ item, onClose, onSuccess }) {
           <div className="grid grid-cols-3 gap-4 text-sm">
             <div><span className="text-gray-500">Project:</span> <span className="font-medium">{item.project_name}</span></div>
             <div><span className="text-gray-500">Unit:</span> <span className="font-medium">{item.unit_number}</span></div>
-            <div><span className="text-gray-500">Block:</span> <span className="font-medium">{item.block || '—'}</span></div>
+            <div><span className="text-gray-500">Block:</span> <span className="font-medium">{item.block || 'â€”'}</span></div>
           </div>
         </div>
 
@@ -1540,7 +1567,7 @@ function NewTransactionModal({ onClose, onSuccess }) {
                 <button key={i.id} type="button" onClick={() => selectUnit(i)}
                   className={`w-full text-left px-3 py-2 text-sm border-b last:border-0 ${selectedInv?.id === i.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'}`}>
                   <div className="font-medium">{i.unit_number} {i.block && `(${i.block})`}</div>
-                  <div className="text-xs text-gray-500">{i.area_marla} Marla • {formatCurrency(i.rate_per_marla)}/M</div>
+                  <div className="text-xs text-gray-500">{i.area_marla} Marla â€¢ {formatCurrency(i.rate_per_marla)}/M</div>
                 </button>
               ))}
             </div>
@@ -1612,9 +1639,9 @@ function NewTransactionModal({ onClose, onSuccess }) {
 // ============================================
 function TransactionDetailModal({ txn, onClose, onUpdate }) {
   const [installments, setInstallments] = useState(txn.installments || []);
-  const customerName = txn.customer_name || txn.customer?.name || '—';
-  const brokerName = txn.broker_name || txn.broker?.name || '—';
-  const projectName = txn.project_name || txn.project?.name || '—';
+  const customerName = txn.customer_name || txn.customer?.name || 'â€”';
+  const brokerName = txn.broker_name || txn.broker?.name || 'â€”';
+  const projectName = txn.project_name || txn.project?.name || 'â€”';
 
   const updateInstallment = async (inst, field, value) => {
     try {
@@ -3129,7 +3156,7 @@ function ReceiptsView() {
                     <button key={c.id} type="button" onClick={() => { selectCustomer(c); setCustomerSearch(c.name); }}
                       className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:bg-gray-50">
                       <div className="font-medium">{c.name}</div>
-                      <div className="text-xs text-gray-500">{c.customer_id} • {c.mobile}</div>
+                      <div className="text-xs text-gray-500">{c.customer_id} â€¢ {c.mobile}</div>
                     </button>
                   ))}
                 </div>
@@ -3184,10 +3211,10 @@ function ReceiptsView() {
               <Input label="Amount *" type="number" required value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} />
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
                 <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="cash">💵 Cash</option>
-                  <option value="cheque">📝 Cheque</option>
-                  <option value="bank_transfer">🏦 Bank Transfer</option>
-                  <option value="online">💳 Online</option>
+                  <option value="cash">ðŸ’µ Cash</option>
+                  <option value="cheque">ðŸ“ Cheque</option>
+                  <option value="bank_transfer">ðŸ¦ Bank Transfer</option>
+                  <option value="online">ðŸ’³ Online</option>
                 </select>
               </div>
             </div>
@@ -3292,7 +3319,7 @@ function ReceiptDetailModal({ receipt, onClose }) {
 }
 
 // ============================================
-// EOI COLLECTION VIEW — Expression of Interest
+// EOI COLLECTION VIEW â€” Expression of Interest
 // ============================================
 function EOICollectionView() {
   const [eois, setEois] = useState([]);
@@ -3509,7 +3536,7 @@ function EOICollectionView() {
     if (!convertForm.rate_per_marla) { window.showToast?.('Error', 'Rate per marla required', 'error'); return; }
     try {
       const res = await api.post(`/eoi/${convertingEoi.id || convertingEoi.eoi_id}/convert`, convertForm);
-      window.showToast?.('Converted', `EOI converted → ${res.data?.transaction?.transaction_id || 'Transaction created'}`, 'success');
+      window.showToast?.('Converted', `EOI converted â†’ ${res.data?.transaction?.transaction_id || 'Transaction created'}`, 'success');
       setShowConvertModal(false); setConvertingEoi(null); setConvertForm(emptyConvertForm);
       loadData();
     } catch (e) { window.showToast?.('Error', e.response?.data?.detail || 'Conversion failed', 'error'); }
@@ -3531,7 +3558,7 @@ function EOICollectionView() {
     downloadCSV(data, `eoi_collection_${new Date().toISOString().split('T')[0]}.csv`);
   };
 
-  // PDF Acknowledgment Slip — Sitara Grand Bazaar
+  // PDF Acknowledgment Slip â€” Sitara Grand Bazaar
   const generateEOIPDF = (eoi) => {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -3543,13 +3570,13 @@ function EOICollectionView() {
     let y = 20;
 
     // --- SBL Logo (square, high quality) ---
-    try { doc.addImage(SBL_LOGO_BASE64, 'JPEG', 15, 10, 28, 28); } catch (e) { /* logo load fail — skip */ }
+    try { doc.addImage(SBL_LOGO_BASE64, 'JPEG', 15, 10, 28, 28); } catch (e) { /* logo load fail â€” skip */ }
 
     // Helper: draw a clear checkmark inside a box
     const drawCheck = (x, yc, size) => {
       doc.setDrawColor(21, 71, 81);
       doc.setLineWidth(0.6);
-      // Short stroke down-right, then long stroke up-right (classic ✓)
+      // Short stroke down-right, then long stroke up-right (classic âœ“)
       doc.line(x + size * 0.15, yc + size * 0.5, x + size * 0.4, yc + size * 0.75);
       doc.line(x + size * 0.4, yc + size * 0.75, x + size * 0.85, yc + size * 0.2);
     };
@@ -3726,7 +3753,7 @@ function EOICollectionView() {
         <div>
           <h2 className="text-2xl font-semibold text-gray-900">EOI Collection</h2>
           <p className="text-sm text-gray-500 mt-1">
-            {selectedProject?.name || 'Select Project'} — Expression of Interest tracking
+            {selectedProject?.name || 'Select Project'} â€” Expression of Interest tracking
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -3931,8 +3958,8 @@ function EOICollectionView() {
                   </td>
                   <td className="px-6 py-4 text-center text-lg">
                     {e.payment_received
-                      ? <span className="text-emerald-600" title="Payment Received">☑</span>
-                      : <span className="text-red-400" title="Payment Not Received">☐</span>}
+                      ? <span className="text-emerald-600" title="Payment Received">â˜‘</span>
+                      : <span className="text-red-400" title="Payment Not Received">â˜</span>}
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-sm text-gray-600">{e.eoi_date}</div>
@@ -3989,7 +4016,7 @@ function EOICollectionView() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
                 <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className={`w-full border rounded-lg px-3 py-2 text-sm ${form.payment_received && !form.payment_method ? 'border-red-300' : ''}`}>
-                  <option value="">— Select —</option>
+                  <option value="">â€” Select â€”</option>
                   <option value="cash">Cash</option>
                   <option value="cheque">Cheque</option>
                   <option value="bank_transfer">Bank Transfer</option>
@@ -4001,7 +4028,7 @@ function EOICollectionView() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Received</label>
                 <button type="button" onClick={() => setForm({...form, payment_received: !form.payment_received})}
                   className={`w-full border rounded-lg px-3 py-2 text-sm font-medium transition-colors ${form.payment_received ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-red-50 text-red-600 border-red-200'}`}>
-                  {form.payment_received ? '☑ Received' : '☐ Not Received'}
+                  {form.payment_received ? 'â˜‘ Received' : 'â˜ Not Received'}
                 </button>
               </div>
               <Input label="EOI Date" type="date" value={form.eoi_date} onChange={e => setForm({...form, eoi_date: e.target.value})} />
@@ -4062,7 +4089,7 @@ function EOICollectionView() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Received</label>
                 <span className={`text-xl ${selectedEoi.payment_received ? 'text-emerald-600' : 'text-red-400'}`}>
-                  {selectedEoi.payment_received ? '☑' : '☐'} <span className="text-sm text-gray-600">{selectedEoi.payment_received ? 'Received' : 'Not Received'}</span>
+                  {selectedEoi.payment_received ? 'â˜‘' : 'â˜'} <span className="text-sm text-gray-600">{selectedEoi.payment_received ? 'Received' : 'Not Received'}</span>
                 </span>
               </div>
               <div>
@@ -4121,7 +4148,7 @@ function EOICollectionView() {
       {showConvertModal && convertingEoi && (
         <Modal title={`Convert ${convertingEoi.eoi_id} to Transaction`} onClose={() => { setShowConvertModal(false); setConvertingEoi(null); }} wide>
           <div className="bg-blue-50 rounded-lg p-3 mb-4 text-sm text-blue-700">
-            Converting EOI for <strong>{convertingEoi.party_name}</strong> — {formatCurrency(convertingEoi.amount)} token will become the first receipt against the new transaction.
+            Converting EOI for <strong>{convertingEoi.party_name}</strong> â€” {formatCurrency(convertingEoi.amount)} token will become the first receipt against the new transaction.
           </div>
           <form onSubmit={handleConvert} className="space-y-4">
             {/* Customer Selection */}
@@ -4133,7 +4160,7 @@ function EOICollectionView() {
               {customerSearch && !convertForm.customer_id && (
                 <div className="border rounded-lg max-h-32 overflow-y-auto">
                   {filteredCustomers.length === 0 ? (
-                    <div className="p-3 text-sm text-gray-400 text-center">No customers found — create one first in Customers tab</div>
+                    <div className="p-3 text-sm text-gray-400 text-center">No customers found â€” create one first in Customers tab</div>
                   ) : filteredCustomers.slice(0, 5).map(c => (
                     <button key={c.id} type="button" onClick={() => { setConvertForm({...convertForm, customer_id: c.customer_id || c.id}); setCustomerSearch(c.name); }}
                       className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:bg-gray-50">
@@ -4151,7 +4178,7 @@ function EOICollectionView() {
               <select value={convertForm.inventory_id} onChange={e => setConvertForm({...convertForm, inventory_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
                 <option value="">No specific unit</option>
                 {inventoryList.map(inv => (
-                  <option key={inv.id} value={inv.inventory_id || inv.id}>{inv.unit_number} — {inv.block || ''} ({inv.area_marla} marla)</option>
+                  <option key={inv.id} value={inv.inventory_id || inv.id}>{inv.unit_number} â€” {inv.block || ''} ({inv.area_marla} marla)</option>
                 ))}
               </select>
             </div>
@@ -4204,7 +4231,13 @@ function EOICollectionView() {
 // ============================================
 // ZAKAT VIEW
 // ============================================
-function ZakatView() {
+function ZakatView({ deepLink = null }) {
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const APPROVER_REPS = ['REP-0009', 'REP-0010'];
+  const FUNDS_APPROVER_REPS = ['REP-0010', 'REP-0002'];
+  const DISBURSER_REPS = ['REP-0002', 'REP-0011', 'REP-0012', 'REP-0013'];
+  const CANCELLER_REPS = ['REP-0002', 'REP-0009', 'REP-0010'];
+
   const [rows, setRows] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [beneficiaries, setBeneficiaries] = useState([]);
@@ -4216,6 +4249,10 @@ function ZakatView() {
   const [selected, setSelected] = useState(null);
   const [showDisburse, setShowDisburse] = useState(false);
   const [disbursing, setDisbursing] = useState(null);
+  const [showApprove, setShowApprove] = useState(false);
+  const [approving, setApproving] = useState(null);
+  const [showFundsApprove, setShowFundsApprove] = useState(false);
+  const [fundsApproving, setFundsApproving] = useState(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -4226,15 +4263,22 @@ function ZakatView() {
 
   const emptyForm = {
     beneficiary_id: '', beneficiary_name: '', beneficiary_cnic: '', beneficiary_mobile: '', beneficiary_address: '',
-    amount: '', category: 'medical', purpose: '', approval_reference: '', approved_by: '', notes: '',
+    amount: '', category: 'medical', purpose: '', approval_reference: '', notes: '',
   };
   const [form, setForm] = useState(emptyForm);
   const [beneficiarySearch, setBeneficiarySearch] = useState('');
   const [createBeneficiary, setCreateBeneficiary] = useState(false);
   const [disburseForm, setDisburseForm] = useState({
-    disbursed_by: '', payment_method: 'bank_transfer', reference_number: '', receipt_number: '',
+    amount: '', disbursed_by: '', payment_method: 'bank_transfer', reference_number: '', receipt_number: '',
     disbursement_date: new Date().toISOString().split('T')[0], notes: '',
   });
+  const [approveForm, setApproveForm] = useState({ action: 'approve', approved_amount: '', close_case: false, notes: '' });
+  const [fundsApproveForm, setFundsApproveForm] = useState({ action: 'approve', notes: '' });
+
+  const canApprove = APPROVER_REPS.includes(currentUser.rep_id || '');
+  const canFundsApprove = FUNDS_APPROVER_REPS.includes(currentUser.rep_id || '');
+  const canDisburse = DISBURSER_REPS.includes(currentUser.rep_id || '');
+  const canCancel = CANCELLER_REPS.includes(currentUser.rep_id || '');
 
   useEffect(() => { load(); }, []);
   const load = async () => {
@@ -4260,18 +4304,42 @@ function ZakatView() {
       const hay = `${r.zakat_id || ''} ${r.beneficiary_name || ''} ${r.beneficiary_cnic || ''} ${r.beneficiary_mobile || ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
-    if (statusFilter && r.status !== statusFilter) return false;
+    if (statusFilter) {
+      if (statusFilter === 'funds_pending' && !['pending', 'postponed'].includes(r.disbursement_approval_status || 'pending')) return false;
+      else if (statusFilter === 'funds_approved' && (r.disbursement_approval_status || '') !== 'approved') return false;
+      else if (statusFilter === 'ready_for_disbursement' && !(r.can_disburse === true)) return false;
+      else if (!['funds_pending', 'funds_approved', 'ready_for_disbursement'].includes(statusFilter) && (r.approval_status || r.status) !== statusFilter) return false;
+    }
     if (categoryFilter && r.category !== categoryFilter) return false;
     const rowDate = (r.disbursement_date || (r.created_at || '').slice(0, 10));
     if (dateFrom && rowDate < dateFrom) return false;
     if (dateTo && rowDate > dateTo) return false;
     return true;
   });
+
   const beneficiaryOptions = beneficiaries.filter((b) => {
     const q = beneficiarySearch.trim().toLowerCase();
     if (!q) return true;
     return `${b.name || ''} ${b.mobile || ''} ${b.cnic || ''} ${b.beneficiary_id || ''}`.toLowerCase().includes(q);
   });
+  const disburserReps = reps.filter(r => DISBURSER_REPS.includes(r.rep_id));
+
+  useEffect(() => {
+    if (!deepLink) return;
+    if (deepLink.statusFilter) setStatusFilter(deepLink.statusFilter);
+    if (deepLink.zakatId) setSearch(deepLink.zakatId);
+    if (deepLink.entityId || deepLink.zakatId) {
+      const hit = rows.find((r) =>
+        (deepLink.entityId && String(r.id) === String(deepLink.entityId)) ||
+        (deepLink.zakatId && String(r.zakat_id) === String(deepLink.zakatId))
+      );
+      if (hit) {
+        setSelected(hit);
+        setShowDetail(true);
+      }
+    }
+  }, [deepLink, rows]);
+
   const openCreate = () => {
     setEditing(null);
     setCreateBeneficiary(false);
@@ -4280,16 +4348,17 @@ function ZakatView() {
     setShowModal(true);
   };
   const openEdit = (r) => {
-    if (r.status === 'disbursed') return window.showToast?.('Locked', 'Disbursed records cannot be edited', 'warning');
+    if ((r.approval_status || 'pending') !== 'pending') return window.showToast?.('Locked', 'Post-approval records cannot be edited', 'warning');
     setEditing(r);
     setForm({
       beneficiary_id: r.beneficiary_id || '', beneficiary_name: r.beneficiary_name || '',
       beneficiary_cnic: r.beneficiary_cnic || '', beneficiary_mobile: r.beneficiary_mobile || '', beneficiary_address: r.beneficiary_address || '',
       amount: r.amount || '', category: r.category || 'medical', purpose: r.purpose || '', approval_reference: r.approval_reference || '',
-      approved_by: r.approved_by || '', notes: r.notes || '',
+      notes: r.notes || '',
     });
     setShowModal(true);
   };
+
   const saveRecord = async (e) => {
     e.preventDefault();
     if (!form.beneficiary_name && !form.beneficiary_id) return window.showToast?.('Error', 'Beneficiary is required', 'error');
@@ -4298,30 +4367,72 @@ function ZakatView() {
       const payload = { ...form, amount: parseFloat(form.amount) };
       if (editing) {
         await api.put(`/zakat/${editing.id || editing.zakat_id}`, payload);
-        window.showToast?.('Updated', 'Zakat record updated', 'success');
-        setShowModal(false);
-        setEditing(null);
-        setForm(emptyForm);
+        window.showToast?.('Updated', 'Zakat request updated', 'success');
       } else {
-        const res = await api.post('/zakat', payload);
-        window.showToast?.('Created', 'Zakat record created — attach documents below', 'success');
-        setShowModal(false);
-        setEditing(null);
-        setForm(emptyForm);
-        // Auto-open detail modal for the new record so user can attach files
-        const newItem = res.data?.item;
-        if (newItem) {
-          setSelected(newItem);
-          setShowDetail(true);
-        }
+        await api.post('/zakat', payload);
+        window.showToast?.('Created', 'Zakat request submitted for CEO/CFO approval', 'success');
       }
+      setShowModal(false);
+      setEditing(null);
+      setForm(emptyForm);
       load();
     } catch (err) {
       window.showToast?.('Error', err.response?.data?.detail || 'Failed to save', 'error');
     }
   };
+
+  const openApprove = (r, action = 'approve') => {
+    setApproving(r);
+    setApproveForm({
+      action,
+      approved_amount: action === 'approve' ? (r.approved_amount || r.amount || '') : '',
+      close_case: Boolean(r.case_status === 'closed'),
+      notes: '',
+    });
+    setShowApprove(true);
+  };
+
+  const submitApproval = async (e) => {
+    e.preventDefault();
+    try {
+      const payload = { action: approveForm.action, notes: approveForm.notes || '' };
+      if (approveForm.action === 'approve') {
+        payload.approved_amount = parseFloat(approveForm.approved_amount || 0);
+        payload.close_case = Boolean(approveForm.close_case);
+      }
+      await api.post(`/zakat/${approving.id || approving.zakat_id}/approve`, payload);
+      window.showToast?.('Saved', approveForm.action === 'reject' ? 'Zakat request rejected' : 'Approval saved', 'success');
+      setShowApprove(false);
+      setApproving(null);
+      load();
+    } catch (err) {
+      window.showToast?.('Error', err.response?.data?.detail || 'Failed to save approval', 'error');
+    }
+  };
+
+  const openFundsApprove = (r, action = 'approve') => {
+    setFundsApproving(r);
+    setFundsApproveForm({ action, notes: '' });
+    setShowFundsApprove(true);
+  };
+
+  const submitFundsApproval = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post(`/zakat/${fundsApproving.id || fundsApproving.zakat_id}/approve-disbursement`, {
+        action: fundsApproveForm.action,
+        notes: fundsApproveForm.notes || '',
+      });
+      window.showToast?.('Saved', fundsApproveForm.action === 'approve' ? 'Ready for disbursement approved' : 'Disbursement postponed', 'success');
+      setShowFundsApprove(false);
+      setFundsApproving(null);
+      load();
+    } catch (err) {
+      window.showToast?.('Error', err.response?.data?.detail || 'Failed to update disbursement approval', 'error');
+    }
+  };
+
   const cancelRecord = async (r) => {
-    if (r.status === 'disbursed') return window.showToast?.('Locked', 'Disbursed records cannot be cancelled', 'warning');
     const reason = prompt(`Cancel ${r.zakat_id}? Enter reason (optional):`);
     if (reason === null) return;
     try {
@@ -4330,44 +4441,64 @@ function ZakatView() {
       load();
     } catch (err) { window.showToast?.('Error', err.response?.data?.detail || 'Failed to cancel', 'error'); }
   };
+
   const disburseRecord = async (e) => {
     e.preventDefault();
+    if (!disburseForm.amount || parseFloat(disburseForm.amount) <= 0) {
+      return window.showToast?.('Error', 'Disbursed amount is required', 'error');
+    }
     try {
-      await api.post(`/zakat/${disbursing.id || disbursing.zakat_id}/disburse`, disburseForm);
-      window.showToast?.('Disbursed', 'Zakat disbursed and payment created', 'success');
+      await api.post(`/zakat/${disbursing.id || disbursing.zakat_id}/disburse`, {
+        ...disburseForm,
+        amount: parseFloat(disburseForm.amount),
+      });
+      window.showToast?.('Saved', 'Disbursement installment recorded', 'success');
       setShowDisburse(false);
       setDisbursing(null);
+      setDisburseForm({ amount: '', disbursed_by: '', payment_method: 'bank_transfer', reference_number: '', receipt_number: '', disbursement_date: new Date().toISOString().split('T')[0], notes: '' });
       load();
     } catch (err) { window.showToast?.('Error', err.response?.data?.detail || 'Failed to disburse', 'error'); }
   };
+
   const exportCsv = () => downloadCSV(filteredRows.map((r) => ({
-    'Zakat ID': r.zakat_id, 'Date': r.disbursement_date || (r.created_at || '').slice(0, 10), 'Beneficiary': r.beneficiary_name,
-    'CNIC': r.beneficiary_cnic || '', 'Mobile': r.beneficiary_mobile || '', 'Address': r.beneficiary_address || '',
-    'Amount (PKR)': r.amount || 0, 'Category': r.category || '', 'Purpose': r.purpose || '', 'Approval Reference': r.approval_reference || '',
-    'Approved By': r.approved_by || '', 'Method': r.payment_method || '', 'Reference #': r.reference_number || '', 'Receipt #': r.receipt_number || '',
-    'Status': r.status || '', 'Disbursed By': r.disbursed_by_name || '', 'Notes': r.notes || '',
+    'Zakat ID': r.zakat_id,
+    'Date': r.disbursement_date || (r.created_at || '').slice(0, 10),
+    'Beneficiary': r.beneficiary_name,
+    'CNIC': r.beneficiary_cnic || '',
+    'Mobile': r.beneficiary_mobile || '',
+    'Requested Amount (PKR)': r.requested_amount || r.amount || 0,
+    'Approved Amount (PKR)': r.approved_amount || 0,
+    'Disbursed Amount (PKR)': r.disbursed_total || 0,
+    'Remaining (PKR)': r.remaining_amount || 0,
+    'Approval Status': r.approval_status || '',
+    'Case Status': r.case_status || '',
+    'Status': r.status || '',
   })), `zakat_register_${new Date().toISOString().split('T')[0]}.csv`);
 
   const summary = dashboard?.summary || {};
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div><h2 className="text-2xl font-semibold text-gray-900">Zakat Disbursement Register</h2><p className="text-sm text-gray-500 mt-1">Create, track, disburse, and document zakat records.</p></div>
-        <div className="flex items-center gap-3"><button onClick={exportCsv} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 text-gray-700">Export CSV</button><button onClick={openCreate} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Record Zakat</button></div>
+        <div><h2 className="text-2xl font-semibold text-gray-900">Zakat Approval & Disbursement Register</h2><p className="text-sm text-gray-500 mt-1">Requests require CEO/CFO case approval, then CFO disbursement approval, before installments.</p></div>
+        <div className="flex items-center gap-3"><button onClick={exportCsv} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 text-gray-700">Export CSV</button><button onClick={openCreate} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">New Zakat Request</button></div>
       </div>
 
-      {summary && <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-gray-400 uppercase">Total</div><div className="mt-2 text-2xl font-semibold">{summary.total_records || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.total_amount || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-emerald-500 uppercase">Active</div><div className="mt-2 text-2xl font-semibold text-emerald-600">{summary.active_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.active_amount || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-blue-500 uppercase">Disbursed</div><div className="mt-2 text-2xl font-semibold text-blue-600">{summary.disbursed_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.disbursed_amount || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-red-500 uppercase">Cancelled</div><div className="mt-2 text-2xl font-semibold text-red-600">{summary.cancelled_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.cancelled_amount || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-gray-400 uppercase">Quarterly</div><div className="mt-2 text-sm text-gray-700">{dashboard?.by_quarter?.[0]?.quarter || '-'}</div><div className="text-sm text-gray-500">{formatCurrency(dashboard?.by_quarter?.[0]?.amount || 0)}</div></div>
+      {summary && <div className="grid grid-cols-2 md:grid-cols-8 gap-4">
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-gray-400 uppercase">Requests</div><div className="mt-2 text-2xl font-semibold">{summary.requested_total_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.requested_total_value || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-blue-500 uppercase">Approved</div><div className="mt-2 text-2xl font-semibold text-blue-600">{summary.approved_total_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.approved_total_value || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-purple-500 uppercase">Pending CFO</div><div className="mt-2 text-2xl font-semibold text-purple-600">{summary.funds_pending_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.funds_pending_value || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-sky-500 uppercase">CFO Approved</div><div className="mt-2 text-2xl font-semibold text-sky-600">{summary.funds_approved_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.funds_approved_value || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-indigo-500 uppercase">Ready to Disburse</div><div className="mt-2 text-2xl font-semibold text-indigo-600">{summary.ready_for_disbursement_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.ready_for_disbursement_value || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-emerald-500 uppercase">Disbursed</div><div className="mt-2 text-2xl font-semibold text-emerald-600">{summary.disbursed_total_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.disbursed_total_value || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-amber-500 uppercase">Pending</div><div className="mt-2 text-2xl font-semibold text-amber-600">{summary.pending_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.pending_value || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-indigo-500 uppercase">Open Cases</div><div className="mt-2 text-2xl font-semibold text-indigo-600">{summary.open_cases_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.open_cases_value || 0)}</div></div>
+        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-gray-500 uppercase">Closed Cases</div><div className="mt-2 text-2xl font-semibold text-gray-700">{summary.closed_cases_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.closed_cases_value || 0)}</div></div>
       </div>}
 
       <div className="bg-white rounded-2xl shadow-sm border p-4">
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 items-end">
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Search</label><input value={search} onChange={e => setSearch(e.target.value)} placeholder="ZKT / Name / CNIC" className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">All</option><option value="active">Active</option><option value="disbursed">Disbursed</option><option value="cancelled">Cancelled</option></select></div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Approval Status</label><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">All</option><option value="pending">Pending CEO/CFO</option><option value="approved">Approved (Stage 1)</option><option value="funds_pending">Pending CFO Disbursement Approval</option><option value="funds_approved">CFO Approved</option><option value="ready_for_disbursement">Ready for Disbursement</option><option value="rejected">Rejected</option><option value="cancelled">Cancelled</option></select></div>
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Category</label><select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">All</option>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
           <div><label className="block text-xs font-medium text-gray-500 mb-1">From</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
           <div><label className="block text-xs font-medium text-gray-500 mb-1">To</label><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
@@ -4377,14 +4508,27 @@ function ZakatView() {
 
       {loading ? <Loader /> : rows.length === 0 ? <Empty msg="No zakat records yet" /> : filteredRows.length === 0 ? <Empty msg="No records match current filters" /> : (
         <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
-          <table className="w-full"><thead><tr className="border-b border-gray-100"><th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Zakat</th><th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Beneficiary</th><th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Category</th><th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Amount</th><th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th><th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4"></th></tr></thead>
+          <table className="w-full"><thead><tr className="border-b border-gray-100"><th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Zakat</th><th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Beneficiary</th><th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Requested</th><th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Approved</th><th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Disbursed</th><th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th><th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4"></th></tr></thead>
             <tbody className="divide-y divide-gray-50">{filteredRows.map((r) => <tr key={r.id || r.zakat_id} className="hover:bg-gray-50 cursor-pointer" onClick={() => { setSelected(r); setShowDetail(true); }}>
-              <td className="px-6 py-4"><div className="text-sm font-mono text-gray-900">{r.zakat_id}</div><div className="text-xs text-gray-400">{(r.disbursement_date || (r.created_at || '').slice(0, 10)) || '-'}</div></td>
+              <td className="px-6 py-4"><div className="text-sm font-mono text-gray-900">{r.zakat_id}</div><div className="text-xs text-gray-400">{(r.created_at || '').slice(0, 10) || '-'}</div></td>
               <td className="px-6 py-4"><div className="text-sm font-medium">{r.beneficiary_name}</div><div className="text-xs text-gray-400">{r.beneficiary_mobile || '-'}</div></td>
-              <td className="px-6 py-4 text-sm">{r.category || '-'}</td>
-              <td className="px-6 py-4 text-right text-sm font-semibold text-green-600">{formatCurrency(r.amount)}</td>
-              <td className="px-6 py-4 text-center"><span className={`px-2 py-1 rounded-full text-xs font-medium ${r.status === 'active' ? 'bg-emerald-50 text-emerald-700' : r.status === 'disbursed' ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700'}`}>{r.status}</span></td>
-              <td className="px-6 py-4 text-right" onClick={(ev) => ev.stopPropagation()}><div className="flex items-center justify-end gap-1">{r.status === 'active' && <><button onClick={() => openEdit(r)} className="px-2 py-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded">Edit</button><button onClick={() => { setDisbursing(r); setDisburseForm({ ...disburseForm, disbursement_date: new Date().toISOString().split('T')[0] }); setShowDisburse(true); }} className="px-2 py-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded">Disburse</button><button onClick={() => cancelRecord(r)} className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded">Cancel</button></>}</div></td>
+              <td className="px-6 py-4 text-right text-sm font-semibold">{formatCurrency(r.requested_amount || r.amount || 0)}</td>
+              <td className="px-6 py-4 text-right text-sm font-semibold text-blue-600">{formatCurrency(r.approved_amount || 0)}</td>
+              <td className="px-6 py-4 text-right text-sm font-semibold text-emerald-600">{formatCurrency(r.disbursed_total || 0)}</td>
+              <td className="px-6 py-4 text-center">
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${(r.approval_status || r.status) === 'pending' ? 'bg-amber-50 text-amber-700' : (r.approval_status || r.status) === 'approved' ? 'bg-blue-50 text-blue-700' : (r.approval_status || r.status) === 'rejected' ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-gray-700'}`}>{r.approval_status || r.status}</span>
+                {(r.approval_status || '') === 'approved' && <div className="mt-1 text-[11px] text-gray-500">{(r.disbursement_approval_status || 'pending') === 'approved' ? 'CFO disbursement approved' : (r.disbursement_approval_status || 'pending') === 'postponed' ? 'CFO postponed' : 'Pending CFO disbursement approval'}</div>}
+              </td>
+              <td className="px-6 py-4 text-right" onClick={(ev) => ev.stopPropagation()}><div className="flex items-center justify-end gap-1">
+                {(r.approval_status || 'pending') === 'pending' && <button onClick={() => openEdit(r)} className="px-2 py-1 text-xs text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded">Edit</button>}
+                {canApprove && (r.approval_status || 'pending') === 'pending' && <button onClick={() => openApprove(r, 'approve')} className="px-2 py-1 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded">Approve</button>}
+                {canApprove && (r.approval_status || 'pending') === 'pending' && <button onClick={() => openApprove(r, 'reject')} className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded">Reject</button>}
+                {canApprove && (r.approval_status || '') === 'approved' && Number(r.disbursement_count || 0) === 0 && <button onClick={() => openApprove(r, 'approve')} className="px-2 py-1 text-xs text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded">Revise</button>}
+                {canFundsApprove && (r.approval_status || '') === 'approved' && (r.disbursement_approval_status || 'pending') !== 'approved' && <button onClick={() => openFundsApprove(r, 'approve')} className="px-2 py-1 text-xs text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded">Approve Disbursement</button>}
+                {canFundsApprove && (r.approval_status || '') === 'approved' && <button onClick={() => openFundsApprove(r, 'postpone')} className="px-2 py-1 text-xs text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded">Postpone</button>}
+                {canDisburse && (r.approval_status || '') === 'approved' && (r.disbursement_approval_status || '') === 'approved' && r.can_disburse && <button onClick={() => { setDisbursing(r); setDisburseForm({ ...disburseForm, amount: '', disbursement_date: new Date().toISOString().split('T')[0] }); setShowDisburse(true); }} className="px-2 py-1 text-xs text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded">Disburse</button>}
+                {((r.approval_status || 'pending') === 'pending' || canCancel) && (r.status !== 'cancelled') && <button onClick={() => cancelRecord(r)} className="px-2 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded">Cancel</button>}
+              </div></td>
             </tr>)}</tbody>
           </table>
         </div>
@@ -4395,41 +4539,65 @@ function ZakatView() {
           <div className="flex items-center justify-between border-b pb-3"><div className="text-sm font-medium text-gray-700">Beneficiary</div><label className="text-sm flex items-center gap-2"><input type="checkbox" checked={createBeneficiary} onChange={e => setCreateBeneficiary(e.target.checked)} />Create New</label></div>
           {!createBeneficiary && <div>{form.beneficiary_id ? <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-2"><div><div className="text-sm font-medium text-blue-900">{form.beneficiary_name}</div><div className="text-xs text-blue-600">{form.beneficiary_cnic || '-'} · {form.beneficiary_mobile || '-'}</div></div><button type="button" onClick={() => { setForm({ ...form, beneficiary_id: '', beneficiary_name: '', beneficiary_cnic: '', beneficiary_mobile: '', beneficiary_address: '' }); setBeneficiarySearch(''); }} className="text-xs text-red-500 hover:text-red-700 font-medium">Clear</button></div> : <><input type="text" placeholder="Search beneficiary by name, CNIC, mobile..." value={beneficiarySearch} onChange={e => setBeneficiarySearch(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />{beneficiarySearch && <div className="border rounded-lg max-h-40 overflow-y-auto">{beneficiaryOptions.length === 0 ? <div className="px-3 py-2 text-sm text-gray-400">No matches</div> : beneficiaryOptions.slice(0, 6).map((b) => <button key={b.id || b.beneficiary_id} type="button" onClick={() => { setForm({ ...form, beneficiary_id: b.beneficiary_id || b.id, beneficiary_name: b.name || '', beneficiary_cnic: b.cnic || '', beneficiary_mobile: b.mobile || '', beneficiary_address: b.address || '' }); setBeneficiarySearch(''); }} className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:bg-gray-50"><div className="font-medium">{b.name}</div><div className="text-xs text-gray-500">{b.beneficiary_id || '-'} · {b.mobile || '-'}</div></button>)}</div>}</>}</div>}
           <div className="grid grid-cols-2 gap-4"><Input label="Beneficiary Name" required value={form.beneficiary_name} onChange={e => setForm({ ...form, beneficiary_name: e.target.value })} /><Input label="CNIC" value={form.beneficiary_cnic} onChange={e => setForm({ ...form, beneficiary_cnic: e.target.value })} /></div>
-          <div className="grid grid-cols-2 gap-4"><Input label="Mobile" value={form.beneficiary_mobile} onChange={e => setForm({ ...form, beneficiary_mobile: e.target.value })} /><Input label="Amount (PKR)" type="number" required value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-4"><Input label="Mobile" value={form.beneficiary_mobile} onChange={e => setForm({ ...form, beneficiary_mobile: e.target.value })} /><Input label="Requested Amount (PKR)" type="number" required value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
           <Input label="Address" value={form.beneficiary_address} onChange={e => setForm({ ...form, beneficiary_address: e.target.value })} />
-          <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-medium text-gray-500 mb-1">Category</label><select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm">{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></div><Input label="Approved By" value={form.approved_by} onChange={e => setForm({ ...form, approved_by: e.target.value })} /></div>
-          <Input label="Approval Reference" value={form.approval_reference} onChange={e => setForm({ ...form, approval_reference: e.target.value })} />
+          <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-medium text-gray-500 mb-1">Category</label><select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm">{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></div><Input label="Approval Reference" value={form.approval_reference} onChange={e => setForm({ ...form, approval_reference: e.target.value })} /></div>
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Purpose</label><textarea value={form.purpose} onChange={e => setForm({ ...form, purpose: e.target.value })} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label><textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
-          <div className="flex justify-end gap-3 pt-4 border-t"><button type="button" onClick={() => { setShowModal(false); setEditing(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button><button type="submit" className="px-6 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800">{editing ? 'Update Record' : 'Create Record'}</button></div>
+          <div className="flex justify-end gap-3 pt-4 border-t"><button type="button" onClick={() => { setShowModal(false); setEditing(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button><button type="submit" className="px-6 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800">{editing ? 'Update Request' : 'Submit Request'}</button></div>
+        </form>
+      </Modal>}
+
+      {showApprove && approving && <Modal title={`${approveForm.action === 'reject' ? 'Reject' : 'Approve'} ${approving.zakat_id}`} onClose={() => { setShowApprove(false); setApproving(null); }} wide>
+        <form onSubmit={submitApproval} className="space-y-4">
+          {approveForm.action === 'approve' && <div className="grid grid-cols-2 gap-4"><Input label="Requested Amount (PKR)" value={approving.requested_amount || approving.amount || 0} disabled /><Input label="Approved Amount (PKR)" type="number" required value={approveForm.approved_amount} onChange={e => setApproveForm({ ...approveForm, approved_amount: e.target.value })} /></div>}
+          {approveForm.action === 'approve' && <label className="text-sm flex items-center gap-2"><input type="checkbox" checked={approveForm.close_case} onChange={e => setApproveForm({ ...approveForm, close_case: e.target.checked })} />Close case now</label>}
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label><textarea value={approveForm.notes} onChange={e => setApproveForm({ ...approveForm, notes: e.target.value })} rows={3} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div className="flex justify-end gap-3 pt-4 border-t"><button type="button" onClick={() => { setShowApprove(false); setApproving(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button><button type="submit" className={`px-6 py-2 text-sm text-white rounded-lg ${approveForm.action === 'reject' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>{approveForm.action === 'reject' ? 'Confirm Rejection' : 'Confirm Approval'}</button></div>
+        </form>
+      </Modal>}
+
+      {showFundsApprove && fundsApproving && <Modal title={`${fundsApproveForm.action === 'postpone' ? 'Postpone' : 'Approve'} Disbursement: ${fundsApproving.zakat_id}`} onClose={() => { setShowFundsApprove(false); setFundsApproving(null); }} wide>
+        <form onSubmit={submitFundsApproval} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Approved Amount (PKR)" value={fundsApproving.approved_amount || 0} disabled />
+            <Input label="Remaining (PKR)" value={fundsApproving.remaining_amount || 0} disabled />
+          </div>
+          <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label><textarea value={fundsApproveForm.notes} onChange={e => setFundsApproveForm({ ...fundsApproveForm, notes: e.target.value })} rows={3} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
+          <div className="flex justify-end gap-3 pt-4 border-t"><button type="button" onClick={() => { setShowFundsApprove(false); setFundsApproving(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button><button type="submit" className={`px-6 py-2 text-sm text-white rounded-lg ${fundsApproveForm.action === 'postpone' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-purple-600 hover:bg-purple-700'}`}>{fundsApproveForm.action === 'postpone' ? 'Confirm Postpone' : 'Approve for Disbursement'}</button></div>
         </form>
       </Modal>}
 
       {showDetail && selected && <Modal title={`Zakat: ${selected.zakat_id}`} onClose={() => { setShowDetail(false); setSelected(null); }} wide>
-        <div className="space-y-6"><div className="grid grid-cols-2 gap-4">
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Beneficiary</label><div className="text-sm font-medium">{selected.beneficiary_name}</div></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">CNIC</label><div className="text-sm">{selected.beneficiary_cnic || '-'}</div></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Mobile</label><div className="text-sm">{selected.beneficiary_mobile || '-'}</div></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Address</label><div className="text-sm">{selected.beneficiary_address || '-'}</div></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Amount</label><div className="text-sm font-semibold text-green-600">{formatCurrency(selected.amount)}</div></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label><div className="text-sm">{selected.status || '-'}</div></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Approval Reference</label><div className="text-sm">{selected.approval_reference || '-'}</div></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Signed Receipt #</label><div className="text-sm">{selected.receipt_number || '-'}</div></div>
-        </div><div className="border-t pt-4"><MediaManager entityType="zakat" entityId={selected.id || selected.zakat_id} onUpload={() => {}} /></div></div>
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Beneficiary</label><div className="text-sm font-medium">{selected.beneficiary_name}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">CNIC</label><div className="text-sm">{selected.beneficiary_cnic || '-'}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Requested Amount</label><div className="text-sm font-semibold">{formatCurrency(selected.requested_amount || selected.amount || 0)}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Approved Amount</label><div className="text-sm font-semibold text-blue-600">{formatCurrency(selected.approved_amount || 0)}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Disbursed Total</label><div className="text-sm font-semibold text-emerald-600">{formatCurrency(selected.disbursed_total || 0)}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Remaining</label><div className="text-sm">{formatCurrency(selected.remaining_amount || 0)}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Approval Status</label><div className="text-sm">{selected.approval_status || '-'}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Case Status</label><div className="text-sm">{selected.case_status || '-'}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Disbursement Approval</label><div className="text-sm">{selected.disbursement_approval_status || 'pending'}</div></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Disbursement Approved By</label><div className="text-sm">{selected.disbursement_approved_by_name || '-'}</div></div>
+          </div>
+          <div className="border-t pt-4"><MediaManager entityType="zakat" entityId={selected.id || selected.zakat_id} onUpload={() => {}} /></div>
+        </div>
       </Modal>}
 
       {showDisburse && disbursing && <Modal title={`Disburse ${disbursing.zakat_id}`} onClose={() => { setShowDisburse(false); setDisbursing(null); }} wide>
         <form onSubmit={disburseRecord} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-medium text-gray-500 mb-1">Disbursed By</label><select value={disburseForm.disbursed_by} onChange={e => setDisburseForm({ ...disburseForm, disbursed_by: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">Select rep</option>{reps.map(r => <option key={r.id} value={r.rep_id}>{r.name} ({r.rep_id})</option>)}</select></div><div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label><select value={disburseForm.payment_method} onChange={e => setDisburseForm({ ...disburseForm, payment_method: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm">{paymentMethods.map(m => <option key={m} value={m}>{m}</option>)}</select></div></div>
-          <div className="grid grid-cols-3 gap-4"><Input label="Reference #" value={disburseForm.reference_number} onChange={e => setDisburseForm({ ...disburseForm, reference_number: e.target.value })} /><Input label="Receipt #" value={disburseForm.receipt_number} onChange={e => setDisburseForm({ ...disburseForm, receipt_number: e.target.value })} /><Input label="Date" type="date" value={disburseForm.disbursement_date} onChange={e => setDisburseForm({ ...disburseForm, disbursement_date: e.target.value })} /></div>
+          <div className="grid grid-cols-3 gap-4"><Input label="Remaining (PKR)" value={disbursing.remaining_amount || 0} disabled /><Input label="Disburse Amount (PKR)" type="number" required value={disburseForm.amount} onChange={e => setDisburseForm({ ...disburseForm, amount: e.target.value })} /><Input label="Date" type="date" value={disburseForm.disbursement_date} onChange={e => setDisburseForm({ ...disburseForm, disbursement_date: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-medium text-gray-500 mb-1">Disbursed By</label><select value={disburseForm.disbursed_by} onChange={e => setDisburseForm({ ...disburseForm, disbursed_by: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">Current user</option>{disburserReps.map(r => <option key={r.id} value={r.rep_id}>{r.name} ({r.rep_id})</option>)}</select></div><div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label><select value={disburseForm.payment_method} onChange={e => setDisburseForm({ ...disburseForm, payment_method: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm">{paymentMethods.map(m => <option key={m} value={m}>{m}</option>)}</select></div></div>
+          <div className="grid grid-cols-2 gap-4"><Input label="Reference #" value={disburseForm.reference_number} onChange={e => setDisburseForm({ ...disburseForm, reference_number: e.target.value })} /><Input label="Receipt #" value={disburseForm.receipt_number} onChange={e => setDisburseForm({ ...disburseForm, receipt_number: e.target.value })} /></div>
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label><textarea value={disburseForm.notes} onChange={e => setDisburseForm({ ...disburseForm, notes: e.target.value })} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
-          <div className="flex justify-end gap-3 pt-4 border-t"><button type="button" onClick={() => { setShowDisburse(false); setDisbursing(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button><button type="submit" className="px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Confirm Disbursement</button></div>
+          <div className="flex justify-end gap-3 pt-4 border-t"><button type="button" onClick={() => { setShowDisburse(false); setDisbursing(null); }} className="px-4 py-2 text-sm text-gray-600">Cancel</button><button type="submit" className="px-6 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Record Disbursement</button></div>
         </form>
       </Modal>}
     </div>
   );
 }
-
 // ============================================
 // INTERACTIONS VIEW (McKinsey-style dashboard)
 // ============================================
@@ -4535,7 +4703,7 @@ function InteractionsView() {
           </div>
           {summary.pending_followups > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <div className="text-sm font-medium text-amber-800">⚠️ {summary.pending_followups} pending follow-ups due</div>
+              <div className="text-sm font-medium text-amber-800">âš ï¸ {summary.pending_followups} pending follow-ups due</div>
             </div>
           )}
         </>
@@ -4725,7 +4893,7 @@ function CampaignsView() {
       if (e.response?.status === 409 && e.response?.data?.detail?.duplicate) {
         const dup = e.response.data.detail.duplicate;
         const repInfo = dup.assigned_rep ? ` | Assigned to: ${dup.assigned_rep}` : '';
-        if (window.showToast) window.showToast('Duplicate Mobile', `Already exists as ${dup.type} ${dup.entity_id} — ${dup.name}${repInfo}`, 'error');
+        if (window.showToast) window.showToast('Duplicate Mobile', `Already exists as ${dup.type} ${dup.entity_id} â€” ${dup.name}${repInfo}`, 'error');
         // Keep modal open so user can correct mobile
       } else {
         alert(e.response?.data?.detail?.message || e.response?.data?.detail || 'Error');
@@ -4837,7 +5005,7 @@ function CampaignsView() {
                     <div className="flex justify-between items-start">
                       <div>
                         <div className="font-medium text-sm">{c.name}</div>
-                        <div className="text-xs text-gray-500">{c.source} • {c.start_date}</div>
+                        <div className="text-xs text-gray-500">{c.source} â€¢ {c.start_date}</div>
                       </div>
                       <span className={`px-2 py-0.5 rounded-full text-xs ${c.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100'}`}>{c.status}</span>
                     </div>
@@ -4910,7 +5078,7 @@ function CampaignsView() {
             )}
 
             {!selectedCampaign ? (
-              <div className="text-center py-12 text-gray-400 text-sm">← Select a campaign to view leads</div>
+              <div className="text-center py-12 text-gray-400 text-sm">â† Select a campaign to view leads</div>
             ) : leads.length === 0 ? (
               <div className="text-center py-12 text-gray-400 text-sm">No leads in this campaign</div>
             ) : (
@@ -5769,9 +5937,9 @@ function PaymentsView() {
               <Input label="Amount *" type="number" required value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} />
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
                 <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="cash">💵 Cash</option>
-                  <option value="cheque">📝 Cheque</option>
-                  <option value="bank_transfer">🏦 Bank Transfer</option>
+                  <option value="cash">ðŸ’µ Cash</option>
+                  <option value="cheque">ðŸ“ Cheque</option>
+                  <option value="bank_transfer">ðŸ¦ Bank Transfer</option>
                 </select>
               </div>
             </div>
@@ -5790,9 +5958,9 @@ function PaymentsView() {
               </div>
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
                 <select value={form.status} onChange={e => setForm({...form, status: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="completed">✅ Completed</option>
-                  <option value="pending">⏳ Pending</option>
-                  <option value="cancelled">❌ Cancelled</option>
+                  <option value="completed">âœ… Completed</option>
+                  <option value="pending">â³ Pending</option>
+                  <option value="cancelled">âŒ Cancelled</option>
                 </select>
               </div>
             </div>
@@ -6662,7 +6830,7 @@ function ReportsView() {
                       <div className="text-sm text-gray-300">
                         Generated via <span className="font-semibold text-white">ORBIT</span>
                         {customerReport.report_header?.generated_at && (
-                          <span className="ml-4">• {new Date(customerReport.report_header.generated_at).toLocaleString()}</span>
+                          <span className="ml-4">â€¢ {new Date(customerReport.report_header.generated_at).toLocaleString()}</span>
                         )}
                       </div>
                     </div>
@@ -6679,8 +6847,8 @@ function ReportsView() {
                     <div>
                       <h3 className="text-xl font-semibold text-gray-900">{customerReport.customer.name}</h3>
                       <div className="text-sm text-gray-600 mt-1">
-                        {customerReport.customer.customer_id} • {customerReport.customer.mobile}
-                        {customerReport.customer.email && ` • ${customerReport.customer.email}`}
+                        {customerReport.customer.customer_id} â€¢ {customerReport.customer.mobile}
+                        {customerReport.customer.email && ` â€¢ ${customerReport.customer.email}`}
                       </div>
                       {customerReport.customer.address && (
                         <div className="text-sm text-gray-500 mt-1">{customerReport.customer.address}</div>
@@ -6746,7 +6914,7 @@ function ReportsView() {
                                   else newExpanded.add(idx);
                                   setExpandedTransactions(newExpanded);
                                 }} className="text-gray-600 hover:text-gray-900">
-                                  {expandedTransactions.has(idx) ? '▼' : '▶'}
+                                  {expandedTransactions.has(idx) ? 'â–¼' : 'â–¶'}
                                 </button>
                               </td>
                             </tr>
@@ -6994,7 +7162,7 @@ function ReportsView() {
                       <div className="text-sm text-gray-300">
                         Generated via <span className="font-semibold text-white">ORBIT</span>
                         {projectReport.report_header?.generated_at && (
-                          <span className="ml-4">• {new Date(projectReport.report_header.generated_at).toLocaleString()}</span>
+                          <span className="ml-4">â€¢ {new Date(projectReport.report_header.generated_at).toLocaleString()}</span>
                         )}
                       </div>
                     </div>
@@ -7011,7 +7179,7 @@ function ReportsView() {
                     <div>
                       <h3 className="text-xl font-semibold text-gray-900">{projectReport.project.name}</h3>
                       <div className="text-sm text-gray-600 mt-1">
-                        {projectReport.project.project_id} • {projectReport.project.location}
+                        {projectReport.project.project_id} â€¢ {projectReport.project.location}
                       </div>
                       {projectReport.project.description && (
                         <div className="text-sm text-gray-500 mt-2">{projectReport.project.description}</div>
@@ -7163,14 +7331,14 @@ function ReportsView() {
                             <div>
                               <h5 className="font-semibold text-gray-900">{customer.customer_name}</h5>
                               <div className="text-xs text-gray-600 mt-1">
-                                {customer.customer_id} • {customer.mobile}
+                                {customer.customer_id} â€¢ {customer.mobile}
                               </div>
                             </div>
                             <div className="text-right">
                               <div className="text-xs text-gray-600">Total Outstanding</div>
                               <div className="text-lg font-bold text-red-600">{formatCurrency(customer.total_outstanding)}</div>
                               <div className="text-xs text-gray-500 mt-1">
-                                Overdue: {formatCurrency(customer.total_overdue)} • Future: {formatCurrency(customer.total_future)}
+                                Overdue: {formatCurrency(customer.total_overdue)} â€¢ Future: {formatCurrency(customer.total_future)}
                               </div>
                             </div>
                           </div>
@@ -7302,7 +7470,7 @@ function ReportsView() {
                       <div className="text-sm text-gray-300">
                         Generated via <span className="font-semibold text-white">ORBIT</span>
                         {brokerReport.report_header?.generated_at && (
-                          <span className="ml-4">• {new Date(brokerReport.report_header.generated_at).toLocaleString()}</span>
+                          <span className="ml-4">â€¢ {new Date(brokerReport.report_header.generated_at).toLocaleString()}</span>
                         )}
                       </div>
                     </div>
@@ -7319,8 +7487,8 @@ function ReportsView() {
                     <div>
                       <h3 className="text-xl font-semibold text-gray-900">{brokerReport.broker.name}</h3>
                       <div className="text-sm text-gray-600 mt-1">
-                        {brokerReport.broker.broker_id} • {brokerReport.broker.mobile}
-                        {brokerReport.broker.email && ` • ${brokerReport.broker.email}`}
+                        {brokerReport.broker.broker_id} â€¢ {brokerReport.broker.mobile}
+                        {brokerReport.broker.email && ` â€¢ ${brokerReport.broker.email}`}
                       </div>
                       {brokerReport.broker.company && (
                         <div className="text-sm text-gray-500 mt-1">Company: {brokerReport.broker.company}</div>
@@ -7770,7 +7938,7 @@ function SettingsView() {
                     <span className={`px-2 py-0.5 rounded-full text-xs ${r.rep_type ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>{r.rep_type || 'non-sales'}</span>
                   </div>
                   <div className="font-medium text-gray-900">{r.name}</div>
-                  <div className="text-sm text-gray-500">{r.mobile} {r.email && `• ${r.email}`} {r.title && `• ${r.title}`}</div>
+                  <div className="text-sm text-gray-500">{r.mobile} {r.email && `â€¢ ${r.email}`} {r.title && `â€¢ ${r.title}`}</div>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => openEdit(r)} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">Edit</button>
@@ -8202,11 +8370,11 @@ function MediaView() {
 
   const getFileIcon = (fileType) => {
     switch (fileType) {
-      case 'pdf': return '📄';
-      case 'image': return '🖼️';
-      case 'video': return '🎥';
-      case 'audio': return '🎵';
-      default: return '📎';
+      case 'pdf': return 'ðŸ“„';
+      case 'image': return 'ðŸ–¼ï¸';
+      case 'video': return 'ðŸŽ¥';
+      case 'audio': return 'ðŸŽµ';
+      default: return 'ðŸ“Ž';
     }
   };
 
@@ -8458,7 +8626,7 @@ function MediaManager({ entityType, entityId, onUpload }) {
             <div key={f.id} className="flex items-center justify-between p-2 bg-gray-50 rounded text-sm">
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <span className="text-gray-500">
-                  {f.file_type === 'pdf' ? '📄' : f.file_type === 'image' ? '🖼️' : f.file_type === 'video' ? '🎥' : f.file_type === 'audio' ? '🎵' : '📎'}
+                  {f.file_type === 'pdf' ? 'ðŸ“„' : f.file_type === 'image' ? 'ðŸ–¼ï¸' : f.file_type === 'video' ? 'ðŸŽ¥' : f.file_type === 'audio' ? 'ðŸŽµ' : 'ðŸ“Ž'}
                 </span>
                 <span className="truncate">{f.file_name}</span>
                 {f.description && <span className="text-xs text-gray-400">({f.description})</span>}
@@ -8631,7 +8799,7 @@ function LeadAssignmentsSettings() {
                 </div>
                 <div className="text-xs text-gray-500">
                   Requested by <span className="font-medium">{r.requested_by}</span>
-                  {r.reason && <span> — {r.reason}</span>}
+                  {r.reason && <span> â€” {r.reason}</span>}
                   <span className="ml-2 text-gray-400">{new Date(r.created_at).toLocaleDateString()}</span>
                 </div>
               </div>
@@ -8670,7 +8838,7 @@ function SearchAuditSettings() {
     <div className="bg-white rounded-2xl shadow-sm border p-6">
       <div className="mb-4">
         <h3 className="text-lg font-semibold text-gray-900">Search Audit Log</h3>
-        <p className="text-sm text-gray-500">Cross-rep search activity — when a rep searches for another rep's customer/lead</p>
+        <p className="text-sm text-gray-500">Cross-rep search activity â€” when a rep searches for another rep's customer/lead</p>
       </div>
 
       {loading ? <Loader /> : logs.length === 0 ? (
@@ -9404,7 +9572,7 @@ function AnalyticsLeadDrilldown({ filters, onClose }) {
 // SHARED COMPONENTS
 // ============================================
 
-// EntitySearchSelect — type-first async search for customers/brokers/leads
+// EntitySearchSelect â€” type-first async search for customers/brokers/leads
 // Used by InteractionsView, InteractionLogModal, and per-row quick log actions
 function EntitySearchSelect({ value, onChange, entityType, onEntityTypeChange, disabled, showTypeSelector = true }) {
   const [query, setQuery] = useState('');
@@ -9589,7 +9757,7 @@ function EntitySearchSelect({ value, onChange, entityType, onEntityTypeChange, d
   );
 }
 
-// QuickLogModal — lightweight interaction log from per-row actions (Customers, Brokers, Pipeline)
+// QuickLogModal â€” lightweight interaction log from per-row actions (Customers, Brokers, Pipeline)
 // entity: { id, entity_type, name, mobile?, additional_mobiles? }
 function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
   const [reps, setReps] = useState([]);
@@ -9635,7 +9803,7 @@ function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
   const canChangeRep = ['admin', 'cco', 'manager'].includes(role);
 
   return (
-    <Modal title={`Log Interaction — ${entity.name}`} onClose={onClose}>
+    <Modal title={`Log Interaction â€” ${entity.name}`} onClose={onClose}>
       <div className="mb-3 flex items-center gap-2">
         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
           entity.entity_type === 'customer' ? 'bg-blue-100 text-blue-700' :
@@ -9747,7 +9915,7 @@ function BulkImport({ entity, onImport, importFile, setImportFile, importResult 
       </div>
       {importResult && (
         <div className={`mt-4 p-3 rounded-lg text-sm ${importResult.success > 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-          {importResult.success > 0 ? `✓ Imported ${importResult.success}` : 'Import failed'}
+          {importResult.success > 0 ? `âœ“ Imported ${importResult.success}` : 'Import failed'}
           {importResult.errors?.length > 0 && <div className="mt-1 text-xs">{importResult.errors.slice(0, 3).join(', ')}</div>}
         </div>
       )}
@@ -10223,35 +10391,35 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               className={`px-3 py-1.5 text-xs rounded ${tool === 'select' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Select"
             >
-              ↖ Select
+              â†– Select
             </button>
             <button
               onClick={() => setTool('pan')}
               className={`px-3 py-1.5 text-xs rounded ${tool === 'pan' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Pan"
             >
-              ✋ Pan
+              âœ‹ Pan
             </button>
             <button
               onClick={() => setTool('addPlot')}
               className={`px-3 py-1.5 text-xs rounded ${tool === 'addPlot' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Add Plot"
             >
-              ▢ Plot
+              â–¢ Plot
             </button>
             <button
               onClick={() => setTool('rectangle')}
               className={`px-3 py-1.5 text-xs rounded ${tool === 'rectangle' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Rectangle"
             >
-              ▭ Rect
+              â–­ Rect
             </button>
             <button
               onClick={() => setTool('circle')}
               className={`px-3 py-1.5 text-xs rounded ${tool === 'circle' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Circle"
             >
-              ○ Circle
+              â—‹ Circle
             </button>
             <button
               onClick={() => setTool('text')}
@@ -10268,7 +10436,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
               title="Add Annotation"
             >
-              📝 Annotate
+              ðŸ“ Annotate
             </button>
             <button
               onClick={handleUndo}
@@ -10276,7 +10444,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50"
               title="Undo"
             >
-              ↶ Undo
+              â†¶ Undo
             </button>
             <button
               onClick={handleRedo}
@@ -10284,7 +10452,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50"
               title="Redo"
             >
-              ↷ Redo
+              â†· Redo
             </button>
           </div>
 
@@ -10293,7 +10461,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               onClick={() => setScale(Math.max(0.5, scale - 0.1))}
               className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded"
             >
-              −
+              âˆ’
             </button>
             <span className="px-3 py-1.5 text-xs">{Math.round(scale * 100)}%</span>
             <button
@@ -10311,7 +10479,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
                 disabled={currentPage === 0}
                 className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded disabled:opacity-50"
               >
-                ‹ Prev
+                â€¹ Prev
               </button>
               <span className="px-3 py-1.5 text-xs">{currentPage + 1} / {pdfPages.length}</span>
               <button
@@ -10319,7 +10487,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
                 disabled={currentPage === pdfPages.length - 1}
                 className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded disabled:opacity-50"
               >
-                Next ›
+                Next â€º
               </button>
             </div>
           )}
@@ -10341,7 +10509,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
                 className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700"
                 title="Delete Selected"
               >
-                🗑️ Delete
+                ðŸ—‘ï¸ Delete
               </button>
             )}
             <button
@@ -10349,7 +10517,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700"
               title="Export as Image"
             >
-              💾 Export
+              ðŸ’¾ Export
             </button>
           </div>
         </div>
@@ -10358,7 +10526,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
         <div className="flex-1 overflow-auto bg-gray-100 p-4" ref={containerRef}>
           {!projectData.map_pdf_base64 ? (
             <div className="p-8 text-center bg-yellow-50 rounded-lg">
-              <p className="text-yellow-800 mb-4">⚠️ No map PDF uploaded for this project</p>
+              <p className="text-yellow-800 mb-4">âš ï¸ No map PDF uploaded for this project</p>
               <label className="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-blue-700">
                 Upload Map PDF
                 <input
@@ -10508,3 +10676,4 @@ function AnnotationEditor({ annotation, plots, onSave, onClose }) {
     </div>
   );
 }
+
