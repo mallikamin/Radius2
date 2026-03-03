@@ -5134,6 +5134,7 @@ def get_zakat_dashboard(
         pending_records = [r for r in all_records if (r.approval_status or "pending") == "pending"]
         open_records = [r for r in approved_records if (r.case_status or "pending") == "open"]
         closed_records = [r for r in all_records if (r.case_status or "pending") == "closed"]
+        rejected_records = [r for r in all_records if (r.approval_status or "pending") == "rejected"]
         funds_pending_records = [r for r in approved_records if (r.disbursement_approval_status or "pending") in ["pending", "postponed"]]
         funds_approved_records = [r for r in approved_records if (r.disbursement_approval_status or "pending") == "approved"]
         ready_for_disbursement_records = [
@@ -5150,6 +5151,8 @@ def get_zakat_dashboard(
             "disbursed_total_value": disbursed_total_value,
             "pending_count": len(pending_records),
             "pending_value": sum(float(r.amount or 0) for r in pending_records),
+            "rejected_count": len(rejected_records),
+            "rejected_value": sum(float(r.amount or 0) for r in rejected_records),
             "open_cases_count": len(open_records),
             "open_cases_value": sum(float(r.approved_amount or 0) for r in open_records),
             "closed_cases_count": len(closed_records),

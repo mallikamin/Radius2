@@ -3420,12 +3420,17 @@ function EOICollectionView() {
     if (dateTo && e.eoi_date > dateTo) return false;
     if (drilldownFilter) {
       if (drilldownFilter.status && e.status !== drilldownFilter.status) return false;
+      if (drilldownFilter.payment_received !== undefined && e.payment_received !== drilldownFilter.payment_received) return false;
       if (drilldownFilter.broker_name !== undefined) {
         const bn = e.broker_name || 'Direct';
         if (bn !== drilldownFilter.broker_name) return false;
       }
       if (drilldownFilter.slab) {
         const m = parseFloat(e.marlas) || 0;
+        if (drilldownFilter.slab === '0-10' && (m <= 0 || m > 10)) return false;
+        if (drilldownFilter.slab === '10-25' && (m <= 10 || m > 25)) return false;
+        if (drilldownFilter.slab === '25-50' && (m <= 25 || m > 50)) return false;
+        if (drilldownFilter.slab === '50+' && m <= 50) return false;
         if (drilldownFilter.slab === '3-5' && (m < 3 || m > 5)) return false;
         if (drilldownFilter.slab === '5-8' && (m < 5 || m > 8)) return false;
         if (drilldownFilter.slab === '8+' && m < 8) return false;
@@ -3746,6 +3751,29 @@ function EOICollectionView() {
     c.customer_id?.toLowerCase().includes(customerSearch.toLowerCase())
   );
 
+  // EOI payment stats (received vs pending)
+  const activeEois = eois.filter(e => e.status === 'active');
+  const receivedEois = activeEois.filter(e => e.payment_received);
+  const pendingEois = activeEois.filter(e => !e.payment_received);
+  const receivedCount = receivedEois.length;
+  const receivedAmount = receivedEois.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+  const pendingPayCount = pendingEois.length;
+  const pendingPayAmount = pendingEois.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+  const topReceived = [...receivedEois].sort((a, b) => (b.amount || 0) - (a.amount || 0)).slice(0, 3);
+  const topPending = [...pendingEois].sort((a, b) => (b.amount || 0) - (a.amount || 0)).slice(0, 3);
+  const collectionRate = (sum?.total_eois_count || 0) > 0 ? Math.round((receivedCount / (receivedCount + pendingPayCount || 1)) * 100) : 0;
+
+  // Area slabs
+  const eoiAreaSlabs = [
+    { key: '0-10', label: 'Up to 10 Marla', min: 0, max: 10 },
+    { key: '10-25', label: '10\u201325 Marla', min: 10, max: 25 },
+    { key: '25-50', label: '25\u201350 Marla', min: 25, max: 50 },
+    { key: '50+', label: '50+ Marla', min: 50, max: Infinity },
+  ].map(slab => {
+    const matching = eois.filter(e => { const m = parseFloat(e.marlas) || 0; return m > slab.min && m <= slab.max; });
+    return { ...slab, count: matching.length, amount: matching.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0) };
+  });
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -3771,90 +3799,112 @@ function EOICollectionView() {
       {/* Dashboard Summary Cards */}
       {sum && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div className="bg-white rounded-2xl shadow-sm border p-5 cursor-pointer hover:shadow-md transition-shadow"
+          {/* KPI Cards: Total / Received / Pending */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-white rounded-xl border p-5 cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => { clearFilters(); }}>
-              <div className="text-xs font-medium text-gray-400 uppercase">Total EOIs</div>
-              <div className="mt-2 text-2xl font-semibold text-gray-900">{sum.total_eois_count}</div>
-              <div className="text-sm text-gray-500 mt-1">{formatCurrency(sum.total_eois_amount)}</div>
+              <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Total EOIs</div>
+              <div className="text-3xl font-bold text-gray-900 mt-1">{sum.total_eois_count}</div>
+              <div className="text-sm text-gray-500 mt-1">{formatCurrency(sum.total_eois_amount)} total value</div>
             </div>
-            <div className="bg-white rounded-2xl shadow-sm border p-5 cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => setDrilldownFilter({ status: 'active' })}>
-              <div className="text-xs font-medium text-emerald-500 uppercase">Active</div>
-              <div className="mt-2 text-2xl font-semibold text-emerald-600">{sb.active?.count || 0}</div>
-              <div className="text-sm text-gray-500 mt-1">{formatCurrency(sb.active?.amount || 0)}</div>
+            <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-5 cursor-pointer hover:shadow-md transition-shadow"
+              onClick={() => setDrilldownFilter({ status: 'active', payment_received: true })}>
+              <div className="text-xs font-semibold text-emerald-600 uppercase tracking-wide">Received (Paid)</div>
+              <div className="text-3xl font-bold text-emerald-700 mt-1">{receivedCount}</div>
+              <div className="text-sm text-emerald-600 mt-1">{formatCurrency(receivedAmount)} collected</div>
             </div>
-            <div className="bg-white rounded-2xl shadow-sm border p-5 cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => setDrilldownFilter({ status: 'converted' })}>
-              <div className="text-xs font-medium text-blue-500 uppercase">Converted</div>
-              <div className="mt-2 text-2xl font-semibold text-blue-600">{sb.converted?.count || 0}</div>
-              <div className="text-sm text-gray-500 mt-1">{formatCurrency(sb.converted?.amount || 0)}</div>
+            <div className="bg-amber-50 rounded-xl border border-amber-200 p-5 cursor-pointer hover:shadow-md transition-shadow"
+              onClick={() => setDrilldownFilter({ status: 'active', payment_received: false })}>
+              <div className="text-xs font-semibold text-amber-600 uppercase tracking-wide">Pending (Unpaid)</div>
+              <div className="text-3xl font-bold text-amber-700 mt-1">{pendingPayCount}</div>
+              <div className="text-sm text-amber-600 mt-1">{formatCurrency(pendingPayAmount)} outstanding</div>
             </div>
-            <div className="bg-white rounded-2xl shadow-sm border p-5 cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => setDrilldownFilter({ status: 'cancelled' })}>
-              <div className="text-xs font-medium text-red-500 uppercase">Cancelled</div>
-              <div className="mt-2 text-2xl font-semibold text-red-600">{(sb.cancelled?.count || 0) + (sb.refunded?.count || 0)}</div>
-              <div className="text-sm text-gray-500 mt-1">{formatCurrency((sb.cancelled?.amount || 0) + (sb.refunded?.amount || 0))}</div>
+          </div>
+
+          {/* Area Slabs */}
+          <div className="grid grid-cols-4 gap-3">
+            {eoiAreaSlabs.map(slab => (
+              <div key={slab.key} className="bg-white rounded-lg border px-4 py-3 text-center cursor-pointer hover:bg-gray-50 transition-colors"
+                onClick={() => setDrilldownFilter({ slab: slab.key })}>
+                <div className="text-xs text-gray-400 font-medium">{slab.label}</div>
+                <div className="text-xl font-bold text-gray-800">{slab.count}</div>
+                <div className="text-xs text-gray-500">{formatCurrency(slab.amount)}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* EOI Funnel */}
+          <div className="bg-white rounded-xl border p-6">
+            <h3 className="text-sm font-semibold text-gray-700 mb-4 uppercase tracking-wide">EOI Funnel</h3>
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium text-gray-700">Total EOIs Created</span>
+                <span className="text-sm font-bold text-gray-900">{sum.total_eois_count} — {formatCurrency(sum.total_eois_amount)}</span>
+              </div>
+              <div className="h-10 bg-gray-800 rounded-lg flex items-center px-4 cursor-pointer hover:brightness-105 transition-all"
+                onClick={() => clearFilters()} style={{width:'100%'}}>
+                <span className="text-white text-xs font-medium">{sum.total_eois_count} EOIs from {dashboard?.leaderboard?.brokers?.length || 0} brokers + direct</span>
+              </div>
             </div>
+            <div className="flex justify-center my-1">
+              <svg className="w-5 h-5 text-gray-300" fill="currentColor" viewBox="0 0 20 20"><path d="M10 14l-5-5h10l-5 5z"/></svg>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-medium text-emerald-700">Received (Paid)</span>
+                  <span className="text-sm font-bold text-emerald-800">{receivedCount} — {formatCurrency(receivedAmount)}</span>
+                </div>
+                <div className="h-10 bg-emerald-600 rounded-lg flex items-center px-4 cursor-pointer hover:brightness-105 transition-all"
+                  onClick={() => setDrilldownFilter({ status: 'active', payment_received: true })}>
+                  <span className="text-white text-xs font-medium">{collectionRate}% collection rate</span>
+                </div>
+                {topReceived.length > 0 && <div className="mt-2 text-xs text-gray-500 space-y-0.5">
+                  {topReceived.map((e, i) => <div key={i}>{e.party_name} — {formatCurrency(e.amount)}</div>)}
+                  {receivedCount > 3 && <div className="text-gray-400">+ {receivedCount - 3} more...</div>}
+                </div>}
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-medium text-amber-700">Pending (Unpaid)</span>
+                  <span className="text-sm font-bold text-amber-800">{pendingPayCount} — {formatCurrency(pendingPayAmount)}</span>
+                </div>
+                <div className="h-10 bg-amber-500 rounded-lg flex items-center px-4 cursor-pointer hover:brightness-105 transition-all"
+                  onClick={() => setDrilldownFilter({ status: 'active', payment_received: false })}>
+                  <span className="text-white text-xs font-medium">{100 - collectionRate}% awaiting payment</span>
+                </div>
+                {topPending.length > 0 && <div className="mt-2 text-xs text-gray-500 space-y-0.5">
+                  {topPending.map((e, i) => <div key={i}>{e.party_name} — {formatCurrency(e.amount)}</div>)}
+                  {pendingPayCount > 3 && <div className="text-gray-400">+ {pendingPayCount - 3} more...</div>}
+                </div>}
+              </div>
+            </div>
+          </div>
+
+          {/* Broker Leaderboard */}
+          {dashboard?.leaderboard?.brokers?.length > 0 && (
             <div className="bg-white rounded-2xl shadow-sm border p-5">
-              <div className="text-xs font-medium text-gray-400 uppercase">Total Area</div>
-              <div className="mt-2 text-2xl font-semibold text-gray-900">{(sum.total_marlas || 0).toFixed(1)} <span className="text-sm font-normal text-gray-400">Marla</span></div>
-              <div className="text-sm text-gray-500 mt-1">Avg {sum.total_eois_count ? formatCurrency(sum.total_eois_amount / sum.total_eois_count) : 0}/EOI</div>
-            </div>
-          </div>
-
-          {/* Broker Leaderboard + Marla Slabs */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Broker Leaderboard */}
-            {dashboard?.leaderboard?.brokers?.length > 0 && (
-              <div className="bg-white rounded-2xl shadow-sm border p-5">
-                <h3 className="text-sm font-semibold text-gray-900 mb-4">Broker Leaderboard</h3>
-                <div className="space-y-2">
-                  {dashboard.leaderboard.brokers.map((b, i) => (
-                    <div key={i}
-                      className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
-                      onClick={() => setDrilldownFilter({ broker_name: b.broker_name || 'Direct' })}>
-                      <div className="flex items-center gap-3">
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
-                          i === 0 ? 'bg-amber-100 text-amber-700' : i === 1 ? 'bg-gray-200 text-gray-700' : i === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-50 text-gray-500'
-                        }`}>{i + 1}</div>
-                        <div>
-                          <div className="text-sm font-medium">{b.broker_name || 'Direct'}</div>
-                          <div className="text-xs text-gray-400">{b.count} EOIs</div>
-                        </div>
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Broker Leaderboard</h3>
+              <div className="space-y-2">
+                {dashboard.leaderboard.brokers.map((b, i) => (
+                  <div key={i}
+                    className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
+                    onClick={() => setDrilldownFilter({ broker_name: b.broker_name || 'Direct' })}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                        i === 0 ? 'bg-amber-100 text-amber-700' : i === 1 ? 'bg-gray-200 text-gray-700' : i === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-50 text-gray-500'
+                      }`}>{i + 1}</div>
+                      <div>
+                        <div className="text-sm font-medium">{b.broker_name || 'Direct'}</div>
+                        <div className="text-xs text-gray-400">{b.count} EOIs</div>
                       </div>
-                      <div className="text-sm font-semibold text-green-600">{formatCurrency(b.amount)}</div>
                     </div>
-                  ))}
-                </div>
+                    <div className="text-sm font-semibold text-green-600">{formatCurrency(b.amount)}</div>
+                  </div>
+                ))}
               </div>
-            )}
-
-            {/* Marla Slab Breakdown */}
-            {dashboard?.marlas_slabs?.length > 0 && (
-              <div className="bg-white rounded-2xl shadow-sm border p-5">
-                <h3 className="text-sm font-semibold text-gray-900 mb-4">By Area (Marlas)</h3>
-                <div className="space-y-3">
-                  {dashboard.marlas_slabs.filter(s => s.count > 0).map((s, i) => {
-                    const maxCount = Math.max(...dashboard.marlas_slabs.map(x => x.count), 1);
-                    const pct = (s.count / maxCount) * 100;
-                    return (
-                      <div key={i} className="cursor-pointer hover:bg-gray-50 p-3 rounded-lg transition-colors"
-                        onClick={() => setDrilldownFilter({ slab: s.slab })}>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="font-medium">{s.slab} Marla</span>
-                          <span className="text-gray-500">{s.count} EOIs &middot; {formatCurrency(s.amount)}</span>
-                        </div>
-                        <div className="w-full bg-gray-100 rounded-full h-2">
-                          <div className="bg-gray-900 h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
         </>
       )}
 
@@ -3863,8 +3913,10 @@ function EOICollectionView() {
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 flex items-center justify-between">
           <span className="text-sm text-blue-700">
             Filtered: {drilldownFilter.status && `Status = ${drilldownFilter.status}`}
-            {drilldownFilter.broker_name !== undefined && `Broker = ${drilldownFilter.broker_name}`}
-            {drilldownFilter.slab && `Area = ${drilldownFilter.slab} Marla`}
+            {drilldownFilter.payment_received === true && ' | Payment = Received'}
+            {drilldownFilter.payment_received === false && ' | Payment = Pending'}
+            {drilldownFilter.broker_name !== undefined && ` | Broker = ${drilldownFilter.broker_name}`}
+            {drilldownFilter.slab && ` | Area = ${drilldownFilter.slab} Marla`}
           </span>
           <button onClick={() => setDrilldownFilter(null)} className="text-sm text-blue-600 hover:text-blue-800 font-medium">Clear</button>
         </div>
@@ -4484,17 +4536,163 @@ function ZakatView({ deepLink = null }) {
         <div className="flex items-center gap-3"><button onClick={exportCsv} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 text-gray-700">Export CSV</button><button onClick={openCreate} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">New Zakat Request</button></div>
       </div>
 
-      {summary && <div className="grid grid-cols-2 md:grid-cols-8 gap-4">
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-gray-400 uppercase">Requests</div><div className="mt-2 text-2xl font-semibold">{summary.requested_total_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.requested_total_value || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-blue-500 uppercase">Approved</div><div className="mt-2 text-2xl font-semibold text-blue-600">{summary.approved_total_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.approved_total_value || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-purple-500 uppercase">Pending CFO</div><div className="mt-2 text-2xl font-semibold text-purple-600">{summary.funds_pending_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.funds_pending_value || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-sky-500 uppercase">CFO Approved</div><div className="mt-2 text-2xl font-semibold text-sky-600">{summary.funds_approved_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.funds_approved_value || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-indigo-500 uppercase">Ready to Disburse</div><div className="mt-2 text-2xl font-semibold text-indigo-600">{summary.ready_for_disbursement_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.ready_for_disbursement_value || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-emerald-500 uppercase">Disbursed</div><div className="mt-2 text-2xl font-semibold text-emerald-600">{summary.disbursed_total_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.disbursed_total_value || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-amber-500 uppercase">Pending</div><div className="mt-2 text-2xl font-semibold text-amber-600">{summary.pending_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.pending_value || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-indigo-500 uppercase">Open Cases</div><div className="mt-2 text-2xl font-semibold text-indigo-600">{summary.open_cases_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.open_cases_value || 0)}</div></div>
-        <div className="bg-white rounded-2xl shadow-sm border p-5"><div className="text-xs text-gray-500 uppercase">Closed Cases</div><div className="mt-2 text-2xl font-semibold text-gray-700">{summary.closed_cases_count || 0}</div><div className="text-sm text-gray-500">{formatCurrency(summary.closed_cases_value || 0)}</div></div>
-      </div>}
+      {/* Zakat Pipeline Funnel */}
+      {summary && (() => {
+        const totalCount = summary.requested_total_count || 0;
+        const totalValue = summary.requested_total_value || 0;
+        const approvedCount = summary.approved_total_count || 0;
+        const approvedValue = summary.approved_total_value || 0;
+        const pendingCeoCount = summary.pending_count || 0;
+        const pendingCeoValue = summary.pending_value || 0;
+        const rejectedCount = summary.rejected_count || (totalCount - approvedCount - pendingCeoCount);
+        const rejectedValue = summary.rejected_value || (totalValue - approvedValue - pendingCeoValue);
+        const fundsApprovedCount = summary.funds_approved_count || 0;
+        const fundsApprovedValue = summary.funds_approved_value || 0;
+        const fundsPendingCount = summary.funds_pending_count || 0;
+        const fundsPendingValue = summary.funds_pending_value || 0;
+        const disbursedCount = fundsApprovedCount - (summary.ready_for_disbursement_count || 0);
+        const disbursedValue = summary.disbursed_total_value || 0;
+        const pendingDisbCount = summary.ready_for_disbursement_count || 0;
+        const pendingDisbValue = summary.ready_for_disbursement_value || 0;
+        const funnelBar = "rounded-lg p-3.5 cursor-pointer transition-all hover:brightness-105";
+        return (
+        <div className="bg-white rounded-xl border p-6">
+          <h3 className="text-sm font-semibold text-gray-700 mb-6 uppercase tracking-wide text-center">Zakat Disbursement Pipeline</h3>
+          <div className="flex flex-col items-center gap-1.5">
+
+            {/* Level 1: Total */}
+            <div className={`${funnelBar} bg-gradient-to-r from-gray-800 to-gray-700 flex items-center justify-between`} style={{width:'100%'}}
+              onClick={() => setStatusFilter('')}>
+              <div className="flex items-center gap-3">
+                <div className="bg-white/20 rounded-full w-8 h-8 flex items-center justify-center text-white text-sm font-bold">1</div>
+                <div><div className="text-white font-semibold text-sm">Total Zakat Requests</div><div className="text-gray-400 text-xs">All incoming requests submitted</div></div>
+              </div>
+              <div className="text-right"><div className="text-white text-xl font-bold">{totalCount}</div><div className="text-gray-400 text-xs">{formatCurrency(totalValue)} requested</div></div>
+            </div>
+
+            <div className="w-0.5 h-3 bg-gray-300"></div>
+
+            {/* Level 2: Three-way split */}
+            <div className="grid grid-cols-3 gap-3" style={{width:'100%'}}>
+              <div className={`${funnelBar} bg-gradient-to-r from-blue-600 to-blue-500`}
+                onClick={() => setStatusFilter('approved')}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="bg-white/20 rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold">2</div>
+                  <div className="text-white font-semibold text-sm">Approved by CEO/CFO</div>
+                </div>
+                <div className="text-blue-100 text-xs mb-2">Case reviewed and approved</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white text-xl font-bold">{approvedCount}</span>
+                  <span className="text-blue-200 text-xs">{formatCurrency(approvedValue)}</span>
+                </div>
+              </div>
+              <div className={`${funnelBar} bg-gradient-to-r from-amber-500 to-amber-400`}
+                onClick={() => setStatusFilter('pending')}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="bg-white/20 rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold">{'\u2014'}</div>
+                  <div className="text-white font-semibold text-sm">Pending CEO/CFO</div>
+                </div>
+                <div className="text-amber-100 text-xs mb-2">Awaiting case review</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white text-xl font-bold">{pendingCeoCount}</span>
+                  <span className="text-amber-100 text-xs">{formatCurrency(pendingCeoValue)}</span>
+                </div>
+              </div>
+              <div className={`${funnelBar} bg-gradient-to-r from-red-500 to-red-400`}
+                onClick={() => setStatusFilter('rejected')}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="bg-white/20 rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold">{'\u2717'}</div>
+                  <div className="text-white font-semibold text-sm">Rejected</div>
+                </div>
+                <div className="text-red-100 text-xs mb-2">Case not approved</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white text-xl font-bold">{Math.max(rejectedCount, 0)}</span>
+                  <span className="text-red-200 text-xs">{formatCurrency(Math.max(rejectedValue, 0))}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Connector from Approved column */}
+            <div className="flex" style={{width:'100%'}}><div className="flex flex-col items-center" style={{width:'33.33%'}}><div className="w-0.5 h-3 bg-gray-300"></div></div><div style={{width:'66.66%'}}></div></div>
+
+            {/* Level 3: CFO Disbursement split */}
+            <div className="flex gap-3" style={{width:'100%'}}>
+              <div className={`${funnelBar} bg-gradient-to-r from-indigo-600 to-indigo-500`} style={{width:'50%'}}
+                onClick={() => setStatusFilter('funds_approved')}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="bg-white/20 rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold">3</div>
+                  <div className="text-white font-semibold text-sm">CFO Approved Disbursement</div>
+                </div>
+                <div className="text-indigo-200 text-xs mb-2">Cleared to release funds</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white text-xl font-bold">{fundsApprovedCount}</span>
+                  <span className="text-indigo-200 text-xs">{formatCurrency(fundsApprovedValue)}</span>
+                </div>
+              </div>
+              <div className={`${funnelBar} bg-gradient-to-r from-purple-500 to-purple-400`} style={{width:'50%'}}
+                onClick={() => setStatusFilter('funds_pending')}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="bg-white/20 rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold">{'\u2014'}</div>
+                  <div className="text-white font-semibold text-sm">Pending CFO Disbursement Approval</div>
+                </div>
+                <div className="text-purple-200 text-xs mb-2">Approved case, awaiting funds clearance</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white text-xl font-bold">{fundsPendingCount}</span>
+                  <span className="text-purple-200 text-xs">{formatCurrency(fundsPendingValue)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Connector from CFO Approved */}
+            <div className="flex" style={{width:'100%'}}><div className="flex flex-col items-center" style={{width:'25%'}}><div className="w-0.5 h-3 bg-gray-300"></div></div><div style={{width:'75%'}}></div></div>
+
+            {/* Level 4: Disbursed vs Pending */}
+            <div className="flex gap-3" style={{width:'75%'}}>
+              <div className={`${funnelBar} bg-gradient-to-r from-emerald-600 to-emerald-500`} style={{width:'55%'}}
+                onClick={() => setStatusFilter('ready_for_disbursement')}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="bg-white/20 rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold">4</div>
+                  <div className="text-white font-semibold text-sm">Disbursed</div>
+                </div>
+                <div className="text-emerald-200 text-xs mb-2">Funds released to beneficiary</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white text-xl font-bold">{Math.max(disbursedCount, 0)}</span>
+                  <span className="text-emerald-200 text-xs">{formatCurrency(disbursedValue)}</span>
+                </div>
+              </div>
+              <div className={`${funnelBar} bg-gradient-to-r from-amber-500 to-amber-400`} style={{width:'45%'}}
+                onClick={() => setStatusFilter('ready_for_disbursement')}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="bg-white/20 rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold">{'\u2014'}</div>
+                  <div className="text-white font-semibold text-sm">Pending Disbursement</div>
+                </div>
+                <div className="text-amber-100 text-xs mb-2">CFO approved, awaiting finance release</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white text-xl font-bold">{pendingDisbCount}</span>
+                  <span className="text-amber-100 text-xs">{formatCurrency(pendingDisbValue)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Open / Closed Cases */}
+            <div className="mt-4 grid grid-cols-2 gap-3" style={{width:'55%'}}>
+              <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-center cursor-pointer hover:bg-indigo-100 transition-colors"
+                onClick={() => setStatusFilter('approved')}>
+                <div className="text-indigo-700 text-xs font-semibold uppercase">Open Cases</div>
+                <div className="text-indigo-800 text-xl font-bold">{summary.open_cases_count || 0}</div>
+                <div className="text-indigo-600 text-xs">{formatCurrency(summary.open_cases_value || 0)}</div>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center cursor-pointer hover:bg-gray-100 transition-colors">
+                <div className="text-gray-500 text-xs font-semibold uppercase">Closed Cases</div>
+                <div className="text-gray-800 text-xl font-bold">{summary.closed_cases_count || 0}</div>
+                <div className="text-gray-500 text-xs">{formatCurrency(summary.closed_cases_value || 0)}</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+        );
+      })()}
 
       <div className="bg-white rounded-2xl shadow-sm border p-4">
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 items-end">
