@@ -1031,7 +1031,7 @@ function InventoryView() {
                   <td className="px-6 py-4 text-sm font-mono text-gray-500">{i.inventory_id}</td>
                   <td className="px-6 py-4 text-sm">{i.project_name}</td>
                   <td className="px-6 py-4 text-sm font-medium">{i.unit_number}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{i.block || 'â€”'}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{i.block || '—'}</td>
                   <td className="px-6 py-4 text-sm text-right">{i.area_marla} M</td>
                   <td className="px-6 py-4 text-sm text-right">{formatCurrency(i.rate_per_marla)}</td>
                   <td className="px-6 py-4 text-sm text-right font-medium">{formatCurrency(i.total_value)}</td>
@@ -1125,7 +1125,7 @@ function SellModal({ item, onClose, onSuccess }) {
           <div className="grid grid-cols-3 gap-4 text-sm">
             <div><span className="text-gray-500">Project:</span> <span className="font-medium">{item.project_name}</span></div>
             <div><span className="text-gray-500">Unit:</span> <span className="font-medium">{item.unit_number}</span></div>
-            <div><span className="text-gray-500">Block:</span> <span className="font-medium">{item.block || 'â€”'}</span></div>
+            <div><span className="text-gray-500">Block:</span> <span className="font-medium">{item.block || '—'}</span></div>
           </div>
         </div>
 
@@ -1567,7 +1567,7 @@ function NewTransactionModal({ onClose, onSuccess }) {
                 <button key={i.id} type="button" onClick={() => selectUnit(i)}
                   className={`w-full text-left px-3 py-2 text-sm border-b last:border-0 ${selectedInv?.id === i.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'}`}>
                   <div className="font-medium">{i.unit_number} {i.block && `(${i.block})`}</div>
-                  <div className="text-xs text-gray-500">{i.area_marla} Marla â€¢ {formatCurrency(i.rate_per_marla)}/M</div>
+                  <div className="text-xs text-gray-500">{i.area_marla} Marla • {formatCurrency(i.rate_per_marla)}/M</div>
                 </button>
               ))}
             </div>
@@ -1639,9 +1639,9 @@ function NewTransactionModal({ onClose, onSuccess }) {
 // ============================================
 function TransactionDetailModal({ txn, onClose, onUpdate }) {
   const [installments, setInstallments] = useState(txn.installments || []);
-  const customerName = txn.customer_name || txn.customer?.name || 'â€”';
-  const brokerName = txn.broker_name || txn.broker?.name || 'â€”';
-  const projectName = txn.project_name || txn.project?.name || 'â€”';
+  const customerName = txn.customer_name || txn.customer?.name || '—';
+  const brokerName = txn.broker_name || txn.broker?.name || '—';
+  const projectName = txn.project_name || txn.project?.name || '—';
 
   const updateInstallment = async (inst, field, value) => {
     try {
@@ -3156,7 +3156,7 @@ function ReceiptsView() {
                     <button key={c.id} type="button" onClick={() => { selectCustomer(c); setCustomerSearch(c.name); }}
                       className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:bg-gray-50">
                       <div className="font-medium">{c.name}</div>
-                      <div className="text-xs text-gray-500">{c.customer_id} â€¢ {c.mobile}</div>
+                      <div className="text-xs text-gray-500">{c.customer_id} • {c.mobile}</div>
                     </button>
                   ))}
                 </div>
@@ -3319,7 +3319,7 @@ function ReceiptDetailModal({ receipt, onClose }) {
 }
 
 // ============================================
-// EOI COLLECTION VIEW â€” Expression of Interest
+// EOI COLLECTION VIEW — Expression of Interest
 // ============================================
 function EOICollectionView() {
   const [eois, setEois] = useState([]);
@@ -3536,7 +3536,7 @@ function EOICollectionView() {
     if (!convertForm.rate_per_marla) { window.showToast?.('Error', 'Rate per marla required', 'error'); return; }
     try {
       const res = await api.post(`/eoi/${convertingEoi.id || convertingEoi.eoi_id}/convert`, convertForm);
-      window.showToast?.('Converted', `EOI converted â†’ ${res.data?.transaction?.transaction_id || 'Transaction created'}`, 'success');
+      window.showToast?.('Converted', `EOI converted → ${res.data?.transaction?.transaction_id || 'Transaction created'}`, 'success');
       setShowConvertModal(false); setConvertingEoi(null); setConvertForm(emptyConvertForm);
       loadData();
     } catch (e) { window.showToast?.('Error', e.response?.data?.detail || 'Conversion failed', 'error'); }
@@ -3558,7 +3558,7 @@ function EOICollectionView() {
     downloadCSV(data, `eoi_collection_${new Date().toISOString().split('T')[0]}.csv`);
   };
 
-  // PDF Acknowledgment Slip â€” Sitara Grand Bazaar
+  // PDF Acknowledgment Slip — Sitara Grand Bazaar
   const generateEOIPDF = (eoi) => {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -3570,13 +3570,13 @@ function EOICollectionView() {
     let y = 20;
 
     // --- SBL Logo (square, high quality) ---
-    try { doc.addImage(SBL_LOGO_BASE64, 'JPEG', 15, 10, 28, 28); } catch (e) { /* logo load fail â€” skip */ }
+    try { doc.addImage(SBL_LOGO_BASE64, 'JPEG', 15, 10, 28, 28); } catch (e) { /* logo load fail — skip */ }
 
     // Helper: draw a clear checkmark inside a box
     const drawCheck = (x, yc, size) => {
       doc.setDrawColor(21, 71, 81);
       doc.setLineWidth(0.6);
-      // Short stroke down-right, then long stroke up-right (classic âœ“)
+      // Short stroke down-right, then long stroke up-right (classic ✓)
       doc.line(x + size * 0.15, yc + size * 0.5, x + size * 0.4, yc + size * 0.75);
       doc.line(x + size * 0.4, yc + size * 0.75, x + size * 0.85, yc + size * 0.2);
     };
@@ -3753,7 +3753,7 @@ function EOICollectionView() {
         <div>
           <h2 className="text-2xl font-semibold text-gray-900">EOI Collection</h2>
           <p className="text-sm text-gray-500 mt-1">
-            {selectedProject?.name || 'Select Project'} â€” Expression of Interest tracking
+            {selectedProject?.name || 'Select Project'} — Expression of Interest tracking
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -3937,7 +3937,7 @@ function EOICollectionView() {
               <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Marlas</th>
               <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
               <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Paid</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Recorded</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Recorded / By</th>
               <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4"></th>
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
@@ -3958,12 +3958,13 @@ function EOICollectionView() {
                   </td>
                   <td className="px-6 py-4 text-center text-lg">
                     {e.payment_received
-                      ? <span className="text-emerald-600" title="Payment Received">â˜‘</span>
-                      : <span className="text-red-400" title="Payment Not Received">â˜</span>}
+                      ? <span className="text-emerald-600" title="Payment Received">✓</span>
+                      : <span className="text-red-400" title="Payment Not Received">✗</span>}
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-sm text-gray-600">{e.eoi_date}</div>
                     <div className="text-xs text-gray-400">{e.created_at ? formatTimestamp(e.created_at) : ''}</div>
+                    {e.created_by_name && <div className="text-xs text-blue-500 mt-0.5">by {e.created_by_name}</div>}
                   </td>
                   <td className="px-6 py-4 text-right" onClick={ev => ev.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1">
@@ -4016,7 +4017,7 @@ function EOICollectionView() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label>
                 <select value={form.payment_method} onChange={e => setForm({...form, payment_method: e.target.value})} className={`w-full border rounded-lg px-3 py-2 text-sm ${form.payment_received && !form.payment_method ? 'border-red-300' : ''}`}>
-                  <option value="">â€” Select â€”</option>
+                  <option value="">— Select —</option>
                   <option value="cash">Cash</option>
                   <option value="cheque">Cheque</option>
                   <option value="bank_transfer">Bank Transfer</option>
@@ -4028,7 +4029,7 @@ function EOICollectionView() {
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Received</label>
                 <button type="button" onClick={() => setForm({...form, payment_received: !form.payment_received})}
                   className={`w-full border rounded-lg px-3 py-2 text-sm font-medium transition-colors ${form.payment_received ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-red-50 text-red-600 border-red-200'}`}>
-                  {form.payment_received ? 'â˜‘ Received' : 'â˜ Not Received'}
+                  {form.payment_received ? '✓ Received' : '✗ Not Received'}
                 </button>
               </div>
               <Input label="EOI Date" type="date" value={form.eoi_date} onChange={e => setForm({...form, eoi_date: e.target.value})} />
@@ -4089,7 +4090,7 @@ function EOICollectionView() {
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Payment Received</label>
                 <span className={`text-xl ${selectedEoi.payment_received ? 'text-emerald-600' : 'text-red-400'}`}>
-                  {selectedEoi.payment_received ? 'â˜‘' : 'â˜'} <span className="text-sm text-gray-600">{selectedEoi.payment_received ? 'Received' : 'Not Received'}</span>
+                  {selectedEoi.payment_received ? '✓' : '✗'} <span className="text-sm text-gray-600">{selectedEoi.payment_received ? 'Received' : 'Not Received'}</span>
                 </span>
               </div>
               <div>
@@ -4148,7 +4149,7 @@ function EOICollectionView() {
       {showConvertModal && convertingEoi && (
         <Modal title={`Convert ${convertingEoi.eoi_id} to Transaction`} onClose={() => { setShowConvertModal(false); setConvertingEoi(null); }} wide>
           <div className="bg-blue-50 rounded-lg p-3 mb-4 text-sm text-blue-700">
-            Converting EOI for <strong>{convertingEoi.party_name}</strong> â€” {formatCurrency(convertingEoi.amount)} token will become the first receipt against the new transaction.
+            Converting EOI for <strong>{convertingEoi.party_name}</strong> — {formatCurrency(convertingEoi.amount)} token will become the first receipt against the new transaction.
           </div>
           <form onSubmit={handleConvert} className="space-y-4">
             {/* Customer Selection */}
@@ -4160,7 +4161,7 @@ function EOICollectionView() {
               {customerSearch && !convertForm.customer_id && (
                 <div className="border rounded-lg max-h-32 overflow-y-auto">
                   {filteredCustomers.length === 0 ? (
-                    <div className="p-3 text-sm text-gray-400 text-center">No customers found â€” create one first in Customers tab</div>
+                    <div className="p-3 text-sm text-gray-400 text-center">No customers found — create one first in Customers tab</div>
                   ) : filteredCustomers.slice(0, 5).map(c => (
                     <button key={c.id} type="button" onClick={() => { setConvertForm({...convertForm, customer_id: c.customer_id || c.id}); setCustomerSearch(c.name); }}
                       className="w-full text-left px-3 py-2 text-sm border-b last:border-0 hover:bg-gray-50">
@@ -4178,7 +4179,7 @@ function EOICollectionView() {
               <select value={convertForm.inventory_id} onChange={e => setConvertForm({...convertForm, inventory_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
                 <option value="">No specific unit</option>
                 {inventoryList.map(inv => (
-                  <option key={inv.id} value={inv.inventory_id || inv.id}>{inv.unit_number} â€” {inv.block || ''} ({inv.area_marla} marla)</option>
+                  <option key={inv.id} value={inv.inventory_id || inv.id}>{inv.unit_number} — {inv.block || ''} ({inv.area_marla} marla)</option>
                 ))}
               </select>
             </div>
@@ -4703,7 +4704,7 @@ function InteractionsView() {
           </div>
           {summary.pending_followups > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <div className="text-sm font-medium text-amber-800">âš ï¸ {summary.pending_followups} pending follow-ups due</div>
+              <div className="text-sm font-medium text-amber-800">⚠️ {summary.pending_followups} pending follow-ups due</div>
             </div>
           )}
         </>
@@ -4893,7 +4894,7 @@ function CampaignsView() {
       if (e.response?.status === 409 && e.response?.data?.detail?.duplicate) {
         const dup = e.response.data.detail.duplicate;
         const repInfo = dup.assigned_rep ? ` | Assigned to: ${dup.assigned_rep}` : '';
-        if (window.showToast) window.showToast('Duplicate Mobile', `Already exists as ${dup.type} ${dup.entity_id} â€” ${dup.name}${repInfo}`, 'error');
+        if (window.showToast) window.showToast('Duplicate Mobile', `Already exists as ${dup.type} ${dup.entity_id} — ${dup.name}${repInfo}`, 'error');
         // Keep modal open so user can correct mobile
       } else {
         alert(e.response?.data?.detail?.message || e.response?.data?.detail || 'Error');
@@ -5005,7 +5006,7 @@ function CampaignsView() {
                     <div className="flex justify-between items-start">
                       <div>
                         <div className="font-medium text-sm">{c.name}</div>
-                        <div className="text-xs text-gray-500">{c.source} â€¢ {c.start_date}</div>
+                        <div className="text-xs text-gray-500">{c.source} • {c.start_date}</div>
                       </div>
                       <span className={`px-2 py-0.5 rounded-full text-xs ${c.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-gray-100'}`}>{c.status}</span>
                     </div>
@@ -5078,7 +5079,7 @@ function CampaignsView() {
             )}
 
             {!selectedCampaign ? (
-              <div className="text-center py-12 text-gray-400 text-sm">â† Select a campaign to view leads</div>
+              <div className="text-center py-12 text-gray-400 text-sm">← Select a campaign to view leads</div>
             ) : leads.length === 0 ? (
               <div className="text-center py-12 text-gray-400 text-sm">No leads in this campaign</div>
             ) : (
@@ -5958,9 +5959,9 @@ function PaymentsView() {
               </div>
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
                 <select value={form.status} onChange={e => setForm({...form, status: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="completed">âœ… Completed</option>
-                  <option value="pending">â³ Pending</option>
-                  <option value="cancelled">âŒ Cancelled</option>
+                  <option value="completed">✅ Completed</option>
+                  <option value="pending">⏳ Pending</option>
+                  <option value="cancelled">❌ Cancelled</option>
                 </select>
               </div>
             </div>
@@ -6830,7 +6831,7 @@ function ReportsView() {
                       <div className="text-sm text-gray-300">
                         Generated via <span className="font-semibold text-white">ORBIT</span>
                         {customerReport.report_header?.generated_at && (
-                          <span className="ml-4">â€¢ {new Date(customerReport.report_header.generated_at).toLocaleString()}</span>
+                          <span className="ml-4">• {new Date(customerReport.report_header.generated_at).toLocaleString()}</span>
                         )}
                       </div>
                     </div>
@@ -6847,8 +6848,8 @@ function ReportsView() {
                     <div>
                       <h3 className="text-xl font-semibold text-gray-900">{customerReport.customer.name}</h3>
                       <div className="text-sm text-gray-600 mt-1">
-                        {customerReport.customer.customer_id} â€¢ {customerReport.customer.mobile}
-                        {customerReport.customer.email && ` â€¢ ${customerReport.customer.email}`}
+                        {customerReport.customer.customer_id} • {customerReport.customer.mobile}
+                        {customerReport.customer.email && ` • ${customerReport.customer.email}`}
                       </div>
                       {customerReport.customer.address && (
                         <div className="text-sm text-gray-500 mt-1">{customerReport.customer.address}</div>
@@ -6914,7 +6915,7 @@ function ReportsView() {
                                   else newExpanded.add(idx);
                                   setExpandedTransactions(newExpanded);
                                 }} className="text-gray-600 hover:text-gray-900">
-                                  {expandedTransactions.has(idx) ? 'â–¼' : 'â–¶'}
+                                  {expandedTransactions.has(idx) ? '▼' : '▶'}
                                 </button>
                               </td>
                             </tr>
@@ -7162,7 +7163,7 @@ function ReportsView() {
                       <div className="text-sm text-gray-300">
                         Generated via <span className="font-semibold text-white">ORBIT</span>
                         {projectReport.report_header?.generated_at && (
-                          <span className="ml-4">â€¢ {new Date(projectReport.report_header.generated_at).toLocaleString()}</span>
+                          <span className="ml-4">• {new Date(projectReport.report_header.generated_at).toLocaleString()}</span>
                         )}
                       </div>
                     </div>
@@ -7179,7 +7180,7 @@ function ReportsView() {
                     <div>
                       <h3 className="text-xl font-semibold text-gray-900">{projectReport.project.name}</h3>
                       <div className="text-sm text-gray-600 mt-1">
-                        {projectReport.project.project_id} â€¢ {projectReport.project.location}
+                        {projectReport.project.project_id} • {projectReport.project.location}
                       </div>
                       {projectReport.project.description && (
                         <div className="text-sm text-gray-500 mt-2">{projectReport.project.description}</div>
@@ -7331,14 +7332,14 @@ function ReportsView() {
                             <div>
                               <h5 className="font-semibold text-gray-900">{customer.customer_name}</h5>
                               <div className="text-xs text-gray-600 mt-1">
-                                {customer.customer_id} â€¢ {customer.mobile}
+                                {customer.customer_id} • {customer.mobile}
                               </div>
                             </div>
                             <div className="text-right">
                               <div className="text-xs text-gray-600">Total Outstanding</div>
                               <div className="text-lg font-bold text-red-600">{formatCurrency(customer.total_outstanding)}</div>
                               <div className="text-xs text-gray-500 mt-1">
-                                Overdue: {formatCurrency(customer.total_overdue)} â€¢ Future: {formatCurrency(customer.total_future)}
+                                Overdue: {formatCurrency(customer.total_overdue)} • Future: {formatCurrency(customer.total_future)}
                               </div>
                             </div>
                           </div>
@@ -7470,7 +7471,7 @@ function ReportsView() {
                       <div className="text-sm text-gray-300">
                         Generated via <span className="font-semibold text-white">ORBIT</span>
                         {brokerReport.report_header?.generated_at && (
-                          <span className="ml-4">â€¢ {new Date(brokerReport.report_header.generated_at).toLocaleString()}</span>
+                          <span className="ml-4">• {new Date(brokerReport.report_header.generated_at).toLocaleString()}</span>
                         )}
                       </div>
                     </div>
@@ -7487,8 +7488,8 @@ function ReportsView() {
                     <div>
                       <h3 className="text-xl font-semibold text-gray-900">{brokerReport.broker.name}</h3>
                       <div className="text-sm text-gray-600 mt-1">
-                        {brokerReport.broker.broker_id} â€¢ {brokerReport.broker.mobile}
-                        {brokerReport.broker.email && ` â€¢ ${brokerReport.broker.email}`}
+                        {brokerReport.broker.broker_id} • {brokerReport.broker.mobile}
+                        {brokerReport.broker.email && ` • ${brokerReport.broker.email}`}
                       </div>
                       {brokerReport.broker.company && (
                         <div className="text-sm text-gray-500 mt-1">Company: {brokerReport.broker.company}</div>
@@ -7938,7 +7939,7 @@ function SettingsView() {
                     <span className={`px-2 py-0.5 rounded-full text-xs ${r.rep_type ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>{r.rep_type || 'non-sales'}</span>
                   </div>
                   <div className="font-medium text-gray-900">{r.name}</div>
-                  <div className="text-sm text-gray-500">{r.mobile} {r.email && `â€¢ ${r.email}`} {r.title && `â€¢ ${r.title}`}</div>
+                  <div className="text-sm text-gray-500">{r.mobile} {r.email && `• ${r.email}`} {r.title && `• ${r.title}`}</div>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => openEdit(r)} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">Edit</button>
@@ -8799,7 +8800,7 @@ function LeadAssignmentsSettings() {
                 </div>
                 <div className="text-xs text-gray-500">
                   Requested by <span className="font-medium">{r.requested_by}</span>
-                  {r.reason && <span> â€” {r.reason}</span>}
+                  {r.reason && <span> — {r.reason}</span>}
                   <span className="ml-2 text-gray-400">{new Date(r.created_at).toLocaleDateString()}</span>
                 </div>
               </div>
@@ -8838,7 +8839,7 @@ function SearchAuditSettings() {
     <div className="bg-white rounded-2xl shadow-sm border p-6">
       <div className="mb-4">
         <h3 className="text-lg font-semibold text-gray-900">Search Audit Log</h3>
-        <p className="text-sm text-gray-500">Cross-rep search activity â€” when a rep searches for another rep's customer/lead</p>
+        <p className="text-sm text-gray-500">Cross-rep search activity — when a rep searches for another rep's customer/lead</p>
       </div>
 
       {loading ? <Loader /> : logs.length === 0 ? (
@@ -9572,7 +9573,7 @@ function AnalyticsLeadDrilldown({ filters, onClose }) {
 // SHARED COMPONENTS
 // ============================================
 
-// EntitySearchSelect â€” type-first async search for customers/brokers/leads
+// EntitySearchSelect — type-first async search for customers/brokers/leads
 // Used by InteractionsView, InteractionLogModal, and per-row quick log actions
 function EntitySearchSelect({ value, onChange, entityType, onEntityTypeChange, disabled, showTypeSelector = true }) {
   const [query, setQuery] = useState('');
@@ -9757,7 +9758,7 @@ function EntitySearchSelect({ value, onChange, entityType, onEntityTypeChange, d
   );
 }
 
-// QuickLogModal â€” lightweight interaction log from per-row actions (Customers, Brokers, Pipeline)
+// QuickLogModal — lightweight interaction log from per-row actions (Customers, Brokers, Pipeline)
 // entity: { id, entity_type, name, mobile?, additional_mobiles? }
 function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
   const [reps, setReps] = useState([]);
@@ -9803,7 +9804,7 @@ function QuickLogModal({ entity, defaultRepId = '', onClose, onSuccess }) {
   const canChangeRep = ['admin', 'cco', 'manager'].includes(role);
 
   return (
-    <Modal title={`Log Interaction â€” ${entity.name}`} onClose={onClose}>
+    <Modal title={`Log Interaction — ${entity.name}`} onClose={onClose}>
       <div className="mb-3 flex items-center gap-2">
         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
           entity.entity_type === 'customer' ? 'bg-blue-100 text-blue-700' :
@@ -9915,7 +9916,7 @@ function BulkImport({ entity, onImport, importFile, setImportFile, importResult 
       </div>
       {importResult && (
         <div className={`mt-4 p-3 rounded-lg text-sm ${importResult.success > 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-          {importResult.success > 0 ? `âœ“ Imported ${importResult.success}` : 'Import failed'}
+          {importResult.success > 0 ? `✓ Imported ${importResult.success}` : 'Import failed'}
           {importResult.errors?.length > 0 && <div className="mt-1 text-xs">{importResult.errors.slice(0, 3).join(', ')}</div>}
         </div>
       )}
@@ -10391,35 +10392,35 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               className={`px-3 py-1.5 text-xs rounded ${tool === 'select' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Select"
             >
-              â†– Select
+              ↖ Select
             </button>
             <button
               onClick={() => setTool('pan')}
               className={`px-3 py-1.5 text-xs rounded ${tool === 'pan' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Pan"
             >
-              âœ‹ Pan
+              ✋ Pan
             </button>
             <button
               onClick={() => setTool('addPlot')}
               className={`px-3 py-1.5 text-xs rounded ${tool === 'addPlot' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Add Plot"
             >
-              â–¢ Plot
+              ▢ Plot
             </button>
             <button
               onClick={() => setTool('rectangle')}
               className={`px-3 py-1.5 text-xs rounded ${tool === 'rectangle' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Rectangle"
             >
-              â–­ Rect
+              ▭ Rect
             </button>
             <button
               onClick={() => setTool('circle')}
               className={`px-3 py-1.5 text-xs rounded ${tool === 'circle' ? 'bg-gray-900 text-white' : 'bg-white hover:bg-gray-100'}`}
               title="Circle"
             >
-              â—‹ Circle
+              ○ Circle
             </button>
             <button
               onClick={() => setTool('text')}
@@ -10444,7 +10445,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50"
               title="Undo"
             >
-              â†¶ Undo
+              ↶ Undo
             </button>
             <button
               onClick={handleRedo}
@@ -10452,7 +10453,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               className="px-3 py-1.5 text-xs bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50"
               title="Redo"
             >
-              â†· Redo
+              ↷ Redo
             </button>
           </div>
 
@@ -10461,7 +10462,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
               onClick={() => setScale(Math.max(0.5, scale - 0.1))}
               className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded"
             >
-              âˆ’
+              −
             </button>
             <span className="px-3 py-1.5 text-xs">{Math.round(scale * 100)}%</span>
             <button
@@ -10479,7 +10480,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
                 disabled={currentPage === 0}
                 className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded disabled:opacity-50"
               >
-                â€¹ Prev
+                ‹ Prev
               </button>
               <span className="px-3 py-1.5 text-xs">{currentPage + 1} / {pdfPages.length}</span>
               <button
@@ -10487,7 +10488,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
                 disabled={currentPage === pdfPages.length - 1}
                 className="px-3 py-1.5 text-xs bg-white hover:bg-gray-100 rounded disabled:opacity-50"
               >
-                Next â€º
+                Next ›
               </button>
             </div>
           )}
@@ -10526,7 +10527,7 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
         <div className="flex-1 overflow-auto bg-gray-100 p-4" ref={containerRef}>
           {!projectData.map_pdf_base64 ? (
             <div className="p-8 text-center bg-yellow-50 rounded-lg">
-              <p className="text-yellow-800 mb-4">âš ï¸ No map PDF uploaded for this project</p>
+              <p className="text-yellow-800 mb-4">⚠️ No map PDF uploaded for this project</p>
               <label className="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-blue-700">
                 Upload Map PDF
                 <input
