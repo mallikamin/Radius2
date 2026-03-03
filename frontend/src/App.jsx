@@ -3757,8 +3757,11 @@ function EOICollectionView() {
   const pendingEois = activeEois.filter(e => !e.payment_received);
   const receivedCount = receivedEois.length;
   const receivedAmount = receivedEois.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+  const receivedMarlas = receivedEois.reduce((s, e) => s + (parseFloat(e.marlas) || 0), 0);
   const pendingPayCount = pendingEois.length;
   const pendingPayAmount = pendingEois.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+  const pendingPayMarlas = pendingEois.reduce((s, e) => s + (parseFloat(e.marlas) || 0), 0);
+  const totalMarlas = eois.reduce((s, e) => s + (parseFloat(e.marlas) || 0), 0);
   const topReceived = [...receivedEois].sort((a, b) => (b.amount || 0) - (a.amount || 0)).slice(0, 3);
   const topPending = [...pendingEois].sort((a, b) => (b.amount || 0) - (a.amount || 0)).slice(0, 3);
   const collectionRate = (sum?.total_eois_count || 0) > 0 ? Math.round((receivedCount / (receivedCount + pendingPayCount || 1)) * 100) : 0;
@@ -3839,7 +3842,7 @@ function EOICollectionView() {
             <div className="mb-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-sm font-medium text-gray-700">Total EOIs Created</span>
-                <span className="text-sm font-bold text-gray-900">{sum.total_eois_count} — {formatCurrency(sum.total_eois_amount)}</span>
+                <span className="text-sm font-bold text-gray-900">{sum.total_eois_count} — {formatCurrency(sum.total_eois_amount)} @ {totalMarlas.toFixed(1)} Marlas</span>
               </div>
               <div className="h-10 bg-gray-800 rounded-lg flex items-center px-4 cursor-pointer hover:brightness-105 transition-all"
                 onClick={() => clearFilters()} style={{width:'100%'}}>
@@ -3853,28 +3856,28 @@ function EOICollectionView() {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium text-emerald-700">Received (Paid)</span>
-                  <span className="text-sm font-bold text-emerald-800">{receivedCount} — {formatCurrency(receivedAmount)}</span>
+                  <span className="text-sm font-bold text-emerald-800">{receivedCount} — {formatCurrency(receivedAmount)} @ {receivedMarlas.toFixed(1)} Marlas</span>
                 </div>
                 <div className="h-10 bg-emerald-600 rounded-lg flex items-center px-4 cursor-pointer hover:brightness-105 transition-all"
                   onClick={() => setDrilldownFilter({ status: 'active', payment_received: true })}>
                   <span className="text-white text-xs font-medium">{collectionRate}% collection rate</span>
                 </div>
                 {topReceived.length > 0 && <div className="mt-2 text-xs text-gray-500 space-y-0.5">
-                  {topReceived.map((e, i) => <div key={i}>{e.party_name} — {formatCurrency(e.amount)}</div>)}
+                  {topReceived.map((e, i) => <div key={i}>{e.party_name} — {formatCurrency(e.amount)}{e.marlas ? ` @ ${e.marlas} Marlas` : ''}</div>)}
                   {receivedCount > 3 && <div className="text-gray-400">+ {receivedCount - 3} more...</div>}
                 </div>}
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium text-amber-700">Pending (Unpaid)</span>
-                  <span className="text-sm font-bold text-amber-800">{pendingPayCount} — {formatCurrency(pendingPayAmount)}</span>
+                  <span className="text-sm font-bold text-amber-800">{pendingPayCount} — {formatCurrency(pendingPayAmount)} @ {pendingPayMarlas.toFixed(1)} Marlas</span>
                 </div>
                 <div className="h-10 bg-amber-500 rounded-lg flex items-center px-4 cursor-pointer hover:brightness-105 transition-all"
                   onClick={() => setDrilldownFilter({ status: 'active', payment_received: false })}>
                   <span className="text-white text-xs font-medium">{100 - collectionRate}% awaiting payment</span>
                 </div>
                 {topPending.length > 0 && <div className="mt-2 text-xs text-gray-500 space-y-0.5">
-                  {topPending.map((e, i) => <div key={i}>{e.party_name} — {formatCurrency(e.amount)}</div>)}
+                  {topPending.map((e, i) => <div key={i}>{e.party_name} — {formatCurrency(e.amount)}{e.marlas ? ` @ ${e.marlas} Marlas` : ''}</div>)}
                   {pendingPayCount > 3 && <div className="text-gray-400">+ {pendingPayCount - 3} more...</div>}
                 </div>}
               </div>
