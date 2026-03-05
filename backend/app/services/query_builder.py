@@ -169,6 +169,86 @@ class QueryBuilder:
             WHERE 1=1 {conditions}
             GROUP BY p.id, p.name ORDER BY total_marla DESC
         """,
+
+        # === EOI Templates ===
+        (IntentType.READ, DomainType.EOI): """
+            SELECT e.eoi_id, e.party_name, e.party_mobile, e.party_cnic,
+                e.amount, e.marlas, e.unit_number, e.eoi_date, e.status,
+                e.payment_method, e.payment_received, e.broker_name, e.notes,
+                p.name as project_name, p.project_id as project_code,
+                cr.name as recorded_by
+            FROM eoi_collections e
+            JOIN projects p ON e.project_id = p.id
+            LEFT JOIN company_reps cr ON e.created_by = cr.id
+            WHERE 1=1 {conditions}
+            ORDER BY e.eoi_date DESC
+        """,
+
+        (IntentType.REPORT, DomainType.EOI): """
+            SELECT p.name as project_name,
+                COUNT(e.id) as total_eois,
+                COUNT(CASE WHEN e.status = 'active' THEN 1 END) as active_count,
+                COUNT(CASE WHEN e.status = 'converted' THEN 1 END) as converted_count,
+                COUNT(CASE WHEN e.status = 'cancelled' THEN 1 END) as cancelled_count,
+                COUNT(CASE WHEN e.status = 'refunded' THEN 1 END) as refunded_count,
+                SUM(e.amount) as total_amount,
+                SUM(CASE WHEN e.payment_received THEN e.amount ELSE 0 END) as received_amount,
+                SUM(e.marlas) as total_marlas
+            FROM eoi_collections e
+            JOIN projects p ON e.project_id = p.id
+            WHERE 1=1 {conditions}
+            GROUP BY p.id, p.name ORDER BY total_eois DESC
+        """,
+
+        (IntentType.ANALYTICS, DomainType.EOI): """
+            SELECT COUNT(e.id) as total_eois,
+                COUNT(CASE WHEN e.status = 'active' THEN 1 END) as active,
+                COUNT(CASE WHEN e.status = 'converted' THEN 1 END) as converted,
+                COUNT(CASE WHEN e.status = 'cancelled' THEN 1 END) as cancelled,
+                SUM(e.amount) as total_amount,
+                SUM(e.marlas) as total_marlas
+            FROM eoi_collections e
+            JOIN projects p ON e.project_id = p.id
+            WHERE 1=1 {conditions}
+        """,
+
+        # === Zakat Templates ===
+        (IntentType.READ, DomainType.ZAKAT): """
+            SELECT z.zakat_id, z.beneficiary_name, z.beneficiary_cnic, z.beneficiary_mobile,
+                z.amount, z.category, z.purpose, z.status,
+                z.approval_status, z.approved_amount, z.case_status,
+                z.disbursement_date, z.payment_method,
+                cr.name as created_by_name
+            FROM zakat_records z
+            LEFT JOIN company_reps cr ON z.created_by = cr.id
+            WHERE 1=1 {conditions}
+            ORDER BY z.created_at DESC
+        """,
+
+        (IntentType.REPORT, DomainType.ZAKAT): """
+            SELECT z.category,
+                COUNT(z.id) as total_cases,
+                COUNT(CASE WHEN z.approval_status = 'approved' THEN 1 END) as approved_count,
+                COUNT(CASE WHEN z.approval_status = 'pending' THEN 1 END) as pending_count,
+                COUNT(CASE WHEN z.approval_status = 'rejected' THEN 1 END) as rejected_count,
+                SUM(z.amount) as requested_amount,
+                SUM(COALESCE(z.approved_amount, 0)) as approved_amount,
+                SUM(CASE WHEN z.case_status = 'closed' THEN COALESCE(z.approved_amount, 0) ELSE 0 END) as disbursed_amount
+            FROM zakat_records z
+            WHERE 1=1 {conditions}
+            GROUP BY z.category ORDER BY total_cases DESC
+        """,
+
+        (IntentType.ANALYTICS, DomainType.ZAKAT): """
+            SELECT COUNT(z.id) as total_cases,
+                COUNT(CASE WHEN z.approval_status = 'approved' THEN 1 END) as approved,
+                COUNT(CASE WHEN z.approval_status = 'pending' THEN 1 END) as pending,
+                COUNT(CASE WHEN z.case_status = 'closed' THEN 1 END) as closed,
+                SUM(z.amount) as total_requested,
+                SUM(COALESCE(z.approved_amount, 0)) as total_approved
+            FROM zakat_records z
+            WHERE 1=1 {conditions}
+        """,
     }
 
     def build(self, intent: IntentResult, entities: ExtractedEntities) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -231,6 +311,32 @@ class QueryBuilder:
         if entities.raw_entities.get("inventory_status"):
             conditions.append("AND LOWER(i.status) = LOWER(:inventory_status)")
             params["inventory_status"] = entities.raw_entities["inventory_status"]
+
+        # EOI conditions
+        if entities.raw_entities.get("eoi_id"):
+            conditions.append("AND e.eoi_id = :eoi_id")
+            params["eoi_id"] = entities.raw_entities["eoi_id"]
+
+        if entities.raw_entities.get("eoi_status"):
+            conditions.append("AND LOWER(e.status) = LOWER(:eoi_status)")
+            params["eoi_status"] = entities.raw_entities["eoi_status"]
+
+        # Zakat conditions
+        if entities.raw_entities.get("zakat_id"):
+            conditions.append("AND z.zakat_id = :zakat_id")
+            params["zakat_id"] = entities.raw_entities["zakat_id"]
+
+        if entities.raw_entities.get("zakat_category"):
+            conditions.append("AND LOWER(z.category) = LOWER(:zakat_category)")
+            params["zakat_category"] = entities.raw_entities["zakat_category"]
+
+        if entities.raw_entities.get("beneficiary_name"):
+            conditions.append("AND LOWER(z.beneficiary_name) ILIKE LOWER(:beneficiary_name)")
+            params["beneficiary_name"] = f"%{entities.raw_entities['beneficiary_name']}%"
+
+        if entities.raw_entities.get("beneficiary_id"):
+            conditions.append("AND b.beneficiary_id = :beneficiary_id")
+            params["beneficiary_id"] = entities.raw_entities["beneficiary_id"]
 
         return "\n            ".join(conditions), params
 

@@ -81,6 +81,17 @@ class EntityExtractor:
             r'(?:transaction|txn|trx)[\s#\-]*(\w+\-?\d+)',
             r'TXN\-(\d+)',
         ],
+        'eoi_id': [
+            r'EOI[\s#\-]*(\d+)',
+            r'(?:eoi|token)[\s#\-]*(?:id|number|no)?[\s#\-]*(\d+)',
+        ],
+        'zakat_id': [
+            r'ZKT[\s#\-]*(\d+)',
+            r'(?:zakat)[\s#\-]*(?:id|number|no|case)?[\s#\-]*(\d+)',
+        ],
+        'beneficiary_id': [
+            r'BEN[\s#\-]*(\d+)',
+        ],
     }
 
     PRICE_MULTIPLIERS = {
@@ -173,6 +184,36 @@ class EntityExtractor:
         status = self._extract_inventory_status(normalized)
         if status:
             entities.raw_entities["inventory_status"] = status
+
+        # EOI ID
+        eoi_id = self._extract_pattern(normalized, 'eoi_id')
+        if eoi_id:
+            entities.raw_entities["eoi_id"] = f"EOI-{eoi_id.zfill(5)}"
+
+        # Zakat ID
+        zakat_id = self._extract_pattern(normalized, 'zakat_id')
+        if zakat_id:
+            entities.raw_entities["zakat_id"] = f"ZKT-{zakat_id.zfill(5)}"
+
+        # Beneficiary ID
+        ben_id = self._extract_pattern(normalized, 'beneficiary_id')
+        if ben_id:
+            entities.raw_entities["beneficiary_id"] = f"BEN-{ben_id.zfill(5)}"
+
+        # Beneficiary name
+        ben_name = self._extract_person_name(normalized, "beneficiary")
+        if ben_name:
+            entities.raw_entities["beneficiary_name"] = ben_name
+
+        # EOI status
+        eoi_status = self._extract_eoi_status(normalized)
+        if eoi_status:
+            entities.raw_entities["eoi_status"] = eoi_status
+
+        # Zakat category
+        zakat_cat = self._extract_zakat_category(normalized)
+        if zakat_cat:
+            entities.raw_entities["zakat_category"] = zakat_cat
 
         return entities
 
@@ -279,6 +320,10 @@ class EntityExtractor:
                 r'(?:customer|buyer|client|owner)\s+(?:named?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
                 r'(?:contact|phone|number)\s+(?:of|for)\s+(?:customer\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
             ]
+        elif person_type == "beneficiary":
+            patterns = [
+                r'(?:beneficiary|recipient)\s+(?:named?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
+            ]
         else:
             patterns = [
                 r'(?:broker|agent|dealer)\s+(?:named?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
@@ -305,6 +350,36 @@ class EntityExtractor:
             for keyword in keywords:
                 if keyword in text_lower:
                     return status
+        return None
+
+    def _extract_eoi_status(self, text: str) -> Optional[str]:
+        text_lower = text.lower()
+        eoi_statuses = {
+            'active': ['active'],
+            'converted': ['converted'],
+            'cancelled': ['cancelled', 'canceled'],
+            'refunded': ['refunded', 'refund'],
+        }
+        for status, keywords in eoi_statuses.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    return status
+        return None
+
+    def _extract_zakat_category(self, text: str) -> Optional[str]:
+        text_lower = text.lower()
+        categories = {
+            'medical': ['medical', 'health', 'hospital', 'treatment', 'ilaaj'],
+            'education': ['education', 'school', 'college', 'taleem'],
+            'food': ['food', 'ration', 'grocery', 'khana'],
+            'shelter': ['shelter', 'housing', 'rent', 'kiraya'],
+            'marriage': ['marriage', 'wedding', 'shadi', 'nikah'],
+            'general': ['general'],
+        }
+        for cat, keywords in categories.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    return cat
         return None
 
     def set_projects(self, projects: List[str]):

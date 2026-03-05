@@ -37,6 +37,8 @@ class DomainType(str, Enum):
     TASK = "TASK"
     USER = "USER"
     NOTIFICATION = "NOTIFICATION"
+    EOI = "EOI"
+    ZAKAT = "ZAKAT"
 
 
 class IntentResult:
@@ -137,6 +139,28 @@ class IntentClassifier:
         # Notification queries
         if any(word in query_lower for word in ["notification", "notifications", "alerts", "unread"]):
             return IntentResult(IntentType.READ, DomainType.NOTIFICATION, 0.8, "read notifications")
+
+        # === EOI (Expression of Interest) queries ===
+        eoi_keywords = ["eoi", "expression of interest", "token money", "token collection"]
+        if any(phrase in query_lower for phrase in eoi_keywords):
+            if any(word in query_lower for word in ["report", "summary", "wise", "total", "kitna", "kitne"]):
+                return IntentResult(IntentType.REPORT, DomainType.EOI, 0.85, "eoi report/summary")
+            if any(word in query_lower for word in ["count", "how many", "statistics", "stats"]):
+                return IntentResult(IntentType.ANALYTICS, DomainType.EOI, 0.85, "eoi analytics")
+            return IntentResult(IntentType.READ, DomainType.EOI, 0.85, "eoi lookup")
+
+        # === Zakat queries ===
+        zakat_keywords = ["zakat", "beneficiary", "beneficiaries", "disbursement", "disbursements"]
+        if any(word in query_lower for word in zakat_keywords):
+            if any(word in query_lower for word in ["report", "summary", "wise", "total", "kitna", "kitne"]):
+                return IntentResult(IntentType.REPORT, DomainType.ZAKAT, 0.85, "zakat report/summary")
+            if any(word in query_lower for word in ["count", "how many", "statistics", "stats"]):
+                return IntentResult(IntentType.ANALYTICS, DomainType.ZAKAT, 0.85, "zakat analytics")
+            if "beneficiar" in query_lower:
+                return IntentResult(IntentType.READ, DomainType.ZAKAT, 0.85, "zakat beneficiary lookup")
+            if "disburse" in query_lower:
+                return IntentResult(IntentType.READ, DomainType.ZAKAT, 0.85, "zakat disbursement lookup")
+            return IntentResult(IntentType.READ, DomainType.ZAKAT, 0.85, "zakat lookup")
 
         # === Customer Portfolio ===
         portfolio_keywords = ["portfolio", "all units", "sab units", "sara portfolio",

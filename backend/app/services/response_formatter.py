@@ -18,7 +18,7 @@ class ResponseFormatter:
 
     def format_response(self, intent: IntentResult, entities: ExtractedEntities, result: QueryResult) -> str:
         if intent.intent == IntentType.OUT_OF_SCOPE:
-            return "This query is outside my scope. Please try a CRM-related question about plots, customers, transactions, or tasks."
+            return "This query is outside my scope. Please try a CRM-related question about plots, customers, transactions, tasks, EOIs, or zakat."
 
         if not result.success:
             return f"I encountered an issue: {result.error}. Please try rephrasing your query."
@@ -62,6 +62,10 @@ class ResponseFormatter:
             return self._format_customer_response(data)
         elif domain == DomainType.BROKER:
             return self._format_broker_response(data)
+        elif domain == DomainType.EOI:
+            return self._format_eoi_response(data)
+        elif domain == DomainType.ZAKAT:
+            return self._format_zakat_response(data)
         else:
             return self._format_generic_response(result)
 
@@ -167,6 +171,10 @@ class ResponseFormatter:
             return self._format_customer_sales_report(entities, result.data)
         elif domain == DomainType.BLOCK:
             return self._format_block_sales_report(entities, result.data)
+        elif domain == DomainType.EOI:
+            return self._format_eoi_report(entities, result.data)
+        elif domain == DomainType.ZAKAT:
+            return self._format_zakat_report(entities, result.data)
         else:
             return self._format_generic_response(result)
 
@@ -214,6 +222,10 @@ class ResponseFormatter:
             return self._format_customer_portfolio(entities, result.data)
         elif domain == DomainType.INVENTORY:
             return self._format_inventory_summary(entities, result.data)
+        elif domain == DomainType.EOI:
+            return self._format_eoi_analytics(entities, result.data)
+        elif domain == DomainType.ZAKAT:
+            return self._format_zakat_analytics(entities, result.data)
         else:
             return self._format_generic_response(result)
 
@@ -259,6 +271,124 @@ class ResponseFormatter:
             r += "\n**By Priority:**\n"
             for prio, count in by_priority.items():
                 r += f"- {prio.capitalize()}: {count}\n"
+        return r
+
+    # === EOI Formatters ===
+
+    def _format_eoi_response(self, data):
+        if len(data) == 1:
+            e = data[0]
+            r = f"**EOI: {e.get('eoi_id')}**\n"
+            r += f"- Party: {e.get('party_name')} ({e.get('party_mobile', 'N/A')})\n"
+            r += f"- Project: {e.get('project_name')}\n"
+            r += f"- Amount: PKR {self._format_currency(e.get('amount'))}\n"
+            if e.get('marlas'):
+                r += f"- Area: {e.get('marlas')} marla\n"
+            if e.get('unit_number'):
+                r += f"- Unit: #{e.get('unit_number')}\n"
+            r += f"- Date: {e.get('eoi_date')}\n"
+            r += f"- Status: {e.get('status')}\n"
+            r += f"- Payment: {'Received' if e.get('payment_received') else 'Pending'}\n"
+            if e.get('broker_name'):
+                r += f"- Broker: {e.get('broker_name')}\n"
+            if e.get('recorded_by'):
+                r += f"- Recorded By: {e.get('recorded_by')}\n"
+            return r
+        r = f"**EOI Records ({len(data)} found):**\n\n"
+        for e in data[:10]:
+            payment_status = 'Received' if e.get('payment_received') else 'Pending'
+            r += f"- **{e.get('eoi_id')}**: {e.get('party_name')} - {e.get('project_name')} - "
+            r += f"PKR {self._format_currency(e.get('amount'))} ({e.get('status')}, {payment_status})\n"
+        if len(data) > 10:
+            r += f"\n... and {len(data) - 10} more."
+        return r
+
+    def _format_eoi_report(self, entities, data):
+        if not data:
+            return "No EOI data found."
+        r = "**EOI Summary Report**\n\n"
+        grand_total = Decimal(0)
+        grand_received = Decimal(0)
+        for row in data:
+            total = Decimal(str(row.get('total_amount', 0) or 0))
+            received = Decimal(str(row.get('received_amount', 0) or 0))
+            grand_total += total
+            grand_received += received
+            r += f"**{row.get('project_name')}:**\n"
+            r += f"- Total EOIs: {row.get('total_eois', 0)} | Active: {row.get('active_count', 0)} | Converted: {row.get('converted_count', 0)}\n"
+            r += f"- Amount: PKR {self._format_currency(total)} | Received: PKR {self._format_currency(received)}\n"
+            if row.get('total_marlas'):
+                r += f"- Total Marlas: {row.get('total_marlas')}\n"
+            r += "\n"
+        r += f"---\n**Grand Total: PKR {self._format_currency(grand_total)} | Received: PKR {self._format_currency(grand_received)}**"
+        return r
+
+    def _format_eoi_analytics(self, entities, data):
+        if not data:
+            return "No EOI data found."
+        row = data[0]
+        r = "**EOI Statistics**\n\n"
+        r += f"- Total EOIs: **{row.get('total_eois', 0)}**\n"
+        r += f"- Active: **{row.get('active', 0)}** | Converted: **{row.get('converted', 0)}** | Cancelled: **{row.get('cancelled', 0)}**\n"
+        r += f"- Total Amount: **PKR {self._format_currency(row.get('total_amount'))}**\n"
+        if row.get('total_marlas'):
+            r += f"- Total Marlas: **{row.get('total_marlas')}**\n"
+        return r
+
+    # === Zakat Formatters ===
+
+    def _format_zakat_response(self, data):
+        if len(data) == 1:
+            z = data[0]
+            r = f"**Zakat Case: {z.get('zakat_id')}**\n"
+            r += f"- Beneficiary: {z.get('beneficiary_name')}\n"
+            if z.get('beneficiary_mobile'):
+                r += f"- Mobile: {z.get('beneficiary_mobile')}\n"
+            r += f"- Amount: PKR {self._format_currency(z.get('amount'))}\n"
+            r += f"- Category: {z.get('category')}\n"
+            if z.get('purpose'):
+                r += f"- Purpose: {z.get('purpose')}\n"
+            r += f"- Approval: {z.get('approval_status')}\n"
+            if z.get('approved_amount'):
+                r += f"- Approved Amount: PKR {self._format_currency(z.get('approved_amount'))}\n"
+            r += f"- Case Status: {z.get('case_status')}\n"
+            if z.get('disbursement_date'):
+                r += f"- Disbursed: {z.get('disbursement_date')}\n"
+            return r
+        r = f"**Zakat Records ({len(data)} found):**\n\n"
+        for z in data[:10]:
+            r += f"- **{z.get('zakat_id')}**: {z.get('beneficiary_name')} - {z.get('category')} - "
+            r += f"PKR {self._format_currency(z.get('amount'))} ({z.get('approval_status')})\n"
+        if len(data) > 10:
+            r += f"\n... and {len(data) - 10} more."
+        return r
+
+    def _format_zakat_report(self, entities, data):
+        if not data:
+            return "No Zakat data found."
+        r = "**Zakat Category Report**\n\n"
+        grand_requested = Decimal(0)
+        grand_approved = Decimal(0)
+        for row in data:
+            requested = Decimal(str(row.get('requested_amount', 0) or 0))
+            approved = Decimal(str(row.get('approved_amount', 0) or 0))
+            grand_requested += requested
+            grand_approved += approved
+            r += f"**{row.get('category', 'N/A').title()}:**\n"
+            r += f"- Cases: {row.get('total_cases', 0)} | Approved: {row.get('approved_count', 0)} | Pending: {row.get('pending_count', 0)}\n"
+            r += f"- Requested: PKR {self._format_currency(requested)} | Approved: PKR {self._format_currency(approved)}\n\n"
+        r += f"---\n**Total Requested: PKR {self._format_currency(grand_requested)} | Total Approved: PKR {self._format_currency(grand_approved)}**"
+        return r
+
+    def _format_zakat_analytics(self, entities, data):
+        if not data:
+            return "No Zakat data found."
+        row = data[0]
+        r = "**Zakat Statistics**\n\n"
+        r += f"- Total Cases: **{row.get('total_cases', 0)}**\n"
+        r += f"- Approved: **{row.get('approved', 0)}** | Pending: **{row.get('pending', 0)}** | Closed: **{row.get('closed', 0)}**\n"
+        r += f"- Total Requested: **PKR {self._format_currency(row.get('total_requested'))}**\n"
+        r += f"- Total Approved: **PKR {self._format_currency(row.get('total_approved'))}**\n"
         return r
 
     def _format_create_response(self, entities, result):
