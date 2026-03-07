@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Option D - Tiered Balloting | Malik Amin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(165deg, #f5f0ff 0%, #f9f8ff 55%, #f2f8ff 100%); }
+    .panel { background: #fff; border: 1px solid #e2d8f1; border-radius: 14px; }
+    .chip { border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 700; }
+  </style>
+</head>
+<body class="p-6 md:p-10">
+  <div class="max-w-7xl mx-auto space-y-6">
+    <header class="panel p-6 md:p-8">
+      <a href="./balloting_methods_overview.html" class="text-sm text-blue-700">&larr; Back to Comparison</a>
+      <p class="text-xs uppercase tracking-[0.2em] text-slate-500 mt-2">Author: Malik Amin</p>
+      <h1 class="text-3xl font-bold text-slate-900 mt-1">Option D - Tiered Balloting (Two-Round)</h1>
+      <p class="text-slate-600 mt-2">Layman summary: round 1 handles premium plots with priority buyers, then round 2 allocates remaining plots to remaining buyers. This gives balanced fairness and business control.</p>
+    </header>
+
+    <section class="grid xl:grid-cols-3 gap-5">
+      <article class="panel p-5 xl:col-span-2">
+        <h2 class="text-lg font-bold text-slate-900">Tier Setup Board</h2>
+        <div class="grid md:grid-cols-2 gap-4 mt-4 text-sm">
+          <div class="border border-purple-200 bg-purple-50 rounded-lg p-4">
+            <p class="font-semibold text-purple-900">Premium Plot Pool (Round 1)</p>
+            <p class="text-purple-800 mt-1">Corner, Park-Facing, Main Road</p>
+            <p class="text-2xl font-bold text-purple-900 mt-2">26 Plots</p>
+            <p class="text-xs text-purple-700 mt-1">5M: 18, 10M: 8</p>
+          </div>
+          <div class="border border-blue-200 bg-blue-50 rounded-lg p-4">
+            <p class="font-semibold text-blue-900">Priority Buyer Pool (Round 1)</p>
+            <p class="text-blue-800 mt-1">Early EOI + Cleared Dues + Approved List</p>
+            <p class="text-2xl font-bold text-blue-900 mt-2">44 Buyers</p>
+            <p class="text-xs text-blue-700 mt-1">Remaining move to Round 2</p>
+          </div>
+        </div>
+
+        <div class="mt-4 border border-slate-200 rounded-lg p-4 text-sm">
+          <p class="font-semibold text-slate-900">General Pool (Round 2)</p>
+          <p class="text-slate-700 mt-1">All non-premium plots + all buyers not assigned in round 1.</p>
+          <div class="grid md:grid-cols-3 gap-3 mt-3">
+            <div class="bg-slate-50 border border-slate-200 rounded p-3"><p class="text-slate-500">Remaining Plots</p><p class="text-xl font-bold text-slate-900">115</p></div>
+            <div class="bg-slate-50 border border-slate-200 rounded p-3"><p class="text-slate-500">Remaining Buyers</p><p class="text-xl font-bold text-slate-900">114</p></div>
+            <div class="bg-slate-50 border border-slate-200 rounded p-3"><p class="text-slate-500">Expected</p><p class="text-xl font-bold text-slate-900">1 plot leftover</p></div>
+          </div>
+        </div>
+      </article>
+
+      <aside class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Governance</h2>
+        <ul class="text-sm text-slate-700 mt-3 space-y-2">
+          <li>Tier definitions frozen before lock.</li>
+          <li>No buyer can win twice.</li>
+          <li>Round 1 and 2 logs separate.</li>
+          <li>Exception moves require COO approval.</li>
+        </ul>
+        <div class="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm">
+          <p class="font-semibold text-slate-900">Seed Strategy</p>
+          <p>Round 1 seed: TR1-2026-03-20</p>
+          <p>Round 2 seed: TR2-2026-03-20</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="grid xl:grid-cols-2 gap-5">
+      <article class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Round 1 (Premium) Run Console</h2>
+        <div class="mt-4 space-y-3 text-sm">
+          <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
+            <p class="text-purple-900"><strong>Current:</strong> 5 Marla Premium</p>
+            <p class="text-purple-800">Assigned 12/18 premium plots</p>
+          </div>
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p class="text-blue-900"><strong>Priority Buyer Queue:</strong> 31 remaining</p>
+            <p class="text-blue-800">Unassigned buyers auto-carry to Round 2</p>
+          </div>
+          <button class="px-4 py-2 rounded-lg bg-purple-700 text-white">Run Round 1</button>
+        </div>
+      </article>
+
+      <article class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Round 2 (General) Run Console</h2>
+        <div class="mt-4 space-y-3 text-sm">
+          <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <p><strong>Eligibility:</strong> all remaining buyers + all remaining general plots</p>
+            <p><strong>Rule:</strong> simple shuffle within marla group</p>
+          </div>
+          <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+            <p class="text-emerald-900"><strong>Fairness Note:</strong> round-1 non-winners are still fully eligible in round 2.</p>
+          </div>
+          <button class="px-4 py-2 rounded-lg bg-slate-900 text-white">Run Round 2</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel p-5">
+      <h2 class="text-lg font-bold text-slate-900">Two-Round Results Summary</h2>
+      <div class="grid md:grid-cols-5 gap-3 mt-4 text-sm">
+        <div class="bg-purple-50 border border-purple-200 rounded-lg p-3"><p class="text-purple-700">Premium Assigned</p><p class="text-2xl font-bold text-purple-900">26</p></div>
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3"><p class="text-blue-700">Priority Winners</p><p class="text-2xl font-bold text-blue-900">26</p></div>
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3"><p class="text-emerald-700">General Assigned</p><p class="text-2xl font-bold text-emerald-900">114</p></div>
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3"><p class="text-amber-700">Waitlist</p><p class="text-2xl font-bold text-amber-900">0</p></div>
+        <div class="bg-slate-50 border border-slate-200 rounded-lg p-3"><p class="text-slate-700">Leftover Plots</p><p class="text-2xl font-bold text-slate-900">1</p></div>
+      </div>
+
+      <div class="mt-4 overflow-x-auto">
+        <table class="w-full text-sm border border-slate-200">
+          <thead class="bg-slate-100"><tr><th class="px-3 py-2 text-left">Buyer</th><th class="px-3 py-2 text-left">Plot</th><th class="px-3 py-2 text-left">Round</th><th class="px-3 py-2 text-left">Tier</th><th class="px-3 py-2 text-left">Result</th></tr></thead>
+          <tbody>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0301</td><td class="px-3 py-2">A-102</td><td class="px-3 py-2">Round 1</td><td class="px-3 py-2">Premium</td><td class="px-3 py-2"><span class="chip bg-purple-100 text-purple-800">Assigned</span></td></tr>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0322</td><td class="px-3 py-2">A-169</td><td class="px-3 py-2">Round 2</td><td class="px-3 py-2">General</td><td class="px-3 py-2"><span class="chip bg-emerald-100 text-emerald-800">Assigned</span></td></tr>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0355</td><td class="px-3 py-2">B-212</td><td class="px-3 py-2">Round 2</td><td class="px-3 py-2">General</td><td class="px-3 py-2"><span class="chip bg-emerald-100 text-emerald-800">Assigned</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 flex flex-wrap gap-2">
+        <button class="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm">Download Two-Round Signed PDF</button>
+        <button class="px-4 py-2 rounded-lg border border-slate-300 text-sm">Download Round 1 Log</button>
+        <button class="px-4 py-2 rounded-lg border border-slate-300 text-sm">Download Round 2 Log</button>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

@@ -207,26 +207,33 @@ docker restart orbit_dev_web
 3. Only then run on production
 4. Drop test DB after
 
-### 2026-02-25 — EOI create endpoint failed on non-UUID project/customer/broker refs
+### 2026-02-25 ï¿½ EOI create endpoint failed on non-UUID project/customer/broker refs
 - **Error**: `EOI create error: invalid input syntax for type uuid: "PRJ-0999"`
 - **Context**: Smoke test using business IDs like `PRJ-0999`, `CUST-0001`, `INV-99901`
 - **Root Cause**: EOI resolver helpers compared UUID columns directly against non-UUID business keys in OR filters, forcing invalid casts in PostgreSQL.
 - **Fix**: Added UUID-safe resolvers (`_resolve_eoi_project/_broker/_customer/_inventory`, `_resolve_eoi_record`) using parse-first fallback logic.
 - **Rule**: Never OR-compare UUID columns with string business IDs directly; use UUID parsing fallback or helper like `find_entity`.
 
-### 2026-02-25 — Media upload 500 for `uploaded_by_rep_id=REP-0001`
+### 2026-02-25 ï¿½ Media upload 500 for `uploaded_by_rep_id=REP-0001`
 - **Error**: `/api/media/upload` returned 500 with `invalid input syntax for type uuid: "REP-0001"`
 - **Context**: EOI attachment upload during smoke test
 - **Root Cause**: Uploader lookup queried `(CompanyRep.id == uploaded_by_rep_id) | (CompanyRep.rep_id == uploaded_by_rep_id)` where first predicate attempted UUID cast of rep code.
 - **Fix**: Switched uploader lookup to UUID-safe helper `find_entity(db, CompanyRep, "rep_id", uploaded_by_rep_id)`.
 - **Rule**: For mixed UUID/business-key inputs, always use UUID-safe entity resolver helpers in upload/action endpoints.
 
-### 2026-02-25 — Receipts list filter failed when transaction_id passed as TXN code
+### 2026-02-25 ï¿½ Receipts list filter failed when transaction_id passed as TXN code
 - **Error**: `/api/receipts?transaction_id=TXN-...` returned empty due hidden UUID cast failure path.
 - **Context**: Smoke verification after EOI conversion.
 - **Root Cause**: Query compared `Transaction.id` UUID directly with string code in OR clause.
 - **Fix**: Switched transaction lookup in receipts list to UUID-safe helper `find_entity(db, Transaction, "transaction_id", transaction_id)`.
 - **Rule**: Use UUID-safe entity resolvers for all query filters that accept business IDs.
+
+### 2026-03-07 â€” lead_id_seq out of sync after bulk import (UniqueViolation)
+- **Error**: `duplicate key value violates unique constraint "leads_lead_id_key" DETAIL: Key (lead_id)=(LEAD-00057) already exists` â€” manual lead creation fails
+- **Context**: Sales team tried creating new leads after 8,543 leads were bulk-imported via `raw_leads_migration.sql` on 24 Feb
+- **Root Cause**: The bulk migration inserted explicit `lead_id` values (LEAD-00031 to LEAD-08573), which bypasses the trigger's `nextval('lead_id_seq')` call because of the condition `WHEN (NEW.lead_id IS NULL)`. The sequence remained stuck at ~57 while 8,543 leads existed.
+- **Fix**: `SELECT setval('lead_id_seq', (SELECT MAX(CAST(SUBSTRING(lead_id FROM 6) AS INTEGER)) FROM leads));` â€” returned 8573. Ran directly on prod DB via `docker exec orbit_db psql`.
+- **Rule**: After ANY bulk SQL import that inserts explicit entity_id values (bypassing triggers), ALWAYS run `setval('<entity>_id_seq', ...)` to sync the sequence to the max existing ID. This applies to ALL entity tables (leads, customers, brokers, transactions, etc.) that use the `WHEN (NEW.<field> IS NULL)` trigger pattern.
 
 ### 2026-02-27 - SSL cert mismatch on Orbit domain (wrong cert served)
 - **Error**: Browser showed `net::ERR_CERT_COMMON_NAME_INVALID` on `https://orbit-voice.duckdns.org/`; served cert CN was `pos-demo.duckdns.org`.

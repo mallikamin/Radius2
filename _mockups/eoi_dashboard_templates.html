@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EOI Dashboard — Template Options</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f3f4f6; font-family: 'Inter', system-ui, sans-serif; }
+    .template-section { border: 3px dashed #6366f1; border-radius: 1rem; padding: 1.5rem; margin-bottom: 3rem; position: relative; }
+    .template-label { position: absolute; top: -14px; left: 24px; background: #6366f1; color: white; padding: 2px 16px; border-radius: 999px; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; }
+    .funnel-bar { transition: all 0.3s ease; }
+    .funnel-bar:hover { filter: brightness(1.05); transform: scaleX(1.02); }
+  </style>
+</head>
+<body class="p-8 max-w-7xl mx-auto">
+
+  <h1 class="text-3xl font-bold text-gray-900 mb-2">EOI Dashboard — Pick Your Template</h1>
+  <p class="text-gray-500 mb-8">Each section is a complete template option. Pick one (or mix pieces). Scroll down for all 3.</p>
+
+  <!-- ============================================ -->
+  <!-- TEMPLATE A — Clean Grid KPIs + Horizontal Funnel -->
+  <!-- ============================================ -->
+  <div class="template-section">
+    <div class="template-label">TEMPLATE A — Clean Grid + Horizontal Funnel</div>
+
+    <!-- KPI Row -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <!-- Total EOIs -->
+      <div class="bg-white rounded-xl border p-5 cursor-pointer hover:shadow-md transition-shadow">
+        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Total EOIs</div>
+        <div class="text-3xl font-bold text-gray-900 mt-1">187</div>
+        <div class="text-sm text-gray-500 mt-1">PKR 45.2M total value</div>
+      </div>
+      <!-- Received (Paid) -->
+      <div class="bg-emerald-50 rounded-xl border border-emerald-200 p-5 cursor-pointer hover:shadow-md transition-shadow">
+        <div class="text-xs font-semibold text-emerald-600 uppercase tracking-wide">Received (Paid)</div>
+        <div class="text-3xl font-bold text-emerald-700 mt-1">142</div>
+        <div class="text-sm text-emerald-600 mt-1">PKR 35.8M collected</div>
+      </div>
+      <!-- Pending (Not Paid) -->
+      <div class="bg-amber-50 rounded-xl border border-amber-200 p-5 cursor-pointer hover:shadow-md transition-shadow">
+        <div class="text-xs font-semibold text-amber-600 uppercase tracking-wide">Pending (Unpaid)</div>
+        <div class="text-3xl font-bold text-amber-700 mt-1">45</div>
+        <div class="text-sm text-amber-600 mt-1">PKR 9.4M outstanding</div>
+      </div>
+      <!-- Converted -->
+      <div class="bg-blue-50 rounded-xl border border-blue-200 p-5 cursor-pointer hover:shadow-md transition-shadow">
+        <div class="text-xs font-semibold text-blue-600 uppercase tracking-wide">Converted to Txn</div>
+        <div class="text-3xl font-bold text-blue-700 mt-1">23</div>
+        <div class="text-sm text-blue-600 mt-1">PKR 12.1M booked</div>
+      </div>
+    </div>
+
+    <!-- Area Breakdown -->
+    <div class="grid grid-cols-4 gap-3 mb-6">
+      <div class="bg-white rounded-lg border px-4 py-3 text-center cursor-pointer hover:bg-gray-50">
+        <div class="text-xs text-gray-400 font-medium">Up to 10 Marla</div>
+        <div class="text-xl font-bold text-gray-800">78</div>
+        <div class="text-xs text-gray-500">PKR 12.3M</div>
+      </div>
+      <div class="bg-white rounded-lg border px-4 py-3 text-center cursor-pointer hover:bg-gray-50">
+        <div class="text-xs text-gray-400 font-medium">10–25 Marla</div>
+        <div class="text-xl font-bold text-gray-800">54</div>
+        <div class="text-xs text-gray-500">PKR 16.8M</div>
+      </div>
+      <div class="bg-white rounded-lg border px-4 py-3 text-center cursor-pointer hover:bg-gray-50">
+        <div class="text-xs text-gray-400 font-medium">25–50 Marla</div>
+        <div class="text-xl font-bold text-gray-800">38</div>
+        <div class="text-xs text-gray-500">PKR 11.2M</div>
+      </div>
+      <div class="bg-white rounded-lg border px-4 py-3 text-center cursor-pointer hover:bg-gray-50">
+        <div class="text-xs text-gray-400 font-medium">50+ Marla</div>
+        <div class="text-xl font-bold text-gray-800">17</div>
+        <div class="text-xs text-gray-500">PKR 4.9M</div>
+      </div>
+    </div>
+
+    <!-- Horizontal Funnel -->
+    <div class="bg-white rounded-xl border p-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-4 uppercase tracking-wide">EOI Funnel</h3>
+
+      <!-- Stage 1: Total -->
+      <div class="mb-3">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-sm font-medium text-gray-700">Total EOIs Created</span>
+          <span class="text-sm font-bold text-gray-900">187 — PKR 45.2M</span>
+        </div>
+        <div class="funnel-bar h-10 bg-gray-800 rounded-lg flex items-center px-4" style="width:100%">
+          <span class="text-white text-xs font-medium">187 EOIs from 12 brokers + direct</span>
+        </div>
+      </div>
+
+      <!-- Arrow -->
+      <div class="flex justify-center my-1">
+        <svg class="w-5 h-5 text-gray-300" fill="currentColor" viewBox="0 0 20 20"><path d="M10 14l-5-5h10l-5 5z"/></svg>
+      </div>
+
+      <!-- Stage 2: Split — Received vs Pending -->
+      <div class="grid grid-cols-2 gap-4">
+        <!-- Received -->
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-sm font-medium text-emerald-700">Received (Paid)</span>
+            <span class="text-sm font-bold text-emerald-800">142 — PKR 35.8M</span>
+          </div>
+          <div class="funnel-bar h-10 bg-emerald-600 rounded-lg flex items-center px-4" style="width:100%">
+            <span class="text-white text-xs font-medium">76% collection rate</span>
+          </div>
+          <div class="mt-2 max-h-24 overflow-y-auto">
+            <div class="text-xs text-gray-500 space-y-0.5">
+              <div>Ahmed Khan — 5M (3 EOIs)</div>
+              <div>Bilal Aslam — 3.2M (2 EOIs)</div>
+              <div>Tariq Shah — 2.8M (1 EOI)</div>
+              <div class="text-gray-400">+ 139 more...</div>
+            </div>
+          </div>
+        </div>
+        <!-- Pending -->
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-sm font-medium text-amber-700">Pending (Unpaid)</span>
+            <span class="text-sm font-bold text-amber-800">45 — PKR 9.4M</span>
+          </div>
+          <div class="funnel-bar h-10 bg-amber-500 rounded-lg flex items-center px-4" style="width:100%">
+            <span class="text-white text-xs font-medium">24% awaiting payment</span>
+          </div>
+          <div class="mt-2 max-h-24 overflow-y-auto">
+            <div class="text-xs text-gray-500 space-y-0.5">
+              <div>Nadeem Iqbal — 1.5M (overdue 3 days)</div>
+              <div>Sohail Ahmed — 800K (today)</div>
+              <div>Khwaja Usman — 600K (2 days)</div>
+              <div class="text-gray-400">+ 42 more...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- TEMPLATE B — Compact KPIs + Vertical Funnel with Percentage Bars -->
+  <!-- ============================================ -->
+  <div class="template-section">
+    <div class="template-label">TEMPLATE B — Compact KPIs + Vertical Funnel</div>
+
+    <!-- Compact KPI Strip -->
+    <div class="bg-white rounded-xl border p-4 mb-6">
+      <div class="grid grid-cols-3 lg:grid-cols-6 gap-4 divide-x">
+        <div class="text-center">
+          <div class="text-2xl font-bold text-gray-900">187</div>
+          <div class="text-xs text-gray-500">Total EOIs</div>
+          <div class="text-xs font-medium text-gray-600">PKR 45.2M</div>
+        </div>
+        <div class="text-center pl-4">
+          <div class="text-2xl font-bold text-emerald-600">142</div>
+          <div class="text-xs text-emerald-600">Received</div>
+          <div class="text-xs font-medium text-emerald-700">PKR 35.8M</div>
+        </div>
+        <div class="text-center pl-4">
+          <div class="text-2xl font-bold text-amber-600">45</div>
+          <div class="text-xs text-amber-600">Pending</div>
+          <div class="text-xs font-medium text-amber-700">PKR 9.4M</div>
+        </div>
+        <div class="text-center pl-4">
+          <div class="text-2xl font-bold text-blue-600">23</div>
+          <div class="text-xs text-blue-600">Converted</div>
+          <div class="text-xs font-medium text-blue-700">PKR 12.1M</div>
+        </div>
+        <div class="text-center pl-4">
+          <div class="text-2xl font-bold text-red-500">8</div>
+          <div class="text-xs text-red-500">Cancelled</div>
+          <div class="text-xs font-medium text-red-600">PKR 1.9M</div>
+        </div>
+        <div class="text-center pl-4">
+          <div class="text-2xl font-bold text-gray-700">2,847</div>
+          <div class="text-xs text-gray-500">Total Marlas</div>
+          <div class="text-xs font-medium text-gray-600">Avg 15.2M</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Area Slabs as inline tags -->
+    <div class="flex gap-2 mb-6 flex-wrap">
+      <button class="px-4 py-2 bg-white border rounded-full text-sm hover:bg-gray-50 cursor-pointer transition-colors">
+        <span class="font-semibold text-gray-800">78</span> <span class="text-gray-500">≤10M</span> <span class="text-xs text-gray-400">(PKR 12.3M)</span>
+      </button>
+      <button class="px-4 py-2 bg-white border rounded-full text-sm hover:bg-gray-50 cursor-pointer transition-colors">
+        <span class="font-semibold text-gray-800">54</span> <span class="text-gray-500">10–25M</span> <span class="text-xs text-gray-400">(PKR 16.8M)</span>
+      </button>
+      <button class="px-4 py-2 bg-white border rounded-full text-sm hover:bg-gray-50 cursor-pointer transition-colors">
+        <span class="font-semibold text-gray-800">38</span> <span class="text-gray-500">25–50M</span> <span class="text-xs text-gray-400">(PKR 11.2M)</span>
+      </button>
+      <button class="px-4 py-2 bg-white border rounded-full text-sm hover:bg-gray-50 cursor-pointer transition-colors">
+        <span class="font-semibold text-gray-800">17</span> <span class="text-gray-500">50+M</span> <span class="text-xs text-gray-400">(PKR 4.9M)</span>
+      </button>
+    </div>
+
+    <!-- Vertical Funnel -->
+    <div class="bg-white rounded-xl border p-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-5 uppercase tracking-wide">EOI Collection Funnel</h3>
+
+      <div class="flex flex-col items-center gap-1">
+        <!-- Level 1 -->
+        <div class="funnel-bar w-full bg-gray-800 rounded-lg p-4 flex items-center justify-between cursor-pointer">
+          <div>
+            <div class="text-white font-semibold">Total EOIs Created</div>
+            <div class="text-gray-300 text-xs">All expressions of interest recorded</div>
+          </div>
+          <div class="text-right">
+            <div class="text-white text-2xl font-bold">187</div>
+            <div class="text-gray-300 text-xs">PKR 45.2M</div>
+          </div>
+        </div>
+
+        <!-- Connector -->
+        <div class="w-0.5 h-4 bg-gray-300"></div>
+
+        <!-- Level 2: Split -->
+        <div class="grid grid-cols-2 gap-3 w-full">
+          <!-- Received -->
+          <div class="funnel-bar bg-emerald-600 rounded-lg p-4 cursor-pointer" style="width:76%">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-white font-semibold text-sm">Received (Paid)</div>
+                <div class="text-emerald-200 text-xs">Payment confirmed</div>
+              </div>
+              <div class="text-right">
+                <div class="text-white text-xl font-bold">142</div>
+                <div class="text-emerald-200 text-xs">PKR 35.8M</div>
+              </div>
+            </div>
+            <div class="mt-2 text-xs text-emerald-100">
+              Top: Ahmed Khan (5M) · Bilal Aslam (3.2M) · Tariq Shah (2.8M)
+            </div>
+          </div>
+          <!-- Pending -->
+          <div class="funnel-bar bg-amber-500 rounded-lg p-4 cursor-pointer" style="width:100%">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-white font-semibold text-sm">Pending (Unpaid)</div>
+                <div class="text-amber-100 text-xs">Awaiting payment</div>
+              </div>
+              <div class="text-right">
+                <div class="text-white text-xl font-bold">45</div>
+                <div class="text-amber-100 text-xs">PKR 9.4M</div>
+              </div>
+            </div>
+            <div class="mt-2 text-xs text-amber-100">
+              Top: Nadeem Iqbal (1.5M) · Sohail Ahmed (800K) · Khwaja Usman (600K)
+            </div>
+          </div>
+        </div>
+
+        <!-- Connector -->
+        <div class="w-0.5 h-4 bg-gray-300"></div>
+
+        <!-- Level 3: Outcome -->
+        <div class="grid grid-cols-2 gap-3 w-full">
+          <div class="funnel-bar bg-blue-600 rounded-lg p-3 cursor-pointer" style="width:50%">
+            <div class="flex items-center justify-between">
+              <div class="text-white text-sm font-medium">Converted</div>
+              <div class="text-white font-bold">23 <span class="text-xs font-normal text-blue-200">PKR 12.1M</span></div>
+            </div>
+          </div>
+          <div class="funnel-bar bg-red-400 rounded-lg p-3 cursor-pointer" style="width:30%">
+            <div class="flex items-center justify-between">
+              <div class="text-white text-sm font-medium">Cancelled</div>
+              <div class="text-white font-bold">8 <span class="text-xs font-normal text-red-200">PKR 1.9M</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ -->
+  <!-- TEMPLATE C — Dashboard Cards + Centered Funnel with Names -->
+  <!-- ============================================ -->
+  <div class="template-section">
+    <div class="template-label">TEMPLATE C — Dashboard Cards + Centered Pyramid Funnel</div>
+
+    <!-- Top Row: Primary KPIs -->
+    <div class="grid grid-cols-2 gap-4 mb-4">
+      <div class="bg-white rounded-xl border p-5">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs font-semibold text-gray-400 uppercase">Total EOIs</div>
+            <div class="text-3xl font-bold text-gray-900 mt-1">187</div>
+          </div>
+          <div class="text-right">
+            <div class="text-xs text-gray-400">Total Value</div>
+            <div class="text-xl font-bold text-gray-700">PKR 45.2M</div>
+          </div>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <span class="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-medium">142 Received</span>
+          <span class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full text-xs font-medium">45 Pending</span>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="bg-emerald-50 rounded-xl border border-emerald-200 p-4">
+          <div class="text-xs font-semibold text-emerald-600 uppercase">Received</div>
+          <div class="text-2xl font-bold text-emerald-700">142</div>
+          <div class="text-xs text-emerald-600">PKR 35.8M</div>
+        </div>
+        <div class="bg-amber-50 rounded-xl border border-amber-200 p-4">
+          <div class="text-xs font-semibold text-amber-600 uppercase">Pending</div>
+          <div class="text-2xl font-bold text-amber-700">45</div>
+          <div class="text-xs text-amber-600">PKR 9.4M</div>
+        </div>
+        <div class="bg-blue-50 rounded-xl border border-blue-200 p-4">
+          <div class="text-xs font-semibold text-blue-600 uppercase">Converted</div>
+          <div class="text-2xl font-bold text-blue-700">23</div>
+          <div class="text-xs text-blue-600">PKR 12.1M</div>
+        </div>
+        <div class="bg-red-50 rounded-xl border border-red-200 p-4">
+          <div class="text-xs font-semibold text-red-500 uppercase">Cancelled</div>
+          <div class="text-2xl font-bold text-red-600">8</div>
+          <div class="text-xs text-red-500">PKR 1.9M</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Area Slabs as mini cards -->
+    <div class="bg-white rounded-xl border p-4 mb-6">
+      <div class="text-xs font-semibold text-gray-400 uppercase mb-3">By Area (Marlas)</div>
+      <div class="grid grid-cols-4 gap-3">
+        <div class="rounded-lg bg-gradient-to-br from-violet-50 to-white border border-violet-100 p-3 text-center cursor-pointer hover:shadow-sm">
+          <div class="text-lg font-bold text-violet-700">78</div>
+          <div class="text-xs font-medium text-violet-600">Up to 10 M</div>
+          <div class="text-xs text-gray-500">PKR 12.3M</div>
+        </div>
+        <div class="rounded-lg bg-gradient-to-br from-indigo-50 to-white border border-indigo-100 p-3 text-center cursor-pointer hover:shadow-sm">
+          <div class="text-lg font-bold text-indigo-700">54</div>
+          <div class="text-xs font-medium text-indigo-600">10–25 Marla</div>
+          <div class="text-xs text-gray-500">PKR 16.8M</div>
+        </div>
+        <div class="rounded-lg bg-gradient-to-br from-sky-50 to-white border border-sky-100 p-3 text-center cursor-pointer hover:shadow-sm">
+          <div class="text-lg font-bold text-sky-700">38</div>
+          <div class="text-xs font-medium text-sky-600">25–50 Marla</div>
+          <div class="text-xs text-gray-500">PKR 11.2M</div>
+        </div>
+        <div class="rounded-lg bg-gradient-to-br from-teal-50 to-white border border-teal-100 p-3 text-center cursor-pointer hover:shadow-sm">
+          <div class="text-lg font-bold text-teal-700">17</div>
+          <div class="text-xs font-medium text-teal-600">50+ Marla</div>
+          <div class="text-xs text-gray-500">PKR 4.9M</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Centered Pyramid Funnel -->
+    <div class="bg-white rounded-xl border p-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-5 uppercase tracking-wide text-center">EOI Collection Funnel</h3>
+
+      <div class="flex flex-col items-center gap-2">
+        <!-- Level 1: Full width -->
+        <div class="funnel-bar bg-gray-800 rounded-lg p-4 flex items-center justify-between cursor-pointer" style="width:100%">
+          <div class="text-white font-semibold">Total EOIs Created</div>
+          <div class="text-right">
+            <span class="text-white text-xl font-bold">187</span>
+            <span class="text-gray-400 text-sm ml-2">PKR 45.2M</span>
+          </div>
+        </div>
+
+        <!-- Connector -->
+        <svg class="w-6 h-4 text-gray-300" viewBox="0 0 24 16"><path d="M12 0v16M6 10l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+
+        <!-- Level 2: Narrower -->
+        <div class="funnel-bar bg-emerald-600 rounded-lg p-4 cursor-pointer" style="width:76%">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-white font-semibold">Payment Received</div>
+              <div class="text-emerald-200 text-xs mt-0.5">Ahmed Khan (5M), Bilal Aslam (3.2M), Tariq Shah (2.8M) + 139 more</div>
+            </div>
+            <div class="text-right">
+              <span class="text-white text-xl font-bold">142</span>
+              <div class="text-emerald-200 text-xs">PKR 35.8M (76%)</div>
+            </div>
+          </div>
+        </div>
+
+        <svg class="w-6 h-4 text-gray-300" viewBox="0 0 24 16"><path d="M12 0v16M6 10l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+
+        <!-- Level 3: Pending — even narrower -->
+        <div class="funnel-bar bg-amber-500 rounded-lg p-4 cursor-pointer" style="width:50%">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-white font-semibold">Payment Pending</div>
+              <div class="text-amber-100 text-xs mt-0.5">Nadeem Iqbal (1.5M), Sohail Ahmed (800K) + 43 more</div>
+            </div>
+            <div class="text-right">
+              <span class="text-white text-xl font-bold">45</span>
+              <div class="text-amber-100 text-xs">PKR 9.4M (24%)</div>
+            </div>
+          </div>
+        </div>
+
+        <svg class="w-6 h-4 text-gray-300" viewBox="0 0 24 16"><path d="M12 0v16M6 10l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+
+        <!-- Level 4: Outcomes -->
+        <div class="flex gap-3" style="width:40%">
+          <div class="funnel-bar flex-1 bg-blue-600 rounded-lg p-3 cursor-pointer text-center">
+            <div class="text-white font-bold text-lg">23</div>
+            <div class="text-blue-200 text-xs">Converted</div>
+            <div class="text-blue-200 text-xs">PKR 12.1M</div>
+          </div>
+          <div class="funnel-bar flex-1 bg-red-400 rounded-lg p-3 cursor-pointer text-center">
+            <div class="text-white font-bold text-lg">8</div>
+            <div class="text-red-200 text-xs">Cancelled</div>
+            <div class="text-red-200 text-xs">PKR 1.9M</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Option A - Simple Shuffle | Malik Amin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(160deg, #ecf2ff 0%, #f7fafc 60%, #eef8f3 100%); }
+    .panel { background: white; border: 1px solid #dbe3ef; border-radius: 14px; }
+    .tag { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  </style>
+</head>
+<body class="p-6 md:p-10">
+  <div class="max-w-7xl mx-auto space-y-6">
+    <header class="panel p-6 md:p-8">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <a href="./balloting_methods_overview.html" class="text-sm text-blue-700">&larr; Back to Comparison</a>
+          <p class="text-xs uppercase tracking-[0.2em] text-slate-500 mt-2">Author: Malik Amin</p>
+          <h1 class="text-3xl font-bold text-slate-900 mt-1">Option A - Simple Random Shuffle</h1>
+          <p class="text-slate-600 mt-2">Layman summary: we fairly shuffle two lists (buyers and plots) and map them one-to-one. This is the easiest model to explain in front of customers and leadership.</p>
+        </div>
+        <div class="text-sm text-slate-700">
+          <p><strong>Project:</strong> Sitara Square</p>
+          <p><strong>Event ID:</strong> BAL-SS-A-2026-01</p>
+          <p><strong>Status:</strong> Locked, Ready to Run</p>
+        </div>
+      </div>
+    </header>
+
+    <section class="grid xl:grid-cols-3 gap-5">
+      <article class="panel p-5 xl:col-span-2">
+        <h2 class="text-lg font-bold text-slate-900">Step 1-3: Setup Snapshot</h2>
+        <div class="grid md:grid-cols-3 gap-3 mt-4 text-sm">
+          <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <p class="text-slate-500">Total Inventory</p>
+            <p class="text-2xl font-bold text-slate-900">160</p>
+            <p class="text-xs text-slate-500">5M: 120, 10M: 40</p>
+          </div>
+          <div class="bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <p class="text-amber-700">Selected (Reserved)</p>
+            <p class="text-2xl font-bold text-amber-800">19</p>
+            <p class="text-xs text-amber-700">Approved with reasons</p>
+          </div>
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p class="text-blue-700">Elected Pool</p>
+            <p class="text-2xl font-bold text-blue-900">141</p>
+            <p class="text-xs text-blue-700">Ready for draw</p>
+          </div>
+        </div>
+
+        <div class="mt-5 overflow-x-auto">
+          <table class="w-full text-sm border border-slate-200 rounded-lg overflow-hidden">
+            <thead class="bg-slate-100 text-slate-700">
+              <tr>
+                <th class="text-left px-3 py-2">Marla</th>
+                <th class="text-left px-3 py-2">Eligible Buyers</th>
+                <th class="text-left px-3 py-2">Elected Plots</th>
+                <th class="text-left px-3 py-2">Expected</th>
+                <th class="text-left px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="border-t"><td class="px-3 py-2">5 Marla</td><td class="px-3 py-2">104</td><td class="px-3 py-2">105</td><td class="px-3 py-2">1 leftover plot</td><td class="px-3 py-2"><span class="tag bg-emerald-100 text-emerald-800">Balanced</span></td></tr>
+              <tr class="border-t"><td class="px-3 py-2">10 Marla</td><td class="px-3 py-2">36</td><td class="px-3 py-2">36</td><td class="px-3 py-2">Exact match</td><td class="px-3 py-2"><span class="tag bg-emerald-100 text-emerald-800">Balanced</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <aside class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Method Rules</h2>
+        <ul class="text-sm text-slate-700 mt-3 space-y-2">
+          <li>Only elected plots enter draw.</li>
+          <li>Only eligible buyers enter draw.</li>
+          <li>Same-marla matching only.</li>
+          <li>One buyer can get only one plot.</li>
+          <li>Seed is stored for replay proof.</li>
+        </ul>
+        <div class="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm">
+          <p class="font-semibold text-slate-900">Seed</p>
+          <p class="text-slate-700">SSQ-2026-03-20-1900-OPENINGRATE</p>
+          <p class="text-xs text-slate-500 mt-1">Same seed + same list = same result every time.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="grid xl:grid-cols-2 gap-5">
+      <article class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Step 4: Lock Confirmation</h2>
+        <div class="mt-4 space-y-3 text-sm">
+          <label class="flex items-center gap-2"><input type="checkbox" checked /> Buyer pool verified by Finance</label>
+          <label class="flex items-center gap-2"><input type="checkbox" checked /> Selected list approved by COO</label>
+          <label class="flex items-center gap-2"><input type="checkbox" checked /> No pending disputes in this event</label>
+        </div>
+        <button class="mt-4 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm">Event Locked</button>
+      </article>
+
+      <article class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Step 5: Run Panel</h2>
+        <div class="mt-3 text-sm text-slate-700 space-y-2">
+          <p>Algorithm: <strong>Shuffle Buyers</strong> + <strong>Shuffle Plots</strong> + <strong>Index Pairing</strong></p>
+          <p>Dry Run: Completed (results not published)</p>
+          <p>Live Run: Pending</p>
+        </div>
+        <div class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <p class="text-sm text-blue-900"><strong>Progress Preview:</strong> 5 Marla 0/104, 10 Marla 0/36</p>
+        </div>
+        <div class="mt-4 flex gap-2">
+          <button class="px-4 py-2 rounded-lg bg-blue-700 text-white text-sm">Run Live Balloting</button>
+          <button class="px-4 py-2 rounded-lg border border-slate-300 text-sm">Export Dry Run Log</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel p-5">
+      <h2 class="text-lg font-bold text-slate-900">Step 6: Results Preview</h2>
+      <div class="grid md:grid-cols-4 gap-3 mt-4 text-sm">
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3"><p class="text-emerald-700">Assigned</p><p class="text-2xl font-bold text-emerald-900">140</p></div>
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3"><p class="text-amber-700">Waitlist</p><p class="text-2xl font-bold text-amber-900">0</p></div>
+        <div class="bg-slate-50 border border-slate-200 rounded-lg p-3"><p class="text-slate-700">Leftover Plots</p><p class="text-2xl font-bold text-slate-900">1</p></div>
+        <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-3"><p class="text-indigo-700">Dispute Flags</p><p class="text-2xl font-bold text-indigo-900">0</p></div>
+      </div>
+
+      <div class="mt-4 overflow-x-auto">
+        <table class="w-full text-sm border border-slate-200">
+          <thead class="bg-slate-100"><tr><th class="px-3 py-2 text-left">Buyer</th><th class="px-3 py-2 text-left">Marla</th><th class="px-3 py-2 text-left">Allocated Plot</th><th class="px-3 py-2 text-left">Round</th><th class="px-3 py-2 text-left">Result</th></tr></thead>
+          <tbody>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0301 Ahmed Raza</td><td class="px-3 py-2">5</td><td class="px-3 py-2">A-149</td><td class="px-3 py-2">Main</td><td class="px-3 py-2 text-emerald-700">Assigned</td></tr>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0317 Sana Javed</td><td class="px-3 py-2">10</td><td class="px-3 py-2">B-208</td><td class="px-3 py-2">Main</td><td class="px-3 py-2 text-emerald-700">Assigned</td></tr>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0348 Bilal Khan</td><td class="px-3 py-2">5</td><td class="px-3 py-2">A-164</td><td class="px-3 py-2">Main</td><td class="px-3 py-2 text-emerald-700">Assigned</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 flex flex-wrap gap-2">
+        <button class="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm">Download Signed PDF</button>
+        <button class="px-4 py-2 rounded-lg border border-slate-300 text-sm">Download CSV</button>
+        <button class="px-4 py-2 rounded-lg border border-slate-300 text-sm">Download Audit Log</button>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Option C - Weighted Balloting | Malik Amin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(160deg, #fff8ef 0%, #fffdf8 55%, #f7fbff 100%); }
+    .panel { background: #fff; border: 1px solid #eadfcf; border-radius: 14px; }
+    .pill { border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 700; }
+  </style>
+</head>
+<body class="p-6 md:p-10">
+  <div class="max-w-7xl mx-auto space-y-6">
+    <header class="panel p-6 md:p-8">
+      <a href="./balloting_methods_overview.html" class="text-sm text-blue-700">&larr; Back to Comparison</a>
+      <p class="text-xs uppercase tracking-[0.2em] text-slate-500 mt-2">Author: Malik Amin</p>
+      <h1 class="text-3xl font-bold text-slate-900 mt-1">Option C - Weighted Balloting</h1>
+      <p class="text-slate-600 mt-2">Layman summary: everyone enters the draw, but policy-based points can increase some buyers' chance. This must be publicly explained before event day to avoid trust issues.</p>
+    </header>
+
+    <section class="grid xl:grid-cols-3 gap-5">
+      <article class="panel p-5 xl:col-span-2">
+        <h2 class="text-lg font-bold text-slate-900">Policy Rule Builder (Admin Mockup)</h2>
+        <div class="mt-4 space-y-3 text-sm">
+          <div class="border border-amber-200 bg-amber-50 rounded-lg p-3">
+            <p class="font-semibold text-amber-900">Public Notice Required</p>
+            <p class="text-amber-800 mt-1">Rules shown below must be finalized and published before lock. Any late change automatically invalidates event draft.</p>
+          </div>
+          <div class="grid md:grid-cols-2 gap-3">
+            <div class="border border-slate-200 rounded-lg p-3">
+              <p class="font-semibold text-slate-900">Rule 1</p>
+              <p class="text-slate-700 mt-1">Full payment before cut-off = +3 tickets</p>
+            </div>
+            <div class="border border-slate-200 rounded-lg p-3">
+              <p class="font-semibold text-slate-900">Rule 2</p>
+              <p class="text-slate-700 mt-1">EOI paid before priority date = +2 tickets</p>
+            </div>
+            <div class="border border-slate-200 rounded-lg p-3">
+              <p class="font-semibold text-slate-900">Rule 3</p>
+              <p class="text-slate-700 mt-1">Special campaign referral = +1 ticket</p>
+            </div>
+            <div class="border border-slate-200 rounded-lg p-3">
+              <p class="font-semibold text-slate-900">Rule 4</p>
+              <p class="text-slate-700 mt-1">Dispute flag unresolved = -2 tickets (or hold)</p>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button class="px-4 py-2 rounded-lg bg-slate-900 text-white">Save Rules</button>
+            <button class="px-4 py-2 rounded-lg border border-slate-300">Publish Rule Notice PDF</button>
+          </div>
+        </div>
+      </article>
+
+      <aside class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Risk Guidance</h2>
+        <ul class="text-sm text-slate-700 mt-3 space-y-2">
+          <li>Do not hide scoring formula.</li>
+          <li>Always provide buyer-wise reason sheet.</li>
+          <li>Keep manual overrides disabled by default.</li>
+          <li>Use dual approval for rule edits.</li>
+        </ul>
+      </aside>
+    </section>
+
+    <section class="grid xl:grid-cols-2 gap-5">
+      <article class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Weighted Pool Preview</h2>
+        <div class="mt-4 overflow-x-auto">
+          <table class="w-full text-sm border border-slate-200">
+            <thead class="bg-slate-100"><tr><th class="px-3 py-2 text-left">Buyer</th><th class="px-3 py-2 text-left">Base</th><th class="px-3 py-2 text-left">Bonuses</th><th class="px-3 py-2 text-left">Total Tickets</th><th class="px-3 py-2 text-left">Notes</th></tr></thead>
+            <tbody>
+              <tr class="border-t"><td class="px-3 py-2">CUST-0301 Ahmed Raza</td><td class="px-3 py-2">1</td><td class="px-3 py-2">+3 full pay, +2 early</td><td class="px-3 py-2 font-bold">6</td><td class="px-3 py-2">Priority</td></tr>
+              <tr class="border-t"><td class="px-3 py-2">CUST-0322 Sana Javed</td><td class="px-3 py-2">1</td><td class="px-3 py-2">+2 early</td><td class="px-3 py-2 font-bold">3</td><td class="px-3 py-2">General+</td></tr>
+              <tr class="border-t"><td class="px-3 py-2">CUST-0350 Bilal Hassan</td><td class="px-3 py-2">1</td><td class="px-3 py-2">+0</td><td class="px-3 py-2 font-bold">1</td><td class="px-3 py-2">General</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="panel p-5">
+        <h2 class="text-lg font-bold text-slate-900">Run & Explain Panel</h2>
+        <div class="space-y-3 mt-4 text-sm text-slate-700">
+          <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <p><strong>Seed:</strong> WGT-2026-03-20-1900</p>
+            <p><strong>Method:</strong> ticket-based random pick without replacement</p>
+          </div>
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p class="text-blue-900"><strong>Public Explanation Card:</strong></p>
+            <p class="text-blue-800 mt-1">"Everyone gets a chance. Buyers with policy-approved points get extra entries, not guaranteed plot."</p>
+          </div>
+          <button class="px-4 py-2 rounded-lg bg-blue-700 text-white">Run Weighted Draw</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel p-5">
+      <h2 class="text-lg font-bold text-slate-900">Result + Justification Sheet</h2>
+      <div class="grid md:grid-cols-4 gap-3 mt-4 text-sm">
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3"><p class="text-emerald-700">Assigned</p><p class="text-2xl font-bold text-emerald-900">140</p></div>
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3"><p class="text-amber-700">Appeals</p><p class="text-2xl font-bold text-amber-900">4</p></div>
+        <div class="bg-slate-50 border border-slate-200 rounded-lg p-3"><p class="text-slate-700">Policy Version</p><p class="text-2xl font-bold text-slate-900">v1.2</p></div>
+        <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-3"><p class="text-indigo-700">Overrides</p><p class="text-2xl font-bold text-indigo-900">0</p></div>
+      </div>
+      <div class="mt-4 overflow-x-auto">
+        <table class="w-full text-sm border border-slate-200">
+          <thead class="bg-slate-100"><tr><th class="px-3 py-2 text-left">Buyer</th><th class="px-3 py-2 text-left">Plot</th><th class="px-3 py-2 text-left">Ticket Count</th><th class="px-3 py-2 text-left">Why</th></tr></thead>
+          <tbody>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0301</td><td class="px-3 py-2">A-115</td><td class="px-3 py-2">6</td><td class="px-3 py-2">Full payment + early EOI</td></tr>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0322</td><td class="px-3 py-2">A-174</td><td class="px-3 py-2">3</td><td class="px-3 py-2">Early EOI</td></tr>
+            <tr class="border-t"><td class="px-3 py-2">CUST-0350</td><td class="px-3 py-2">A-142</td><td class="px-3 py-2">1</td><td class="px-3 py-2">Base ticket only</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-4 flex flex-wrap gap-2">
+        <button class="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm">Download Public Explanation PDF</button>
+        <button class="px-4 py-2 rounded-lg border border-slate-300 text-sm">Download Buyer-wise Ticket Sheet</button>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

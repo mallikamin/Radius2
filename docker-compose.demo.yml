@@ -1,0 +1,74 @@
+# Orbit CRM - Demo Environment
+# Isolated instance with fake data for client demos
+# Ports: DB=5441, API=8011, Frontend=5191
+#
+# Usage:
+#   .\START_DEMO.ps1   — Start demo
+#   .\STOP_DEMO.ps1    — Stop demo
+#   .\RESET_DEMO.ps1   — Wipe & re-seed
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: orbit_demo_db
+    environment:
+      POSTGRES_DB: sitara_crm
+      POSTGRES_USER: sitara
+      POSTGRES_PASSWORD: sitara_demo_2026
+    ports:
+      - "5441:5432"
+    volumes:
+      - orbit_demo_postgres:/var/lib/postgresql/data
+      - ./database/demo_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sitara -d sitara_crm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    container_name: orbit_demo_api
+    ports:
+      - "8011:8000"
+    environment:
+      DATABASE_URL: postgresql://sitara:sitara_demo_2026@db:5432/sitara_crm
+      SECRET_KEY: orbit-demo-secret-key-2026
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+      - ./media_demo:/app/media
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    container_name: orbit_demo_web
+    ports:
+      - "5191:5173"
+    environment:
+      VITE_API_URL: http://localhost:8011
+    depends_on:
+      - api
+    volumes:
+      - ./frontend/src:/app/src
+    restart: unless-stopped
+
+volumes:
+  orbit_demo_postgres:
+    external: true
+    name: orbit_demo_postgres
+
+networks:
+  default:
+    name: orbit_demo_network
