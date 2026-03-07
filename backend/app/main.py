@@ -2852,7 +2852,8 @@ def search_interaction_targets(
 
 @app.get("/api/interactions")
 def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: str = None,
-                      lead_id: str = None, limit: int = 100, db: Session = Depends(get_db),
+                      lead_id: str = None, interaction_type: str = None, period: str = None,
+                      limit: int = 100, db: Session = Depends(get_db),
                       current_user: CompanyRep = Depends(get_current_user)):
     q = db.query(Interaction)
     iso = get_rep_isolation_filter(current_user, db)
@@ -2874,6 +2875,21 @@ def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: st
         except (ValueError, AttributeError):
             ld = db.query(Lead).filter(Lead.lead_id == lead_id).first()
         if ld: q = q.filter(Interaction.lead_id == ld.id)
+    # Type filter (call, message, whatsapp, meeting)
+    if interaction_type:
+        q = q.filter(Interaction.interaction_type == interaction_type)
+    # Period filter (today, week, month)
+    if period:
+        from datetime import timedelta
+        today = date.today()
+        if period == "today":
+            q = q.filter(func.date(Interaction.created_at) == today)
+        elif period == "week":
+            week_start = today - timedelta(days=today.weekday())
+            q = q.filter(func.date(Interaction.created_at) >= week_start)
+        elif period == "month":
+            month_start = today.replace(day=1)
+            q = q.filter(func.date(Interaction.created_at) >= month_start)
 
     interactions = q.order_by(Interaction.created_at.desc()).limit(limit).all()
 
@@ -2997,27 +3013,34 @@ def get_pending_followups(db: Session = Depends(get_db),
     return result
 
 @app.get("/api/interactions/summary")
-def get_interactions_summary(db: Session = Depends(get_db)):
+def get_interactions_summary(db: Session = Depends(get_db),
+                             current_user: CompanyRep = Depends(get_current_user)):
     from datetime import datetime, timedelta
     today = date.today()
     week_start = today - timedelta(days=today.weekday())
     month_start = today.replace(day=1)
-    
-    total = db.query(Interaction).count()
-    total_calls = db.query(Interaction).filter(Interaction.interaction_type == "call").count()
-    total_messages = db.query(Interaction).filter(Interaction.interaction_type == "message").count()
-    total_whatsapp = db.query(Interaction).filter(Interaction.interaction_type == "whatsapp").count()
-    
-    today_count = db.query(Interaction).filter(func.date(Interaction.created_at) == today).count()
-    week_count = db.query(Interaction).filter(func.date(Interaction.created_at) >= week_start).count()
-    month_count = db.query(Interaction).filter(func.date(Interaction.created_at) >= month_start).count()
-    
+
+    # Apply role isolation — sales reps see only their own, managers see team
+    base_q = db.query(Interaction)
+    iso = get_rep_isolation_filter(current_user, db)
+    if iso["isolated"]:
+        base_q = base_q.filter(Interaction.company_rep_id.in_(iso["team_rep_uuids"]))
+
+    total = base_q.count()
+    total_calls = base_q.filter(Interaction.interaction_type == "call").count()
+    total_messages = base_q.filter(Interaction.interaction_type == "message").count()
+    total_whatsapp = base_q.filter(Interaction.interaction_type == "whatsapp").count()
+
+    today_count = base_q.filter(func.date(Interaction.created_at) == today).count()
+    week_count = base_q.filter(func.date(Interaction.created_at) >= week_start).count()
+    month_count = base_q.filter(func.date(Interaction.created_at) >= month_start).count()
+
     # Pending follow-ups
-    pending_followups = db.query(Interaction).filter(
+    pending_followups = base_q.filter(
         Interaction.next_follow_up.isnot(None),
         Interaction.next_follow_up <= today
     ).count()
-    
+
     return {
         "total_interactions": total, "total_calls": total_calls,
         "total_messages": total_messages, "total_whatsapp": total_whatsapp,

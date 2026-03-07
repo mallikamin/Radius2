@@ -4813,6 +4813,7 @@ function InteractionsView() {
   const [showPendingSection, setShowPendingSection] = useState(true);
   const [showLeadDetail, setShowLeadDetail] = useState(null);
   const [logTarget, setLogTarget] = useState(null);
+  const [activeFilter, setActiveFilter] = useState(null); // {type:'call'|'message'|'whatsapp', period:'today'|'week'|'month', label:'...'}
   const [form, setForm] = useState({
     company_rep_id: '', interaction_type: 'call', status: getDefaultInteractionStatus('call'), notes: '', next_follow_up: '', contact_number: ''
   });
@@ -4825,10 +4826,14 @@ function InteractionsView() {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => { loadData(); }, []);
-  const loadData = async () => {
+  const loadData = async (filter) => {
+    const f = filter !== undefined ? filter : activeFilter;
     try {
+      const intParams = { limit: f ? 200 : 50 };
+      if (f?.type) intParams.interaction_type = f.type;
+      if (f?.period) intParams.period = f.period;
       const [intRes, sumRes, repRes, pendRes] = await Promise.all([
-        api.get('/interactions', { params: { limit: 50 } }),
+        api.get('/interactions', { params: intParams }),
         api.get('/interactions/summary'),
         api.get('/company-reps'),
         api.get('/interactions/pending-followups')
@@ -4839,6 +4844,17 @@ function InteractionsView() {
       setPendingFollowups(pendRes.data);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
+  };
+
+  const applyKpiFilter = (filter) => {
+    if (activeFilter?.label === filter.label) {
+      // Toggle off if same filter clicked again
+      setActiveFilter(null);
+      loadData(null);
+    } else {
+      setActiveFilter(filter);
+      loadData(filter);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -4890,24 +4906,31 @@ function InteractionsView() {
       {summary && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <SummaryCard label="Total Interactions" value={summary.total_interactions} />
-            <SummaryCard label="Total Calls" value={summary.total_calls} />
-            <SummaryCard label="Legacy Messages" value={summary.total_messages} />
-            <SummaryCard label="WhatsApp" value={summary.total_whatsapp} />
+            {[
+              { label: 'Total Interactions', value: summary.total_interactions, filter: { label: 'Total Interactions' } },
+              { label: 'Total Calls', value: summary.total_calls, filter: { type: 'call', label: 'Total Calls' } },
+              { label: 'Legacy Messages', value: summary.total_messages, filter: { type: 'message', label: 'Legacy Messages' } },
+              { label: 'WhatsApp', value: summary.total_whatsapp, filter: { type: 'whatsapp', label: 'WhatsApp' } },
+            ].map(card => (
+              <div key={card.label} onClick={() => card.value > 0 && applyKpiFilter(card.filter)}
+                className={`bg-white rounded-2xl shadow-sm border p-5 cursor-pointer transition-all hover:shadow-md hover:border-blue-200 ${activeFilter?.label === card.label ? 'ring-2 ring-blue-500 border-blue-400' : ''}`}>
+                <div className="text-xs font-medium text-gray-400 uppercase">{card.label}</div>
+                <div className="mt-2 text-2xl font-semibold text-gray-900">{card.value}</div>
+              </div>
+            ))}
           </div>
           <div className="grid grid-cols-3 gap-4">
-            <div className="bg-white rounded-2xl shadow-sm border p-5">
-              <div className="text-xs font-medium text-gray-400 uppercase">Today</div>
-              <div className="mt-2 text-3xl font-semibold text-gray-900">{summary.today}</div>
-            </div>
-            <div className="bg-white rounded-2xl shadow-sm border p-5">
-              <div className="text-xs font-medium text-gray-400 uppercase">This Week</div>
-              <div className="mt-2 text-3xl font-semibold text-gray-900">{summary.this_week}</div>
-            </div>
-            <div className="bg-white rounded-2xl shadow-sm border p-5">
-              <div className="text-xs font-medium text-gray-400 uppercase">This Month</div>
-              <div className="mt-2 text-3xl font-semibold text-gray-900">{summary.this_month}</div>
-            </div>
+            {[
+              { label: 'Today', value: summary.today, filter: { period: 'today', label: 'Today' } },
+              { label: 'This Week', value: summary.this_week, filter: { period: 'week', label: 'This Week' } },
+              { label: 'This Month', value: summary.this_month, filter: { period: 'month', label: 'This Month' } },
+            ].map(card => (
+              <div key={card.label} onClick={() => card.value > 0 && applyKpiFilter(card.filter)}
+                className={`bg-white rounded-2xl shadow-sm border p-5 cursor-pointer transition-all hover:shadow-md hover:border-blue-200 ${activeFilter?.label === card.label ? 'ring-2 ring-blue-500 border-blue-400' : ''}`}>
+                <div className="text-xs font-medium text-gray-400 uppercase">{card.label}</div>
+                <div className="mt-2 text-3xl font-semibold text-gray-900">{card.value}</div>
+              </div>
+            ))}
           </div>
           {pendingFollowups.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
@@ -4986,7 +5009,15 @@ function InteractionsView() {
         </>
       )}
 
-      {loading ? <Loader /> : interactions.length === 0 ? <Empty msg="No interactions logged" /> : (
+      {activeFilter && (
+        <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-2">
+          <span className="text-sm text-blue-800">Showing: <strong>{activeFilter.label}</strong> ({interactions.length} results)</span>
+          <button onClick={() => { setActiveFilter(null); loadData(null); }}
+            className="ml-auto text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-100">Clear Filter</button>
+        </div>
+      )}
+
+      {loading ? <Loader /> : interactions.length === 0 ? <Empty msg={activeFilter ? `No interactions for "${activeFilter.label}"` : "No interactions logged"} /> : (
         <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
           <table className="w-full">
             <thead><tr className="border-b border-gray-100">
