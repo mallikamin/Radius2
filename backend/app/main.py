@@ -2896,11 +2896,102 @@ def list_interactions(rep_id: str = None, customer_id: str = None, broker_id: st
         result.append({
             "id": str(i.id), "interaction_id": i.interaction_id,
             "rep_name": rep.name if rep else None, "rep_id": rep.rep_id if rep else None,
+            "rep_uuid": str(rep.id) if rep else None,
             "customer_name": cust.name if cust else None, "customer_id": cust.customer_id if cust else None,
+            "customer_mobile": cust.mobile if cust else None,
             "broker_name": broker.name if broker else None, "broker_id": broker.broker_id if broker else None,
+            "broker_mobile": broker.mobile if broker else None,
             "lead_name": ld.name if ld else None, "lead_id": ld.lead_id if ld else None,
+            "lead_uuid": str(ld.id) if ld else None,
+            "lead_mobile": ld.mobile if ld else None,
+            "lead_additional_mobiles": ld.additional_mobiles if ld else [],
+            "lead_temperature": ld.temperature if ld else None,
+            "lead_assigned_rep_id": str(ld.assigned_rep_id) if ld and ld.assigned_rep_id else None,
             "interaction_type": i.interaction_type, "status": i.status,
             "notes": i.notes, "next_follow_up": str(i.next_follow_up) if i.next_follow_up else None,
+            "created_at": str(i.created_at)
+        })
+    return result
+
+@app.get("/api/interactions/pending-followups")
+def get_pending_followups(db: Session = Depends(get_db),
+                          current_user: CompanyRep = Depends(get_current_user)):
+    """Return interactions with pending follow-ups (due today or overdue), enriched with entity details."""
+    today = date.today()
+    q = db.query(Interaction).filter(
+        Interaction.next_follow_up.isnot(None),
+        Interaction.next_follow_up <= today
+    )
+    # Role isolation
+    iso = get_rep_isolation_filter(current_user, db)
+    if iso["isolated"]:
+        q = q.filter(Interaction.company_rep_id.in_(iso["team_rep_uuids"]))
+
+    interactions = q.order_by(Interaction.next_follow_up.asc()).all()
+
+    # Pre-fetch related entities
+    rep_ids = set(i.company_rep_id for i in interactions if i.company_rep_id)
+    cust_ids = set(i.customer_id for i in interactions if i.customer_id)
+    broker_ids = set(i.broker_id for i in interactions if i.broker_id)
+    lead_ids = set(i.lead_id for i in interactions if i.lead_id)
+    reps_map = {r.id: r for r in db.query(CompanyRep).filter(CompanyRep.id.in_(rep_ids)).all()} if rep_ids else {}
+    custs_map = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(cust_ids)).all()} if cust_ids else {}
+    brokers_map = {b.id: b for b in db.query(Broker).filter(Broker.id.in_(broker_ids)).all()} if broker_ids else {}
+    leads_map = {l.id: l for l in db.query(Lead).filter(Lead.id.in_(lead_ids)).all()} if lead_ids else {}
+
+    result = []
+    for i in interactions:
+        rep = reps_map.get(i.company_rep_id)
+        cust = custs_map.get(i.customer_id)
+        broker = brokers_map.get(i.broker_id)
+        ld = leads_map.get(i.lead_id)
+        # Determine entity type and details
+        if ld:
+            entity_type = "lead"
+            entity_id = ld.lead_id
+            entity_uuid = str(ld.id)
+            entity_name = ld.name
+            entity_mobile = ld.mobile
+            entity_additional_mobiles = ld.additional_mobiles or []
+            entity_temperature = ld.temperature
+        elif cust:
+            entity_type = "customer"
+            entity_id = cust.customer_id
+            entity_uuid = str(cust.id)
+            entity_name = cust.name
+            entity_mobile = cust.mobile
+            entity_additional_mobiles = cust.additional_mobiles if hasattr(cust, 'additional_mobiles') and cust.additional_mobiles else []
+            entity_temperature = None
+        elif broker:
+            entity_type = "broker"
+            entity_id = broker.broker_id
+            entity_uuid = str(broker.id)
+            entity_name = broker.name
+            entity_mobile = broker.mobile
+            entity_additional_mobiles = []
+            entity_temperature = None
+        else:
+            entity_type = "unknown"
+            entity_id = None
+            entity_uuid = None
+            entity_name = None
+            entity_mobile = None
+            entity_additional_mobiles = []
+            entity_temperature = None
+
+        result.append({
+            "id": str(i.id), "interaction_id": i.interaction_id,
+            "entity_type": entity_type, "entity_id": entity_id,
+            "entity_uuid": entity_uuid, "entity_name": entity_name,
+            "entity_mobile": entity_mobile,
+            "entity_additional_mobiles": entity_additional_mobiles,
+            "entity_temperature": entity_temperature,
+            "rep_name": rep.name if rep else None, "rep_id": rep.rep_id if rep else None,
+            "rep_uuid": str(rep.id) if rep else None,
+            "lead_assigned_rep_id": str(ld.assigned_rep_id) if ld and ld.assigned_rep_id else (str(rep.id) if rep else None),
+            "interaction_type": i.interaction_type, "status": i.status,
+            "notes": i.notes,
+            "next_follow_up": str(i.next_follow_up) if i.next_follow_up else None,
             "created_at": str(i.created_at)
         })
     return result
@@ -11736,12 +11827,14 @@ def analytics_leads_drilldown(
     rep_id: Optional[str] = None,
     campaign_id: Optional[str] = None,
     source: Optional[str] = None,
+    pending_followups: Optional[bool] = None,
+    show_interactions: Optional[bool] = None,
     export_format: Optional[str] = "json",
     db: Session = Depends(get_db),
     current_user: CompanyRep = Depends(get_current_user)
 ):
     """Analytics drilldown: filtered lead list with optional CSV/Excel export.
-    Supports funnel stage click, aging bucket click, and role-scoped filtering."""
+    Supports funnel stage click, aging bucket click, pending follow-ups, interactions view, and role-scoped filtering."""
     try:
         isolation = get_rep_isolation_filter(current_user, db)
 
@@ -11799,6 +11892,64 @@ def analytics_leads_drilldown(
                 elif aging_bucket == "14d_plus" and days_since > 14:
                     filtered.append(l)
             all_leads = filtered
+
+        # Pending follow-ups filter: leads that have interactions with overdue follow-ups
+        if pending_followups:
+            today = date.today()
+            pending_interaction_lead_ids = set(
+                row[0] for row in db.query(Interaction.lead_id).filter(
+                    Interaction.next_follow_up.isnot(None),
+                    Interaction.next_follow_up <= today,
+                    Interaction.lead_id.isnot(None)
+                ).all()
+            )
+            all_leads = [l for l in all_leads if l.id in pending_interaction_lead_ids]
+
+        # Show interactions mode: return interaction list instead of leads
+        if show_interactions:
+            rep_obj = None
+            if rep_id:
+                rep_obj = db.query(CompanyRep).filter(
+                    (CompanyRep.rep_id == rep_id) | (func.cast(CompanyRep.id, String) == rep_id)
+                ).first()
+            int_q = db.query(Interaction)
+            if rep_obj:
+                int_q = int_q.filter(Interaction.company_rep_id == rep_obj.id)
+            iso = get_rep_isolation_filter(current_user, db)
+            if iso["isolated"]:
+                int_q = int_q.filter(Interaction.company_rep_id.in_(iso["team_rep_uuids"]))
+            ints = int_q.order_by(Interaction.created_at.desc()).limit(200).all()
+            # Pre-fetch
+            int_rep_ids = set(x.company_rep_id for x in ints if x.company_rep_id)
+            int_lead_ids = set(x.lead_id for x in ints if x.lead_id)
+            int_cust_ids = set(x.customer_id for x in ints if x.customer_id)
+            int_brk_ids = set(x.broker_id for x in ints if x.broker_id)
+            int_reps = {r.id: r for r in db.query(CompanyRep).filter(CompanyRep.id.in_(int_rep_ids)).all()} if int_rep_ids else {}
+            int_leads = {l.id: l for l in db.query(Lead).filter(Lead.id.in_(int_lead_ids)).all()} if int_lead_ids else {}
+            int_custs = {c.id: c for c in db.query(Customer).filter(Customer.id.in_(int_cust_ids)).all()} if int_cust_ids else {}
+            int_brks = {b.id: b for b in db.query(Broker).filter(Broker.id.in_(int_brk_ids)).all()} if int_brk_ids else {}
+            int_rows = []
+            for x in ints:
+                r = int_reps.get(x.company_rep_id)
+                ld = int_leads.get(x.lead_id)
+                cu = int_custs.get(x.customer_id)
+                br = int_brks.get(x.broker_id)
+                contact_name = ld.name if ld else cu.name if cu else br.name if br else "-"
+                contact_id = ld.lead_id if ld else cu.customer_id if cu else br.broker_id if br else ""
+                contact_mobile = ld.mobile if ld else cu.mobile if cu else br.mobile if br else ""
+                int_rows.append({
+                    "interaction_id": x.interaction_id,
+                    "rep_name": r.name if r else "",
+                    "contact_name": contact_name,
+                    "contact_id": contact_id,
+                    "contact_mobile": contact_mobile,
+                    "interaction_type": x.interaction_type,
+                    "status": x.status or "",
+                    "notes": x.notes or "",
+                    "next_follow_up": str(x.next_follow_up) if x.next_follow_up else "",
+                    "created_at": str(x.created_at) if x.created_at else "",
+                })
+            return {"leads": int_rows, "total": len(int_rows), "mode": "interactions"}
 
         # Pre-fetch rep and campaign names
         rep_ids = set(l.assigned_rep_id for l in all_leads if l.assigned_rep_id)

@@ -4809,6 +4809,10 @@ function InteractionsView() {
   const [reps, setReps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [pendingFollowups, setPendingFollowups] = useState([]);
+  const [showPendingSection, setShowPendingSection] = useState(true);
+  const [showLeadDetail, setShowLeadDetail] = useState(null);
+  const [logTarget, setLogTarget] = useState(null);
   const [form, setForm] = useState({
     company_rep_id: '', interaction_type: 'call', status: getDefaultInteractionStatus('call'), notes: '', next_follow_up: '', contact_number: ''
   });
@@ -4823,14 +4827,16 @@ function InteractionsView() {
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
     try {
-      const [intRes, sumRes, repRes] = await Promise.all([
+      const [intRes, sumRes, repRes, pendRes] = await Promise.all([
         api.get('/interactions', { params: { limit: 50 } }),
         api.get('/interactions/summary'),
-        api.get('/company-reps')
+        api.get('/company-reps'),
+        api.get('/interactions/pending-followups')
       ]);
       setInteractions(intRes.data);
       setSummary(sumRes.data);
       setReps(repRes.data);
+      setPendingFollowups(pendRes.data);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -4903,9 +4909,78 @@ function InteractionsView() {
               <div className="mt-2 text-3xl font-semibold text-gray-900">{summary.this_month}</div>
             </div>
           </div>
-          {summary.pending_followups > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <div className="text-sm font-medium text-amber-800">⚠️ {summary.pending_followups} pending follow-ups due</div>
+          {pendingFollowups.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
+              <button onClick={() => setShowPendingSection(!showPendingSection)}
+                className="w-full flex items-center justify-between p-4 hover:bg-amber-100 transition-colors">
+                <div className="text-sm font-semibold text-amber-800">⚠️ {pendingFollowups.length} Pending Follow-ups Due</div>
+                <span className="text-amber-600 text-xs">{showPendingSection ? '▲ Collapse' : '▼ Expand'}</span>
+              </button>
+              {showPendingSection && (
+                <div className="border-t border-amber-200 overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="bg-amber-100/50 border-b border-amber-200">
+                      <th className="text-left px-4 py-2 font-medium text-amber-900">Entity ID</th>
+                      <th className="text-left px-4 py-2 font-medium text-amber-900">Name</th>
+                      <th className="text-left px-4 py-2 font-medium text-amber-900">Mobile</th>
+                      <th className="text-center px-4 py-2 font-medium text-amber-900">Type</th>
+                      <th className="text-left px-4 py-2 font-medium text-amber-900">Follow-up</th>
+                      <th className="text-left px-4 py-2 font-medium text-amber-900">Rep</th>
+                      <th className="text-center px-4 py-2 font-medium text-amber-900">Actions</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-amber-100">
+                      {pendingFollowups.map(pf => (
+                        <tr key={pf.id} className="hover:bg-amber-50/50">
+                          <td className="px-4 py-2 font-mono text-xs text-gray-600">{pf.entity_id || '-'}</td>
+                          <td className="px-4 py-2">
+                            {pf.entity_type === 'lead' && pf.entity_uuid ? (
+                              <button onClick={() => setShowLeadDetail({
+                                id: pf.entity_uuid, lead_id: pf.entity_id, name: pf.entity_name,
+                                mobile: pf.entity_mobile, additional_mobiles: pf.entity_additional_mobiles || [],
+                                temperature: pf.entity_temperature
+                              })} className="text-blue-600 hover:text-blue-800 font-medium text-left">
+                                {pf.entity_name}
+                              </button>
+                            ) : (
+                              <span className="font-medium">{pf.entity_name || '-'}</span>
+                            )}
+                            <span className={`ml-1 text-[10px] px-1 py-0.5 rounded ${
+                              pf.entity_type === 'lead' ? 'bg-purple-100 text-purple-700' :
+                              pf.entity_type === 'customer' ? 'bg-blue-100 text-blue-700' :
+                              'bg-amber-100 text-amber-700'
+                            }`}>{pf.entity_type}</span>
+                          </td>
+                          <td className="px-4 py-2 text-gray-600">{pf.entity_mobile || '-'}</td>
+                          <td className="px-4 py-2 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              pf.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
+                              pf.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' :
+                              pf.interaction_type === 'meeting' ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100'
+                            }`}>{formatInteractionType(pf.interaction_type, pf.status)}</span>
+                          </td>
+                          <td className="px-4 py-2">
+                            <span className={`text-xs font-medium ${new Date(pf.next_follow_up) < new Date(new Date().toDateString()) ? 'text-red-600' : 'text-amber-600'}`}>
+                              {pf.next_follow_up}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-gray-600 text-xs">{pf.rep_name || '-'}</td>
+                          <td className="px-4 py-2 text-center">
+                            <button onClick={() => setLogTarget({
+                              id: pf.entity_uuid, entity_type: pf.entity_type,
+                              name: pf.entity_name, mobile: pf.entity_mobile,
+                              additional_mobiles: pf.entity_additional_mobiles || [],
+                              temperature: pf.entity_temperature,
+                              defaultRepId: pf.lead_assigned_rep_id || pf.rep_uuid || ''
+                            })} className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                              Log
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </>
@@ -4915,33 +4990,47 @@ function InteractionsView() {
         <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
           <table className="w-full">
             <thead><tr className="border-b border-gray-100">
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">ID</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Rep</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Contact</th>
-              <th className="text-center text-xs font-medium text-gray-500 uppercase px-6 py-4">Type</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Status</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Follow-up</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Date & Time</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">ID</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Rep</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Contact</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-2 py-4">Entity ID</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-2 py-4">Mobile</th>
+              <th className="text-center text-xs font-medium text-gray-500 uppercase px-4 py-4">Type</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Status</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Follow-up</th>
+              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Date & Time</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {interactions.map(i => (
                 <tr key={i.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 text-sm font-mono text-gray-500">{i.interaction_id}</td>
-                  <td className="px-6 py-4 text-sm">{i.rep_name}</td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm font-medium">{i.customer_name || i.broker_name || i.lead_name || '-'}</div>
+                  <td className="px-4 py-4 text-sm font-mono text-gray-500">{i.interaction_id}</td>
+                  <td className="px-4 py-4 text-sm">{i.rep_name}</td>
+                  <td className="px-4 py-4">
+                    {i.lead_id && i.lead_uuid ? (
+                      <button onClick={() => setShowLeadDetail({
+                        id: i.lead_uuid, lead_id: i.lead_id, name: i.lead_name,
+                        mobile: i.lead_mobile, additional_mobiles: i.lead_additional_mobiles || [],
+                        temperature: i.lead_temperature
+                      })} className="text-left">
+                        <div className="text-sm font-medium text-blue-600 hover:text-blue-800">{i.lead_name}</div>
+                      </button>
+                    ) : (
+                      <div className="text-sm font-medium">{i.customer_name || i.broker_name || i.lead_name || '-'}</div>
+                    )}
                     <div className="text-xs text-gray-400">{i.customer_id ? 'Customer' : i.broker_id ? 'Broker' : i.lead_id ? 'Lead' : '-'}</div>
                   </td>
-                  <td className="px-6 py-4 text-center">
+                  <td className="px-2 py-4 text-xs font-mono text-gray-500">{i.lead_id || i.customer_id || i.broker_id || '-'}</td>
+                  <td className="px-2 py-4 text-xs text-gray-600">{i.lead_mobile || i.customer_mobile || i.broker_mobile || '-'}</td>
+                  <td className="px-4 py-4 text-center">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       i.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
                       i.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' :
                       i.interaction_type === 'meeting' ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100'
                     }`}>{formatInteractionType(i.interaction_type, i.status)}</span>
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{i.status || '-'}</td>
-                  <td className="px-6 py-4 text-sm">{i.next_follow_up || '-'}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{new Date(i.created_at + (i.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                  <td className="px-4 py-4 text-sm text-gray-600">{i.status || '-'}</td>
+                  <td className="px-4 py-4 text-sm">{i.next_follow_up || '-'}</td>
+                  <td className="px-4 py-4 text-sm text-gray-500">{new Date(i.created_at + (i.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
                 </tr>
               ))}
             </tbody>
@@ -5010,6 +5099,16 @@ function InteractionsView() {
           </form>
         </Modal>
       )}
+
+      {/* Lead Detail Modal (from clicking lead name in table/follow-ups) */}
+      {showLeadDetail && <LeadDetailModal lead={showLeadDetail}
+        onClose={() => { setShowLeadDetail(null); loadData(); }}
+        stages={[]} reps={reps} />}
+
+      {/* Quick Log Modal (from follow-up actions) */}
+      {logTarget && <QuickLogModal entity={logTarget} defaultRepId={logTarget.defaultRepId}
+        onClose={() => setLogTarget(null)}
+        onSuccess={() => { setLogTarget(null); loadData(); window.showToast?.('Logged', 'Interaction recorded', 'success'); }} />}
     </div>
   );
 }
@@ -5627,8 +5726,10 @@ function CampaignAnalytics() {
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['7_14d'] > 0 ? 'bg-yellow-100 text-yellow-800 hover:ring-2 hover:ring-yellow-300' : 'text-gray-400'}`}>{r.not_attempted['7_14d']}</span></td>
                     <td className="text-right p-2 cursor-pointer" onClick={() => r.not_attempted['14d_plus'] > 0 && setDrilldownFilters({ rep_id: r.rep_id, aging_bucket: '14d_plus', campaign_id: campaignFilter || undefined })}>
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${r.not_attempted['14d_plus'] > 0 ? 'bg-red-100 text-red-800 hover:ring-2 hover:ring-red-300' : 'text-gray-400'}`}>{r.not_attempted['14d_plus']}</span></td>
-                    <td className="text-right p-2"><span className={r.pending_followups > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}>{r.pending_followups}</span></td>
-                    <td className="text-right p-2">{r.interactions?.total || 0}</td>
+                    <td className="text-right p-2 cursor-pointer" onClick={() => r.pending_followups > 0 && setDrilldownFilters({ rep_id: r.rep_id, pending_followups: true, campaign_id: campaignFilter || undefined })}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${r.pending_followups > 0 ? 'bg-amber-100 text-amber-800 hover:ring-2 hover:ring-amber-300' : 'text-gray-400'}`}>{r.pending_followups}</span></td>
+                    <td className="text-right p-2 cursor-pointer" onClick={() => (r.interactions?.total || 0) > 0 && setDrilldownFilters({ rep_id: r.rep_id, show_interactions: true, campaign_id: campaignFilter || undefined })}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${(r.interactions?.total || 0) > 0 ? 'bg-blue-100 text-blue-800 hover:ring-2 hover:ring-blue-300' : 'text-gray-400'}`}>{r.interactions?.total || 0}</span></td>
                   </tr>
                 ))}
                 {/* Totals row */}
@@ -9634,6 +9735,8 @@ function AnalyticsLeadDrilldown({ filters, onClose }) {
       if (filters.rep_id) params.set('rep_id', filters.rep_id);
       if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
       if (filters.source) params.set('source', filters.source);
+      if (filters.pending_followups) params.set('pending_followups', 'true');
+      if (filters.show_interactions) params.set('show_interactions', 'true');
       const res = await api.get(`/analytics/leads/drilldown?${params}`);
       setLeads(res.data.leads || []);
       setTotal(res.data.total || 0);
@@ -9653,6 +9756,8 @@ function AnalyticsLeadDrilldown({ filters, onClose }) {
       if (filters.rep_id) params.set('rep_id', filters.rep_id);
       if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
       if (filters.source) params.set('source', filters.source);
+      if (filters.pending_followups) params.set('pending_followups', 'true');
+      if (filters.show_interactions) params.set('show_interactions', 'true');
       params.set('export_format', format);
       const res = await api.get(`/analytics/leads/drilldown?${params}`, { responseType: 'blob' });
       const ext = format === 'csv' ? 'csv' : 'xlsx';
@@ -9681,28 +9786,32 @@ function AnalyticsLeadDrilldown({ filters, onClose }) {
     else { setSortCol(col); setSortDir('asc'); }
   };
 
+  const isInteractionsMode = filters.show_interactions;
+
   const filterLabel = [
     filters.stage && `Stage: ${filters.stage}`,
     filters.aging_bucket && `Aging: ${filters.aging_bucket.replace(/_/g, ' ').replace('d plus', 'd+')}`,
     filters.rep_id && `Rep: ${filters.rep_id}`,
     filters.campaign_id && `Campaign: ${filters.campaign_id}`,
     filters.source && `Source: ${filters.source}`,
+    filters.pending_followups && 'Pending Follow-ups',
+    filters.show_interactions && 'Interactions',
   ].filter(Boolean).join(' | ') || 'All Leads';
 
   const tempColors = { hot: 'bg-red-100 text-red-700', mild: 'bg-yellow-100 text-yellow-700', cold: 'bg-blue-100 text-blue-700' };
   const SortIcon = ({ col }) => sortCol === col ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : '';
 
   return (
-    <Modal title="Lead Drilldown" onClose={onClose} wide>
+    <Modal title={isInteractionsMode ? "Interactions Drilldown" : "Lead Drilldown"} onClose={onClose} wide>
       <div className="space-y-4">
         {/* Filter pills + Export */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm text-gray-500">Filters:</span>
             <span className="px-2 py-1 bg-gray-100 rounded text-xs font-medium">{filterLabel}</span>
-            <span className="text-sm text-gray-400">({total} leads)</span>
+            <span className="text-sm text-gray-400">({total} {isInteractionsMode ? 'interactions' : 'leads'})</span>
           </div>
-          <div className="flex gap-2">
+          {!isInteractionsMode && <div className="flex gap-2">
             <button onClick={() => handleExport('csv')}
               className="px-3 py-1.5 text-xs font-medium border rounded-lg hover:bg-gray-50 transition-colors">
               Export CSV
@@ -9711,7 +9820,7 @@ function AnalyticsLeadDrilldown({ filters, onClose }) {
               className="px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">
               Export Excel
             </button>
-          </div>
+          </div>}
         </div>
 
         {/* Content */}
@@ -9721,7 +9830,51 @@ function AnalyticsLeadDrilldown({ filters, onClose }) {
             <button onClick={loadDrilldown} className="text-xs text-blue-600 hover:underline">Retry</button>
           </div>
         ) : leads.length === 0 ? (
-          <Empty message="No leads match the selected filters" />
+          <Empty message={isInteractionsMode ? "No interactions found" : "No leads match the selected filters"} />
+        ) : isInteractionsMode ? (
+          <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white z-10">
+                <tr className="border-b">
+                  {[
+                    { key: 'interaction_id', label: 'ID' },
+                    { key: 'rep_name', label: 'Rep' },
+                    { key: 'contact_name', label: 'Contact' },
+                    { key: 'contact_id', label: 'Entity ID' },
+                    { key: 'contact_mobile', label: 'Mobile' },
+                    { key: 'interaction_type', label: 'Type' },
+                    { key: 'status', label: 'Status' },
+                    { key: 'next_follow_up', label: 'Follow-up' },
+                    { key: 'created_at', label: 'Date' },
+                  ].map(c => (
+                    <th key={c.key} onClick={() => toggleSort(c.key)}
+                      className="text-left p-2 font-semibold text-gray-700 cursor-pointer hover:text-gray-900 select-none whitespace-nowrap">
+                      {c.label}<SortIcon col={c.key} />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((r, idx) => (
+                  <tr key={r.interaction_id || idx} className="border-b hover:bg-gray-50">
+                    <td className="p-2 font-mono text-xs">{r.interaction_id}</td>
+                    <td className="p-2">{r.rep_name}</td>
+                    <td className="p-2 font-medium">{r.contact_name}</td>
+                    <td className="p-2 font-mono text-xs text-gray-500">{r.contact_id}</td>
+                    <td className="p-2 text-gray-600">{r.contact_mobile}</td>
+                    <td className="p-2"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                      r.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
+                      r.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' :
+                      r.interaction_type === 'meeting' ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100'
+                    }`}>{r.interaction_type}</span></td>
+                    <td className="p-2 text-gray-600">{r.status || '-'}</td>
+                    <td className="p-2 text-xs">{r.next_follow_up || '-'}</td>
+                    <td className="p-2 text-xs text-gray-500">{r.created_at ? new Date(r.created_at + (r.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
             <table className="w-full text-sm">
