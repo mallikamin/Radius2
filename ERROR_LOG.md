@@ -250,3 +250,17 @@ docker restart orbit_dev_web
   - Never rely on `docker cp` for `pos-system-nginx-1`; config is immutable at runtime due read-only rootfs.
   - For POS demo compose actions, always include `--env-file .env.demo`.
   - If Orbit shows CN mismatch, first verify `voice.conf` is mounted in `/etc/nginx/conf.d/` and loaded by `nginx -T`.
+
+### 2026-03-08 - Live Orbit TLS mount repaired without touching POS or Orbit data
+- **Error**: User could open `https://orbit-voice.duckdns.org/` only with Chrome privacy warning `ERR_CERT_COMMON_NAME_INVALID`.
+- **Context**: Orbit containers and DB were still running, but POS nginx was serving the wrong certificate for the Orbit domain.
+- **Root Cause**: The live droplet copy of `~/pos-system/docker-compose.demo.yml` still lacked `./docker/nginx/voice.conf:/etc/nginx/conf.d/voice.conf:ro`, so `pos-system-nginx-1` loaded only `default.conf`.
+- **Fix**:
+  - Backed up the live compose file to `~/pos-system/docker-compose.demo.yml.bak_orbit_tls_20260308_1135`.
+  - Added only the missing `voice.conf` mount line on the droplet.
+  - Validated with `docker compose -f docker-compose.demo.yml --env-file .env.demo config -q`.
+  - Recreated only `pos-system-nginx-1`.
+  - Verified `/etc/nginx/conf.d/voice.conf` existed in-container, the public cert CN was `orbit-voice.duckdns.org`, and `curl -sk https://orbit-voice.duckdns.org/api/health` returned healthy from the droplet.
+- **Rule**:
+  - For Orbit TLS/certificate mismatches on this host, debug shared nginx mounts first, not Orbit app code or git history.
+  - Preserve POS and Orbit data by limiting the repair to the nginx config mount plus `docker compose ... up -d nginx`; do not rebuild app or DB containers for this class of issue.

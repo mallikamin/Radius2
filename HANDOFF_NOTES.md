@@ -205,3 +205,8 @@ When you fix a new error, **append it to `ERROR_LOG.md`** with:
   1. `docker exec pos-system-nginx-1 nginx -t`
   2. `docker exec pos-system-nginx-1 nginx -T | grep -i orbit`
   3. `echo | openssl s_client -connect orbit-voice.duckdns.org:443 -servername orbit-voice.duckdns.org 2>/dev/null | openssl x509 -noout -subject -dates`
+- 2026-03-08 live repair state:
+  1. Remote file `~/pos-system/docker-compose.demo.yml` now includes the `voice.conf` mount.
+  2. Backup exists at `~/pos-system/docker-compose.demo.yml.bak_orbit_tls_20260308_1135`.
+  3. Only `pos-system-nginx-1` was recreated; Orbit/POS DBs and app containers were not rebuilt for this fix.
+  4. Post-fix verification succeeded: `voice.conf` present in `/etc/nginx/conf.d/`, cert CN `orbit-voice.duckdns.org`, Orbit `/api/health` healthy, and `orbit_web`/`orbit_api` still attached to `pos-system_default`.
