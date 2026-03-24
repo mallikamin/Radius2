@@ -3563,6 +3563,493 @@ function EOICollectionView() {
     downloadCSV(data, `eoi_collection_${new Date().toISOString().split('T')[0]}.csv`);
   };
 
+  // ─── EOI Collection Report (Multi-page PDF) ───
+  const generateEOIReport = () => {
+    const { jsPDF } = window.jspdf;
+    if (!jsPDF) { window.showToast?.('Error', 'PDF library not loaded', 'error'); return; }
+    const activeData = eois.filter(e => e.status === 'active');
+    if (!activeData.length) { window.showToast?.('Info', 'No active EOIs to report', 'info'); return; }
+
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const pw = 210, ph = 297;
+    const lm = 58, rm = pw - 18, cw = rm - lm;
+    let y = 0;
+
+    // Colors
+    const C = {
+      navy: [26, 43, 74], gold: [196, 168, 77], body: [50, 50, 50],
+      gray: [140, 140, 140], ltGray: [220, 220, 220], cream: [253, 248, 240],
+      white: [255, 255, 255], paidBg: [232, 245, 233], paidFg: [56, 118, 67],
+      pendBg: [255, 235, 230], pendFg: [192, 80, 68], fadedGold: [225, 212, 175],
+    };
+
+    // Helpers
+    const fmtN = (n) => new Intl.NumberFormat('en-PK', { maximumFractionDigits: 0 }).format(n || 0);
+    const fmtM = (n) => {
+      const m = (n || 0) / 1e6;
+      if (m >= 10) return m.toFixed(1);
+      if (m >= 1) { const s = m.toFixed(2); return s.endsWith('0') ? m.toFixed(1) : s; }
+      if ((n || 0) >= 1000) return (n / 1000).toFixed(0) + 'K';
+      return String(Math.round(n || 0));
+    };
+    const checkPage = (need) => { if (y + need > ph - 20) { doc.addPage(); y = 30; return true; } return false; };
+    const hr = (yy, x1, x2, color) => {
+      doc.setDrawColor(...(color || C.ltGray)); doc.setLineWidth(0.3);
+      doc.line(x1 ?? lm, yy, x2 ?? rm, yy);
+    };
+    const sectionHdr = (num, title) => {
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+      doc.setTextColor(...C.gold); doc.text(`SECTION ${num}`, lm, y);
+      y += 12;
+      doc.setFont('times', 'bold'); doc.setFontSize(22);
+      doc.setTextColor(...C.navy); doc.text(title, lm, y);
+      y += 14;
+    };
+    const drawKPI = (x, ky, w, h, parts, label, fill) => {
+      doc.setDrawColor(...C.ltGray); doc.setLineWidth(0.3);
+      if (fill) { doc.setFillColor(...fill); doc.roundedRect(x, ky, w, h, 1.5, 1.5, 'FD'); }
+      else doc.roundedRect(x, ky, w, h, 1.5, 1.5, 'S');
+      let tw = 0;
+      parts.forEach(p => { doc.setFont('helvetica', p.bold ? 'bold' : 'normal'); doc.setFontSize(p.size); tw += doc.getTextWidth(p.text); });
+      let cx = x + (w - tw) / 2;
+      const vy = ky + h * 0.46;
+      parts.forEach(p => {
+        doc.setFont('helvetica', p.bold ? 'bold' : 'normal'); doc.setFontSize(p.size);
+        doc.setTextColor(...(p.color || C.navy)); doc.text(p.text, cx, vy); cx += doc.getTextWidth(p.text);
+      });
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...C.gray);
+      doc.text(label, x + w / 2, ky + h * 0.75, { align: 'center' });
+    };
+    const drawTableHdr = (cols) => {
+      let tx = lm;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...C.gray);
+      cols.forEach(col => {
+        const textX = col.align === 'right' ? tx + col.w : col.align === 'center' ? tx + col.w / 2 : tx;
+        doc.text(col.label, textX, y, { align: col.align }); tx += col.w;
+      });
+      y += 3; hr(y); y += 8;
+    };
+
+    // ─── Data aggregations ───
+    const projName = selectedProject?.name || 'EOI Report';
+    const userName = currentUser?.name || 'Admin';
+    const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase();
+    const totalCount = activeData.length;
+    const totalAmt = activeData.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+    const totalMarla = activeData.reduce((s, e) => s + (parseFloat(e.marlas) || 0), 0);
+    const paidList = activeData.filter(e => e.payment_received);
+    const unpaidList = activeData.filter(e => !e.payment_received);
+    const collAmt = paidList.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+    const pendAmt = unpaidList.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+    const avgEoi = totalCount > 0 ? totalAmt / totalCount : 0;
+    const collRate = totalCount > 0 ? Math.round((paidList.length / totalCount) * 100) : 0;
+
+    // Broker aggregation
+    const brokerMap = {};
+    activeData.forEach(e => {
+      const bn = e.broker_name || 'Direct';
+      if (!brokerMap[bn]) brokerMap[bn] = { name: bn, count: 0, value: 0, marlas: 0, collected: 0, pending: 0, paidCount: 0 };
+      const b = brokerMap[bn]; b.count++;
+      const amt = parseFloat(e.amount) || 0;
+      b.value += amt; b.marlas += parseFloat(e.marlas) || 0;
+      if (e.payment_received) { b.collected += amt; b.paidCount++; } else b.pending += amt;
+    });
+    const brokerList = Object.values(brokerMap).sort((a, b) => b.value - a.value);
+
+    // Customer grouping (sorted by first EOI id, multi-EOI customers grouped)
+    const custMap = {};
+    activeData.forEach(e => { const k = e.party_name || 'Unknown'; if (!custMap[k]) custMap[k] = []; custMap[k].push(e); });
+    const custGroups = Object.entries(custMap)
+      .map(([name, items]) => ({ name, items: items.sort((a, b) => (a.eoi_id || '').localeCompare(b.eoi_id || '')) }))
+      .sort((a, b) => (a.items[0]?.eoi_id || '').localeCompare(b.items[0]?.eoi_id || ''));
+
+    // Area slabs
+    const slabDefs = [
+      { label: 'UP TO 10 MARLA', min: 0, max: 10 },
+      { label: '10 \u2013 25 MARLA', min: 10, max: 25 },
+      { label: '25 \u2013 50 MARLA', min: 25, max: 50 },
+      { label: '50+ MARLA', min: 50, max: Infinity },
+    ].map(s => {
+      const items = activeData.filter(e => { const m = parseFloat(e.marlas) || 0; return m > s.min && m <= s.max; });
+      return { ...s, count: items.length, amount: items.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0), marlas: items.reduce((sum, e) => sum + (parseFloat(e.marlas) || 0), 0) };
+    });
+
+    // Weekly timeline
+    const weekMap = {};
+    activeData.forEach(e => {
+      const d = new Date(e.eoi_date); const day = d.getDay();
+      const mon = new Date(d); mon.setDate(d.getDate() - ((day + 6) % 7));
+      const key = mon.toISOString().split('T')[0];
+      if (!weekMap[key]) weekMap[key] = { start: new Date(mon), eois: [], value: 0, collected: 0 };
+      const w = weekMap[key]; w.eois.push(e); w.value += parseFloat(e.amount) || 0;
+      if (e.payment_received) w.collected += parseFloat(e.amount) || 0;
+    });
+    const weeks = Object.values(weekMap).sort((a, b) => a.start - b.start);
+    let cumColl = 0;
+    weeks.forEach(w => { cumColl += w.collected; w.cumulative = cumColl; });
+    const maxCum = cumColl || 1;
+
+    // ═══════════════════════════════════════
+    // PAGE 1 — Title + Executive Summary
+    // ═══════════════════════════════════════
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...C.gray);
+    doc.text('CONFIDENTIAL', rm, 40, { align: 'right' });
+
+    doc.setFont('times', 'bold'); doc.setFontSize(32); doc.setTextColor(...C.navy);
+    doc.text(projName, lm, 62);
+
+    doc.setFont('times', 'italic'); doc.setFontSize(13); doc.setTextColor(...C.gold);
+    doc.text('Expression of Interest \u2014 Collection Report', lm, 76);
+
+    doc.setDrawColor(...C.gold); doc.setLineWidth(1.5); doc.line(lm, 85, lm + 35, 85);
+
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...C.gray);
+    doc.text(dateStr, lm, 95);
+
+    // Section I
+    y = 128; hr(y); y += 16;
+    sectionHdr('I', 'Executive Summary');
+
+    // KPI Row 1 — 4 cards
+    const cardW = (cw - 9) / 4, cardH = 38, cg = 3;
+    const kpi1 = [
+      { parts: [{ text: String(totalCount), size: 24, bold: true }], label: 'TOTAL EOIS' },
+      { parts: [{ text: 'Rs ', size: 9, color: C.gray }, { text: fmtM(totalAmt), size: 24, bold: true }, { text: 'M', size: 10, color: C.gray }], label: 'TOTAL VALUE' },
+      { parts: [{ text: String(Math.round(totalMarla)), size: 24, bold: true }], label: 'MARLAS LOCKED' },
+      { parts: [{ text: String(collRate), size: 24, bold: true }, { text: '%', size: 10, color: C.gray }], label: 'COLLECTION RATE' },
+    ];
+    kpi1.forEach((k, i) => drawKPI(lm + i * (cardW + cg), y, cardW, cardH, k.parts, k.label));
+
+    // KPI Row 2 — 3 cards (cream bg)
+    y += cardH + 6;
+    const c2w = (cw - 6) / 3;
+    const kpi2 = [
+      { parts: [{ text: 'Rs ', size: 9, color: C.gray }, { text: fmtM(collAmt), size: 22, bold: true }, { text: 'M', size: 10, color: C.gray }], label: 'COLLECTED' },
+      { parts: [{ text: 'Rs ', size: 9, color: C.gray }, { text: fmtM(pendAmt), size: 22, bold: true }, { text: 'M', size: 10, color: C.gray }], label: 'PENDING' },
+      { parts: [{ text: 'Rs ', size: 9, color: C.gray }, { text: fmtM(avgEoi), size: 22, bold: true }, { text: 'M', size: 10, color: C.gray }], label: 'AVG EOI SIZE' },
+    ];
+    kpi2.forEach((k, i) => drawKPI(lm + i * (c2w + 3), y, c2w, cardH, k.parts, k.label, C.cream));
+
+    // Progress bar
+    y += cardH + 10;
+    const barH = 9, collRatio = totalAmt > 0 ? collAmt / totalAmt : 0;
+    doc.setFillColor(...C.ltGray); doc.roundedRect(lm, y, cw, barH, 2, 2, 'F');
+    if (collRatio > 0) {
+      doc.setFillColor(...C.gold); doc.roundedRect(lm, y, Math.max(cw * collRatio, 4), barH, 2, 2, 'F');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5); doc.setTextColor(...C.white);
+      const collLabel = `Rs ${fmtM(collAmt)}M collected`;
+      const clw = doc.getTextWidth(collLabel);
+      if (cw * collRatio > clw + 6) doc.text(collLabel, lm + cw * collRatio - 3, y + barH / 2 + 2, { align: 'right' });
+    }
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(...C.gray);
+    doc.text('0', lm, y + barH + 5);
+    doc.text(`RS ${fmtM(totalAmt)}M TOTAL VALUE`, rm, y + barH + 5, { align: 'right' });
+
+    // ═══════════════════════════════════════
+    // PAGE 2 — Broker-wise Performance
+    // ═══════════════════════════════════════
+    doc.addPage(); y = 35;
+    sectionHdr('II', 'Broker-wise Performance');
+
+    const bCols = [
+      { label: '#', w: 6, align: 'center' }, { label: 'BROKER', w: 26, align: 'left' },
+      { label: 'EOIS', w: 12, align: 'center' }, { label: 'VALUE (PKR)', w: 24, align: 'right' },
+      { label: 'MARLAS', w: 14, align: 'center' }, { label: 'COLLECTED', w: 22, align: 'right' },
+      { label: 'PENDING', w: 18, align: 'right' }, { label: 'RATE', w: 12, align: 'center' },
+    ];
+    drawTableHdr(bCols);
+
+    brokerList.forEach((b, i) => {
+      const rate = b.count > 0 ? Math.round((b.paidCount / b.count) * 100) : 0;
+      const vals = [String(i + 1), b.name, String(b.count), fmtN(b.value), String(Math.round(b.marlas)),
+        b.collected > 0 ? fmtN(b.collected) : '\u2014', b.pending > 0 ? fmtN(b.pending) : '\u2014', `${rate}%`];
+      let tx = lm;
+      bCols.forEach((col, ci) => {
+        const textX = col.align === 'right' ? tx + col.w : col.align === 'center' ? tx + col.w / 2 : tx;
+        doc.setFont('helvetica', ci === 1 ? 'bold' : 'normal'); doc.setFontSize(8.5); doc.setTextColor(...C.body);
+        if (ci === 7) {
+          const rc = rate === 100 ? C.paidFg : rate === 0 ? C.pendFg : C.body;
+          const rb = rate === 100 ? C.paidBg : rate === 0 ? C.pendBg : [240, 240, 240];
+          doc.setFillColor(...rb);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
+          const tw = doc.getTextWidth(vals[ci]);
+          doc.roundedRect(textX - tw / 2 - 2.5, y - 3.2, tw + 5, 5.5, 1, 1, 'F');
+          doc.setTextColor(...rc); doc.text(vals[ci], textX, y, { align: 'center' });
+        } else {
+          if (ci === 1) {
+            const annot = b.name === 'Direct' ? ' (Sales Team)' : (b.name.toLowerCase().includes('shafiq') ? ' (self)' : '');
+            doc.text(b.name, textX, y);
+            if (annot) { doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...C.gray); doc.text(annot, textX + doc.getTextWidth(b.name) + 1, y); }
+          } else doc.text(vals[ci], textX, y, { align: col.align });
+        }
+        tx += col.w;
+      });
+      y += 4; hr(y); y += 8;
+    });
+
+    // Total row
+    y += 2;
+    doc.setFillColor(248, 246, 241); doc.rect(lm - 2, y - 4.5, cw + 4, 8, 'F');
+    let tx = lm;
+    const tVals = ['', 'Total', String(totalCount), fmtN(totalAmt), String(Math.round(totalMarla)), fmtN(collAmt), fmtN(pendAmt), `${collRate}%`];
+    bCols.forEach((col, ci) => {
+      const textX = col.align === 'right' ? tx + col.w : col.align === 'center' ? tx + col.w / 2 : tx;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(...C.navy);
+      doc.text(tVals[ci], textX, y, { align: col.align }); tx += col.w;
+    });
+
+    // Bar Charts
+    y += 18;
+    const chartLW = cw / 2 - 4, chartRX = lm + cw / 2 + 4;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...C.gray);
+    doc.text('EOI VALUE BY BROKER', lm, y); doc.text('MARLAS LOCKED BY BROKER', chartRX, y);
+    y += 10;
+    const maxBVal = Math.max(...brokerList.map(b => b.value), 1);
+    const maxBMar = Math.max(...brokerList.map(b => b.marlas), 1);
+    const nameColW = 28, barMaxW = chartLW - nameColW - 22;
+
+    brokerList.forEach(b => {
+      // Value chart (left)
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...C.body);
+      doc.text(b.name, lm + nameColW, y, { align: 'right' });
+      const bx = lm + nameColW + 3;
+      const collW = (b.collected / maxBVal) * barMaxW;
+      const pendW = (b.pending / maxBVal) * barMaxW;
+      if (collW > 0) { doc.setFillColor(...C.gold); doc.rect(bx, y - 3, collW, 5, 'F'); }
+      if (pendW > 0) { doc.setFillColor(...C.fadedGold); doc.rect(bx + collW, y - 3, pendW, 5, 'F'); }
+      doc.setFontSize(7); doc.setTextColor(b.pending > 0 ? C.gold[0] : C.body[0], b.pending > 0 ? C.gold[1] : C.body[1], b.pending > 0 ? C.gold[2] : C.body[2]);
+      doc.text(`Rs ${fmtM(b.value)}M${b.pending > 0 ? ' *' : ''}`, bx + collW + pendW + 2, y);
+
+      // Marlas chart (right)
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...C.body);
+      doc.text(b.name, chartRX + nameColW, y, { align: 'right' });
+      const mx = chartRX + nameColW + 3;
+      const mw = (b.marlas / maxBMar) * barMaxW;
+      doc.setFillColor(...C.navy); doc.rect(mx, y - 3, Math.max(mw, 1), 5, 'F');
+      doc.setFontSize(7); doc.setTextColor(...C.body);
+      doc.text(`${Math.round(b.marlas)} marlas`, mx + mw + 2, y);
+      y += 12;
+    });
+    doc.setFont('helvetica', 'italic'); doc.setFontSize(5.5); doc.setTextColor(...C.gray);
+    doc.text('* Faded bar = unpaid', lm, y);
+
+    // ═══════════════════════════════════════
+    // PAGE 3+ — Customer-wise Details
+    // ═══════════════════════════════════════
+    doc.addPage(); y = 35;
+    sectionHdr('III', 'Customer-wise Details');
+
+    const cCols = [
+      { label: 'EOI', w: 13, align: 'left' }, { label: 'CUSTOMER', w: 26, align: 'left' },
+      { label: 'BROKER', w: 18, align: 'left' }, { label: 'AMOUNT (PKR)', w: 22, align: 'right' },
+      { label: 'MARLAS', w: 14, align: 'center' }, { label: 'STATUS', w: 16, align: 'center' },
+      { label: 'METHOD', w: 14, align: 'center' }, { label: 'DATE', w: 11, align: 'right' },
+    ];
+    const drawCHdr = () => drawTableHdr(cCols);
+    drawCHdr();
+
+    let gAmt = 0, gMar = 0, gPaid = 0, gTotal = 0;
+    custGroups.forEach(group => {
+      const isMulti = group.items.length > 1;
+      group.items.forEach((e, idx) => {
+        if (checkPage(isMulti && idx === group.items.length - 1 ? 22 : 14)) drawCHdr();
+        const amt = parseFloat(e.amount) || 0, m = parseFloat(e.marlas) || 0;
+        gAmt += amt; gMar += m; gTotal++;
+        if (e.payment_received) gPaid++;
+
+        let tx = lm;
+        // EOI
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...C.body);
+        doc.text(e.eoi_id || '', tx, y); tx += cCols[0].w;
+        // Customer
+        if (idx === 0) {
+          doc.setFont('helvetica', 'bold'); doc.text(e.party_name || '', tx, y);
+          if (isMulti) { doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...C.gray); doc.text(`${group.items.length} EOIs`, tx, y + 4); }
+        }
+        tx += cCols[1].w;
+        // Broker
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...C.body);
+        doc.text(e.broker_name || 'Direct', tx, y); tx += cCols[2].w;
+        // Amount
+        doc.text(fmtN(amt), tx + cCols[3].w, y, { align: 'right' }); tx += cCols[3].w;
+        // Marlas
+        doc.text(m ? String(Math.round(m)) : '-', tx + cCols[4].w / 2, y, { align: 'center' }); tx += cCols[4].w;
+        // Status badge
+        const isPaid = !!e.payment_received;
+        const bText = isPaid ? 'PAID' : 'PENDING';
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5);
+        const btw = doc.getTextWidth(bText);
+        doc.setFillColor(...(isPaid ? C.paidBg : C.pendBg));
+        doc.roundedRect(tx + cCols[5].w / 2 - btw / 2 - 2, y - 3, btw + 4, 5, 1, 1, 'F');
+        doc.setTextColor(...(isPaid ? C.paidFg : C.pendFg));
+        doc.text(bText, tx + cCols[5].w / 2, y, { align: 'center' }); tx += cCols[5].w;
+        // Method
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...C.body);
+        const meth = isPaid ? ((e.payment_method || '-').charAt(0).toUpperCase() + (e.payment_method || '-').slice(1)).replace('_', ' ') : '\u2014';
+        doc.text(meth, tx + cCols[6].w / 2, y, { align: 'center' }); tx += cCols[6].w;
+        // Date
+        if (e.eoi_date) {
+          const dt = new Date(e.eoi_date);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+          doc.text(String(dt.getDate()).padStart(2, '0'), tx + cCols[7].w, y - 1, { align: 'right' });
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...C.gray);
+          doc.text(dt.toLocaleDateString('en-GB', { month: 'short' }), tx + cCols[7].w, y + 4, { align: 'right' });
+        }
+        y += (isMulti && idx === 0) ? 12 : 10;
+      });
+      // Subtotal for multi-EOI customers
+      if (isMulti) {
+        const subAmt = group.items.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+        const subMar = group.items.reduce((s, e) => s + (parseFloat(e.marlas) || 0), 0);
+        doc.setFillColor(250, 248, 242); doc.rect(lm, y - 4, cw, 8, 'F');
+        doc.setFont('times', 'italic'); doc.setFontSize(8); doc.setTextColor(...C.body);
+        doc.text(`${group.name} subtotal`, lm + cCols[0].w, y);
+        const amtX = lm + cCols[0].w + cCols[1].w + cCols[2].w + cCols[3].w;
+        doc.text(fmtN(subAmt), amtX, y, { align: 'right' });
+        doc.text(String(Math.round(subMar)), amtX + cCols[4].w / 2, y, { align: 'center' });
+        y += 10;
+      }
+      hr(y - 5);
+    });
+
+    // Grand Total
+    checkPage(14);
+    doc.setFillColor(245, 243, 238); doc.rect(lm, y - 4, cw, 10, 'F');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...C.navy);
+    doc.text('Grand Total', lm + cCols[0].w, y);
+    const gaX = lm + cCols[0].w + cCols[1].w + cCols[2].w + cCols[3].w;
+    doc.text(fmtN(gAmt), gaX, y, { align: 'right' });
+    doc.text(String(Math.round(gMar)), gaX + cCols[4].w / 2, y, { align: 'center' });
+    doc.text(`${gPaid}/${gTotal}`, gaX + cCols[4].w + cCols[5].w / 2, y, { align: 'center' });
+    y += 16;
+
+    // ═══════════════════════════════════════
+    // SECTION IV — Plot Size Distribution
+    // ═══════════════════════════════════════
+    checkPage(70); hr(y); y += 14;
+    sectionHdr('IV', 'Plot Size Distribution');
+    const slabW = (cw - 9) / 4, slabH = 44;
+    slabDefs.forEach((s, i) => {
+      const sx = lm + i * (slabW + 3);
+      doc.setDrawColor(...C.ltGray); doc.setLineWidth(0.3);
+      doc.setFillColor(...C.cream); doc.roundedRect(sx, y, slabW, slabH, 1.5, 1.5, 'FD');
+      const clr = s.count > 0 ? C.gray : [200, 200, 200];
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(...clr);
+      doc.text(s.label, sx + slabW / 2, y + 8, { align: 'center' });
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
+      doc.setTextColor(...(s.count > 0 ? C.navy : [200, 200, 200]));
+      const numStr = String(s.count);
+      doc.text(numStr, sx + slabW / 2 - 3, y + 20, { align: 'center' });
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
+      doc.text(s.count === 1 ? 'EOI' : 'EOIs', sx + slabW / 2 + doc.getTextWidth(numStr) / 2, y + 20);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
+      doc.setTextColor(...(s.count > 0 ? C.gold : [200, 200, 200]));
+      doc.text(s.count > 0 ? `Rs ${fmtN(s.amount)}` : '\u2014', sx + slabW / 2, y + 29, { align: 'center' });
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...C.gray);
+      doc.text(s.count > 0 ? `${Math.round(s.marlas)} marlas` : '\u2014', sx + slabW / 2, y + 35, { align: 'center' });
+    });
+    y += slabH + 8;
+
+    // ═══════════════════════════════════════
+    // PAGE — Collection Timeline
+    // ═══════════════════════════════════════
+    if (weeks.length > 0) {
+      doc.addPage(); y = 35;
+      sectionHdr('V', 'Collection Timeline');
+      const tCols = [
+        { label: 'WEEK', w: 22, align: 'left' }, { label: 'EOIS', w: 12, align: 'center' },
+        { label: 'WEEKLY VALUE', w: 24, align: 'right' }, { label: 'COLLECTED', w: 22, align: 'right' },
+        { label: 'CUMULATIVE COLLECTED', w: 54, align: 'left' },
+      ];
+      drawTableHdr(tCols);
+
+      weeks.forEach((w, wi) => {
+        checkPage(30);
+        const sun = new Date(w.start); sun.setDate(sun.getDate() + 6);
+        const fS = (d) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+        const [sd, sm] = fS(w.start).split(' '), [ed, em] = fS(sun).split(' ');
+        let tx = lm;
+        // Week dates
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(...C.body);
+        doc.text(sd, tx, y); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
+        doc.text(`${sm} \u2013`, tx, y + 4.5);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.text(ed, tx, y + 9.5);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.text(em, tx, y + 14);
+        if (wi === weeks.length - 1) { doc.setFontSize(5.5); doc.setTextColor(...C.gray); doc.text('(partial)', tx, y + 18.5); }
+        tx += tCols[0].w;
+        // EOIs
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...C.body);
+        doc.text(String(w.eois.length), tx + tCols[1].w / 2, y + 6, { align: 'center' }); tx += tCols[1].w;
+        // Weekly value
+        doc.text(fmtN(w.value), tx + tCols[2].w, y + 6, { align: 'right' }); tx += tCols[2].w;
+        // Collected
+        doc.text(fmtN(w.collected), tx + tCols[3].w, y + 6, { align: 'right' }); tx += tCols[3].w;
+        // Cumulative + bar
+        doc.text(fmtN(w.cumulative), tx + 2, y + 6);
+        const bY = y + 10, bMaxW = 48;
+        const prevCum = wi > 0 ? weeks[wi - 1].cumulative : 0;
+        const prevW = (prevCum / maxCum) * bMaxW;
+        const curW = (w.cumulative / maxCum) * bMaxW;
+        if (prevW > 0) { doc.setFillColor(...C.navy); doc.rect(tx + 2, bY, prevW, 4, 'F'); }
+        if (curW > prevW) { doc.setFillColor(...C.gold); doc.rect(tx + 2 + prevW, bY, curW - prevW, 4, 'F'); }
+        y += 26; hr(y - 3);
+      });
+    }
+
+    // ═══════════════════════════════════════
+    // PAGE — Pending Collections
+    // ═══════════════════════════════════════
+    if (unpaidList.length > 0) {
+      doc.addPage(); y = 35;
+      sectionHdr('VI', 'Pending Collections \u2014 Action Required');
+      const pcw = (cw - 6) / 2, pch = 56;
+      unpaidList.forEach((e, i) => {
+        if (i % 2 === 0 && i > 0) y += pch + 8;
+        if (i % 2 === 0) checkPage(pch + 10);
+        const sx = lm + (i % 2) * (pcw + 6);
+        const cy = y;
+        doc.setFillColor(...C.cream); doc.setDrawColor(...C.ltGray); doc.setLineWidth(0.3);
+        doc.roundedRect(sx, cy, pcw, pch, 2, 2, 'FD');
+        // Name
+        doc.setFont('times', 'bold'); doc.setFontSize(12); doc.setTextColor(...C.navy);
+        doc.text(e.party_name || 'Unknown', sx + 6, cy + 10);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...C.gray);
+        doc.text(`via ${e.broker_name || 'Direct'}`, sx + 6, cy + 16);
+        // Fields
+        const fields = [
+          ['EOI Value', `Rs ${fmtN(parseFloat(e.amount) || 0)}`],
+          ['Plot Size', `${e.marlas || '-'} Marlas`],
+          ['EOI Date', e.eoi_date ? new Date(e.eoi_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'],
+          ['Notes', e.notes || '\u2014'],
+        ];
+        fields.forEach((f, fi) => {
+          const fy = cy + 23 + fi * 5.5;
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...C.gray);
+          doc.text(f[0], sx + 6, fy);
+          doc.setFont('helvetica', 'bold'); doc.setTextColor(...C.body);
+          doc.text(f[1], sx + pcw - 6, fy, { align: 'right' });
+        });
+        // Days outstanding badge
+        const days = Math.max(0, Math.floor((new Date() - new Date(e.eoi_date)) / 86400000));
+        const badge = `${days} DAYS OUTSTANDING`;
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(5.5);
+        const bw = doc.getTextWidth(badge);
+        doc.setFillColor(180, 120, 85); doc.roundedRect(sx + 6, cy + pch - 10, bw + 6, 6, 1.5, 1.5, 'F');
+        doc.setTextColor(...C.white); doc.text(badge, sx + 9, cy + pch - 6);
+      });
+      y += pch + 8;
+    }
+
+    // ─── Footer ───
+    if (y + 25 > ph) { doc.addPage(); y = ph / 2; }
+    hr(y + 5); y += 18;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...C.gray);
+    doc.text(`PREPARED BY ${userName.toUpperCase()}`, lm + cw / 2, y, { align: 'center' });
+
+    doc.save(`EOI_Report_${projName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+    window.showToast?.('PDF Generated', 'EOI Collection Report downloaded', 'success');
+  };
+
   // PDF Acknowledgment Slip — Sitara Grand Bazaar
   const generateEOIPDF = (eoi) => {
     const { jsPDF } = window.jspdf;
@@ -3795,6 +4282,9 @@ function EOICollectionView() {
             </select>
           )}
           <button onClick={handleExport} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 text-gray-700">Export CSV</button>
+          <button onClick={generateEOIReport} disabled={!selectedProjectId || eois.filter(e => e.status === 'active').length === 0}
+            className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Generate PDF Collection Report">Export PDF Report</button>
           <button onClick={openCreate} className="bg-gray-900 text-white px-4 py-2 text-sm font-medium rounded-lg hover:bg-gray-800">Record EOI</button>
         </div>
       </div>
