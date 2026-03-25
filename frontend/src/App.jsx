@@ -1876,7 +1876,7 @@ function CustomersView() {
       {/* Header with search */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h2 className="text-2xl font-semibold text-gray-900">Customers & Leads</h2>
+          <h2 className="text-xl sm:text-2xl font-semibold text-gray-900">Customers & Leads</h2>
           <p className="text-sm text-gray-500 mt-1">Unified customer and lead management</p>
         </div>
         <div className="flex items-center gap-2">
@@ -2885,42 +2885,108 @@ function CustomerTableView() {
       </div>
 
       {loading ? <Loader /> : customers.length === 0 ? <Empty msg="No customers" /> : (
-        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
-          <table className="w-full">
-            <thead><tr className="border-b border-gray-100">
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">ID</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Name</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Mobile</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Source</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">City</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">CNIC</th>
-              <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Actions</th>
-            </tr></thead>
-            <tbody className="divide-y divide-gray-50">
-              {customers.map(c => (
-                <tr key={c.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 text-sm font-mono text-gray-500">{c.customer_id}</td>
-                  <td className="px-6 py-4 cursor-pointer" onClick={() => viewDetail(c)}>
-                    <div className="text-sm font-medium text-blue-600 hover:text-blue-800">{c.name}</div>
-                    {c.email && <div className="text-xs text-gray-400">{c.email}</div>}
-                  </td>
-                  <td className="px-6 py-4 text-sm">{c.mobile}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{c.source || '-'}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{c.city || '-'}</td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{c.cnic || '-'}</td>
-                  <td className="px-6 py-4 text-right">
-                    <button onClick={() => setLogTarget({ id: c.id, entity_type: 'customer', name: c.name, mobile: c.mobile })}
-                      className="text-gray-400 hover:text-blue-600 mr-3" title="Log Interaction">Log</button>
-                    <button onClick={() => openEdit(c)} className="text-gray-400 hover:text-gray-600 mr-3">Edit</button>
-                    {getUserRole() !== 'creator' && (
-                      <button onClick={() => handleDelete(c)} className="text-gray-400 hover:text-red-500">{getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* Desktop Table View */}
+          <div className="hidden lg:block bg-white rounded-2xl shadow-sm border overflow-hidden">
+            <table className="w-full">
+              <thead><tr className="border-b border-gray-100">
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">ID</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Name</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Mobile</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">Source</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">City</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-6 py-4">CNIC</th>
+                <th className="text-right text-xs font-medium text-gray-500 uppercase px-6 py-4">Actions</th>
+              </tr></thead>
+              <tbody className="divide-y divide-gray-50">
+                {customers.map(c => (
+                  <tr key={c.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 text-sm font-mono text-gray-500">{c.customer_id}</td>
+                    <td className="px-6 py-4 cursor-pointer" onClick={() => viewDetail(c)}>
+                      <div className="text-sm font-medium text-blue-600 hover:text-blue-800">{c.name}</div>
+                      {c.email && <div className="text-xs text-gray-400">{c.email}</div>}
+                    </td>
+                    <td className="px-6 py-4 text-sm">{c.mobile}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{c.source || '-'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{c.city || '-'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{c.cnic || '-'}</td>
+                    <td className="px-6 py-4 text-right">
+                      <button onClick={() => setLogTarget({ id: c.id, entity_type: 'customer', name: c.name, mobile: c.mobile })}
+                        className="text-gray-400 hover:text-blue-600 mr-3" title="Log Interaction">Log</button>
+                      <button onClick={() => openEdit(c)} className="text-gray-400 hover:text-gray-600 mr-3">Edit</button>
+                      {getUserRole() !== 'creator' && (
+                        <button onClick={() => handleDelete(c)} className="text-gray-400 hover:text-red-500">{getUserRole() === 'admin' ? 'Delete' : 'Request Delete'}</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile Card View */}
+          <div className="lg:hidden space-y-3">
+            {customers.map(c => (
+              <div key={c.id} className="bg-white rounded-lg border p-4 space-y-3">
+                {/* Header */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <button onClick={() => viewDetail(c)} className="text-left w-full">
+                      <div className="font-medium text-blue-600 hover:text-blue-800 truncate">{c.name}</div>
+                    </button>
+                    <div className="text-xs font-mono text-gray-400 mt-1">{c.customer_id}</div>
+                    {c.email && <div className="text-xs text-gray-500 truncate mt-0.5">{c.email}</div>}
+                  </div>
+                </div>
+
+                {/* Mobile */}
+                <a href={`tel:${c.mobile}`} className="text-sm text-blue-600 hover:text-blue-800 block">
+                  {c.mobile}
+                </a>
+
+                {/* Info Grid */}
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  {c.source && (
+                    <div>
+                      <div className="text-xs text-gray-500">Source</div>
+                      <div className="text-gray-900">{c.source}</div>
+                    </div>
+                  )}
+                  {c.city && (
+                    <div>
+                      <div className="text-xs text-gray-500">City</div>
+                      <div className="text-gray-900">{c.city}</div>
+                    </div>
+                  )}
+                  {c.cnic && (
+                    <div className="col-span-2">
+                      <div className="text-xs text-gray-500">CNIC</div>
+                      <div className="text-gray-900">{c.cnic}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-2 pt-2 border-t">
+                  <button onClick={() => setLogTarget({ id: c.id, entity_type: 'customer', name: c.name, mobile: c.mobile })}
+                    className="flex-1 py-2 px-3 text-sm border rounded-lg hover:bg-blue-50 text-blue-600 font-medium">
+                    Log Interaction
+                  </button>
+                  <button onClick={() => openEdit(c)}
+                    className="flex-1 py-2 px-3 text-sm border rounded-lg hover:bg-gray-50 text-gray-700 font-medium">
+                    Edit
+                  </button>
+                  {getUserRole() !== 'creator' && (
+                    <button onClick={() => handleDelete(c)}
+                      className="py-2 px-3 text-sm border rounded-lg hover:bg-red-50 text-red-600 font-medium">
+                      {getUserRole() === 'admin' ? 'Delete' : 'Request'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       {canCreateCustomers && (
@@ -4596,7 +4662,7 @@ function EOICollectionView() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-gray-900">EOI Collection</h2>
+          <h2 className="text-xl sm:text-2xl font-semibold text-gray-900">EOI Collection</h2>
           <p className="text-sm text-gray-500 mt-1">
             {selectedProject?.name || 'Select Project'} — Expression of Interest tracking
           </p>
@@ -5835,55 +5901,129 @@ function InteractionsView() {
       )}
 
       {loading ? <Loader /> : interactions.length === 0 ? <Empty msg={activeFilter ? `No interactions for "${activeFilter.label}"` : "No interactions logged"} /> : (
-        <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
-          <table className="w-full">
-            <thead><tr className="border-b border-gray-100">
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">ID</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Rep</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Contact</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-2 py-4">Entity ID</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-2 py-4">Mobile</th>
-              <th className="text-center text-xs font-medium text-gray-500 uppercase px-4 py-4">Type</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Status</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Follow-up</th>
-              <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Date & Time</th>
-            </tr></thead>
-            <tbody className="divide-y divide-gray-50">
-              {interactions.map(i => (
-                <tr key={i.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-4 text-sm font-mono text-gray-500">{i.interaction_id}</td>
-                  <td className="px-4 py-4 text-sm">{i.rep_name}</td>
-                  <td className="px-4 py-4">
+        <>
+          {/* Desktop Table View */}
+          <div className="hidden lg:block bg-white rounded-2xl shadow-sm border overflow-hidden">
+            <table className="w-full">
+              <thead><tr className="border-b border-gray-100">
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">ID</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Rep</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Contact</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-2 py-4">Entity ID</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-2 py-4">Mobile</th>
+                <th className="text-center text-xs font-medium text-gray-500 uppercase px-4 py-4">Type</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Status</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Follow-up</th>
+                <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-4">Date & Time</th>
+              </tr></thead>
+              <tbody className="divide-y divide-gray-50">
+                {interactions.map(i => (
+                  <tr key={i.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-4 text-sm font-mono text-gray-500">{i.interaction_id}</td>
+                    <td className="px-4 py-4 text-sm">{i.rep_name}</td>
+                    <td className="px-4 py-4">
+                      {i.lead_id && i.lead_uuid ? (
+                        <button onClick={() => setShowLeadDetail({
+                          id: i.lead_uuid, lead_id: i.lead_id, name: i.lead_name,
+                          mobile: i.lead_mobile, additional_mobiles: i.lead_additional_mobiles || [],
+                          temperature: i.lead_temperature
+                        })} className="text-left">
+                          <div className="text-sm font-medium text-blue-600 hover:text-blue-800">{i.lead_name}</div>
+                        </button>
+                      ) : (
+                        <div className="text-sm font-medium">{i.customer_name || i.broker_name || i.lead_name || '-'}</div>
+                      )}
+                      <div className="text-xs text-gray-400">{i.customer_id ? 'Customer' : i.broker_id ? 'Broker' : i.lead_id ? 'Lead' : '-'}</div>
+                    </td>
+                    <td className="px-2 py-4 text-xs font-mono text-gray-500">{i.lead_id || i.customer_id || i.broker_id || '-'}</td>
+                    <td className="px-2 py-4 text-xs text-gray-600">{i.lead_mobile || i.customer_mobile || i.broker_mobile || '-'}</td>
+                    <td className="px-4 py-4 text-center">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        i.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
+                        i.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' :
+                        i.interaction_type === 'meeting' ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100'
+                      }`}>{formatInteractionType(i.interaction_type, i.status)}</span>
+                    </td>
+                    <td className="px-4 py-4 text-sm text-gray-600">{i.status || '-'}</td>
+                    <td className="px-4 py-4 text-sm">{i.next_follow_up || '-'}</td>
+                    <td className="px-4 py-4 text-sm text-gray-500">{new Date(i.created_at + (i.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile Card View */}
+          <div className="lg:hidden space-y-3">
+            {interactions.map(i => {
+              const entityName = i.customer_name || i.broker_name || i.lead_name || '-';
+              const entityType = i.customer_id ? 'Customer' : i.broker_id ? 'Broker' : i.lead_id ? 'Lead' : '-';
+              const entityId = i.lead_id || i.customer_id || i.broker_id || '-';
+              const mobile = i.lead_mobile || i.customer_mobile || i.broker_mobile || '-';
+              const interactionDate = new Date(i.created_at + (i.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+
+              return (
+                <div key={i.id} className="bg-white rounded-lg border p-4 space-y-3">
+                  {/* Header with Type Badge and ID */}
+                  <div className="flex items-start justify-between gap-2">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium flex-shrink-0 ${
+                      i.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
+                      i.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' :
+                      i.interaction_type === 'meeting' ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100'
+                    }`}>{formatInteractionType(i.interaction_type, i.status)}</span>
+                    <span className="text-xs font-mono text-gray-400">{i.interaction_id}</span>
+                  </div>
+
+                  {/* Contact Info */}
+                  <div>
                     {i.lead_id && i.lead_uuid ? (
                       <button onClick={() => setShowLeadDetail({
                         id: i.lead_uuid, lead_id: i.lead_id, name: i.lead_name,
                         mobile: i.lead_mobile, additional_mobiles: i.lead_additional_mobiles || [],
                         temperature: i.lead_temperature
-                      })} className="text-left">
-                        <div className="text-sm font-medium text-blue-600 hover:text-blue-800">{i.lead_name}</div>
+                      })} className="text-left w-full">
+                        <div className="font-medium text-blue-600 hover:text-blue-800">{entityName}</div>
                       </button>
                     ) : (
-                      <div className="text-sm font-medium">{i.customer_name || i.broker_name || i.lead_name || '-'}</div>
+                      <div className="font-medium text-gray-900">{entityName}</div>
                     )}
-                    <div className="text-xs text-gray-400">{i.customer_id ? 'Customer' : i.broker_id ? 'Broker' : i.lead_id ? 'Lead' : '-'}</div>
-                  </td>
-                  <td className="px-2 py-4 text-xs font-mono text-gray-500">{i.lead_id || i.customer_id || i.broker_id || '-'}</td>
-                  <td className="px-2 py-4 text-xs text-gray-600">{i.lead_mobile || i.customer_mobile || i.broker_mobile || '-'}</td>
-                  <td className="px-4 py-4 text-center">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      i.interaction_type === 'call' ? 'bg-blue-50 text-blue-700' :
-                      i.interaction_type === 'whatsapp' ? 'bg-green-50 text-green-700' :
-                      i.interaction_type === 'meeting' ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100'
-                    }`}>{formatInteractionType(i.interaction_type, i.status)}</span>
-                  </td>
-                  <td className="px-4 py-4 text-sm text-gray-600">{i.status || '-'}</td>
-                  <td className="px-4 py-4 text-sm">{i.next_follow_up || '-'}</td>
-                  <td className="px-4 py-4 text-sm text-gray-500">{new Date(i.created_at + (i.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
+                      <span className="bg-gray-100 px-2 py-0.5 rounded">{entityType}</span>
+                      <span className="font-mono">{entityId}</span>
+                    </div>
+                    {mobile !== '-' && (
+                      <a href={`tel:${mobile}`} className="text-sm text-blue-600 hover:text-blue-800 block mt-1">{mobile}</a>
+                    )}
+                  </div>
+
+                  {/* Info Grid */}
+                  <div className="grid grid-cols-2 gap-2 text-sm pt-2 border-t">
+                    <div>
+                      <div className="text-xs text-gray-500">Rep</div>
+                      <div className="text-gray-900 truncate">{i.rep_name}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">Date</div>
+                      <div className="text-gray-900">{interactionDate}</div>
+                    </div>
+                    {i.status && (
+                      <div>
+                        <div className="text-xs text-gray-500">Status</div>
+                        <div className="text-gray-900">{i.status}</div>
+                      </div>
+                    )}
+                    {i.next_follow_up && (
+                      <div>
+                        <div className="text-xs text-gray-500">Follow-up</div>
+                        <div className="text-gray-900 text-xs">{i.next_follow_up}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {showModal && (
@@ -7399,7 +7539,7 @@ function DashboardView() {
     return (
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-semibold text-gray-900">Analytics Engine</h2>
+          <h2 className="text-xl sm:text-2xl font-semibold text-gray-900">Analytics Engine</h2>
           <p className="text-sm text-gray-500 mt-1">Role-scoped sales dashboard</p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -7416,7 +7556,7 @@ function DashboardView() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold text-gray-900">Analytics Engine</h2>
+        <h2 className="text-xl sm:text-2xl font-semibold text-gray-900">Analytics Engine</h2>
         <p className="text-sm text-gray-500 mt-1">Comprehensive system overview & analytics</p>
       </div>
 
@@ -9550,7 +9690,7 @@ function MediaView() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-gray-900">Media Library</h2>
+          <h2 className="text-xl sm:text-2xl font-semibold text-gray-900">Media Library</h2>
           <p className="text-sm text-gray-500 mt-1">Manage all uploaded files and attachments</p>
         </div>
       </div>
