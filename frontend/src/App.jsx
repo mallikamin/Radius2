@@ -182,6 +182,7 @@ export default function App() {
   const [taskDeepLink, setTaskDeepLink] = useState(null);
   const [zakatDeepLink, setZakatDeepLink] = useState(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [toasts, setToasts] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -348,7 +349,7 @@ export default function App() {
 
   // Close dropdowns when clicking outside - MUST be before conditional returns
   useEffect(() => {
-    if (!showMoreMenu && !showNotifPanel) return;
+    if (!showMoreMenu && !showNotifPanel && !mobileMenuOpen) return;
 
     const handleClickOutside = (event) => {
       const target = event.target;
@@ -363,11 +364,16 @@ export default function App() {
         const notifPanel = target.closest('[data-notif-panel]');
         if (!notifPanel) setShowNotifPanel(false);
       }
+      if (mobileMenuOpen) {
+        const mobileMenu = target.closest('[data-mobile-menu]');
+        const hamburgerBtn = target.closest('[data-hamburger]');
+        if (!mobileMenu && !hamburgerBtn) setMobileMenuOpen(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showMoreMenu, showNotifPanel]);
+  }, [showMoreMenu, showNotifPanel, mobileMenuOpen]);
 
   // Role-based access control
   const ZAKAT_ALLOWED_REPS = ['REP-0002', 'REP-0010', 'REP-0011', 'REP-0012', 'REP-0013'];
@@ -508,99 +514,229 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#fafafa]">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-          <h1 className="text-xl font-semibold tracking-tight text-gray-900">Orbit <span className="text-gray-400 font-normal">-</span> <span className="text-gray-500 font-medium text-base">SBL CRM</span></h1>
-          <nav className="flex items-center gap-2">
-            <div className="text-sm text-gray-600 mr-2">
-              {user.name} <span className="text-gray-400">({user.role})</span>
-            </div>
-            {/* Notification Bell */}
-            <div className="relative" data-notif-panel>
-              <button onClick={() => setShowNotifPanel(!showNotifPanel)}
-                className="relative p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                </svg>
-                {unreadCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center font-medium">{unreadCount > 9 ? '9+' : unreadCount}</span>
-                )}
-              </button>
-              {showNotifPanel && (
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                    <span className="font-semibold text-sm text-gray-900">Notifications</span>
-                    {unreadCount > 0 && <button onClick={markAllRead} className="text-xs text-blue-600 hover:text-blue-800">Mark all read</button>}
-                  </div>
-                  <div className="overflow-y-auto max-h-72">
-                    {notifications.length === 0 ? (
-                      <div className="px-4 py-8 text-center text-sm text-gray-400">No new notifications</div>
-                    ) : notifications.map(n => (
-                      <div key={n.id} onClick={() => handleNotifClick(n)}
-                        className="px-4 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
-                        <div className="text-sm font-medium text-gray-900">{n.title}</div>
-                        {n.message && <div className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</div>}
-                        <div className="text-xs text-gray-400 mt-1">{new Date(n.created_at).toLocaleString()}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <button
-              onClick={handleLogout}
-              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
-            >
-              Logout
-            </button>
-            {/* Primary tabs */}
-            <div className="flex gap-1">
-              {primaryTabs.map(tab => (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
-                  {tab.label}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
+          {/* Mobile Header */}
+          <div className="flex items-center justify-between lg:hidden">
+            <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-gray-900">
+              Orbit <span className="text-gray-400 font-normal text-base sm:text-lg">- SBL</span>
+            </h1>
+            <div className="flex items-center gap-2">
+              {/* Mobile Notification Bell */}
+              <div className="relative" data-notif-panel>
+                <button onClick={() => setShowNotifPanel(!showNotifPanel)}
+                  className="relative p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center font-medium">{unreadCount > 9 ? '9+' : unreadCount}</span>
+                  )}
                 </button>
-              ))}
-            </div>
-            
-            {/* More menu dropdown - icon grid */}
-            {moreTabs.length > 0 && (
-            <div className="relative">
+                {showNotifPanel && (
+                  <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                      <span className="font-semibold text-sm text-gray-900">Notifications</span>
+                      {unreadCount > 0 && <button onClick={markAllRead} className="text-xs text-blue-600 hover:text-blue-800">Mark all read</button>}
+                    </div>
+                    <div className="overflow-y-auto max-h-72">
+                      {notifications.length === 0 ? (
+                        <div className="px-4 py-8 text-center text-sm text-gray-400">No new notifications</div>
+                      ) : notifications.map(n => (
+                        <div key={n.id} onClick={() => handleNotifClick(n)}
+                          className="px-4 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
+                          <div className="text-sm font-medium text-gray-900">{n.title}</div>
+                          {n.message && <div className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</div>}
+                          <div className="text-xs text-gray-400 mt-1">{new Date(n.created_at).toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* Hamburger Button */}
               <button
-                onClick={() => setShowMoreMenu(!showMoreMenu)}
-                className={`more-menu-button px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${showMoreMenu || moreTabs.some(t => t.id === activeTab) ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
-                More
+                data-hamburger
+                onClick={() => setMobileMenuOpen(true)}
+                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+                aria-label="Open menu"
+              >
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
               </button>
+            </div>
+          </div>
 
-              {showMoreMenu && (
-                <div className="more-menu-container absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50">
-                  <div className="grid grid-cols-2 gap-1">
+          {/* Desktop Header */}
+          <div className="hidden lg:flex items-center justify-between">
+            <h1 className="text-xl font-semibold tracking-tight text-gray-900">Orbit <span className="text-gray-400 font-normal">-</span> <span className="text-gray-500 font-medium text-base">SBL CRM</span></h1>
+            <nav className="flex items-center gap-2">
+              <div className="text-sm text-gray-600 mr-2">
+                {user.name} <span className="text-gray-400">({user.role})</span>
+              </div>
+              {/* Notification Bell */}
+              <div className="relative" data-notif-panel>
+                <button onClick={() => setShowNotifPanel(!showNotifPanel)}
+                  className="relative p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center font-medium">{unreadCount > 9 ? '9+' : unreadCount}</span>
+                  )}
+                </button>
+                {showNotifPanel && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                      <span className="font-semibold text-sm text-gray-900">Notifications</span>
+                      {unreadCount > 0 && <button onClick={markAllRead} className="text-xs text-blue-600 hover:text-blue-800">Mark all read</button>}
+                    </div>
+                    <div className="overflow-y-auto max-h-72">
+                      {notifications.length === 0 ? (
+                        <div className="px-4 py-8 text-center text-sm text-gray-400">No new notifications</div>
+                      ) : notifications.map(n => (
+                        <div key={n.id} onClick={() => handleNotifClick(n)}
+                          className="px-4 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
+                          <div className="text-sm font-medium text-gray-900">{n.title}</div>
+                          {n.message && <div className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</div>}
+                          <div className="text-xs text-gray-400 mt-1">{new Date(n.created_at).toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={handleLogout}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+              >
+                Logout
+              </button>
+              {/* Primary tabs */}
+              <div className="flex gap-1">
+                {primaryTabs.map(tab => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                    className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* More menu dropdown - icon grid */}
+              {moreTabs.length > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowMoreMenu(!showMoreMenu)}
+                  className={`more-menu-button px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${showMoreMenu || moreTabs.some(t => t.id === activeTab) ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'}`}>
+                  More
+                </button>
+
+                {showMoreMenu && (
+                  <div className="more-menu-container absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50">
+                    <div className="grid grid-cols-2 gap-1">
+                      {moreTabs.map(tab => (
+                        <button
+                          key={tab.id}
+                          onClick={() => { setActiveTab(tab.id); setShowMoreMenu(false); }}
+                          className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-colors ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                          <span className="text-base">{tab.icon}</span>
+                          <span className="font-medium">{tab.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              )}
+
+              {/* Settings button - admin/cco only */}
+              {canAccess('settings') && (
+              <button
+                onClick={() => setActiveTab('settings')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === 'settings' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}>
+                Settings
+              </button>
+              )}
+            </nav>
+          </div>
+        </div>
+
+        {/* Mobile Slide-out Menu */}
+        {mobileMenuOpen && (
+          <div className="fixed inset-0 z-[60] lg:hidden">
+            {/* Overlay */}
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileMenuOpen(false)} />
+            {/* Menu Panel */}
+            <div data-mobile-menu className="fixed right-0 top-0 bottom-0 w-72 bg-white shadow-2xl overflow-y-auto">
+              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-gray-900">{user.name}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">{user.role}</div>
+                </div>
+                <button onClick={() => setMobileMenuOpen(false)} className="p-2 text-gray-400 hover:text-gray-600">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="p-3 space-y-1">
+                {/* Primary Tabs */}
+                {primaryTabs.map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => { setActiveTab(tab.id); setMobileMenuOpen(false); }}
+                    className={`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-colors ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+
+                {/* More Tabs */}
+                {moreTabs.length > 0 && (
+                  <>
+                    <div className="pt-2 pb-1 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">More</div>
                     {moreTabs.map(tab => (
                       <button
                         key={tab.id}
-                        onClick={() => { setActiveTab(tab.id); setShowMoreMenu(false); }}
-                        className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-colors ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-                        <span className="text-base">{tab.icon}</span>
-                        <span className="font-medium">{tab.label}</span>
+                        onClick={() => { setActiveTab(tab.id); setMobileMenuOpen(false); }}
+                        className={`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === tab.id ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+                      >
+                        <span>{tab.icon}</span>
+                        <span>{tab.label}</span>
                       </button>
                     ))}
-                  </div>
-                </div>
-              )}
+                  </>
+                )}
+
+                {/* Settings */}
+                {canAccess('settings') && (
+                  <>
+                    <div className="pt-2 pb-1 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">System</div>
+                    <button
+                      onClick={() => { setActiveTab('settings'); setMobileMenuOpen(false); }}
+                      className={`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-colors ${activeTab === 'settings' ? 'bg-gray-900 text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+                    >
+                      Settings
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Logout Button */}
+              <div className="p-4 border-t border-gray-200">
+                <button
+                  onClick={() => { handleLogout(); setMobileMenuOpen(false); }}
+                  className="w-full px-4 py-3 bg-red-50 text-red-600 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
+                >
+                  Logout
+                </button>
+              </div>
             </div>
-            )}
-            
-            {/* Settings button - admin/cco only */}
-            {canAccess('settings') && (
-            <button
-              onClick={() => setActiveTab('settings')}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all whitespace-nowrap ${activeTab === 'settings' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}`}>
-              Settings
-            </button>
-            )}
-          </nav>
-        </div>
+          </div>
+        )}
       </header>
-      <main className="max-w-7xl mx-auto px-6 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-8">
         {activeTab === 'dashboard' && <DashboardView />}
         {activeTab === 'projects' && <ProjectsView />}
         {activeTab === 'inventory' && <InventoryView />}
@@ -1059,7 +1195,7 @@ function InventoryView() {
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Unit Number" required value={form.unit_number} onChange={e => setForm({...form, unit_number: e.target.value})} />
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
                 <select value={form.unit_type} onChange={e => setForm({...form, unit_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
@@ -1068,7 +1204,7 @@ function InventoryView() {
               </div>
             </div>
             <Input label="Block" value={form.block} onChange={e => setForm({...form, block: e.target.value})} />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Area (Marla)" type="number" step="0.01" required value={form.area_marla} onChange={e => setForm({...form, area_marla: e.target.value})} />
               <Input label="Rate/Marla" type="number" required value={form.rate_per_marla} onChange={e => setForm({...form, rate_per_marla: e.target.value})} />
             </div>
@@ -1531,7 +1667,7 @@ function NewTransactionModal({ onClose, onSuccess }) {
   return (
     <Modal title="New Transaction" onClose={onClose} wide>
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Project Selection */}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Project *</label>
@@ -1588,7 +1724,7 @@ function NewTransactionModal({ onClose, onSuccess }) {
               </select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Broker</label>
                 <select value={form.broker_id} onChange={e => setForm({...form, broker_id: e.target.value, broker_commission_rate: brokers.find(b => b.id === e.target.value)?.commission_rate || 2})} className="w-full border rounded-lg px-3 py-2 text-sm">
                   <option value="">No Broker</option>
@@ -1603,7 +1739,7 @@ function NewTransactionModal({ onClose, onSuccess }) {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Input label="Area (Marla)" type="number" step="0.01" value={form.area_marla} onChange={e => setForm({...form, area_marla: e.target.value})} />
               <Input label="Rate/Marla" type="number" value={form.rate_per_marla} onChange={e => setForm({...form, rate_per_marla: e.target.value})} />
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Total</label>
@@ -1961,7 +2097,7 @@ function PipelineView() {
   return (
     <div className="space-y-4">
       {/* Filters row */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
         <button onClick={() => setShowAddLeadModal(true)} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800">+ Add Lead</button>
         {isAdminLike && (
           <select value={repFilter} onChange={e => { setRepFilter(e.target.value); setLeadPage(1); setLoading(true); }}
@@ -2015,90 +2151,188 @@ function PipelineView() {
 
       <div>
         {loading ? <Loader /> : displayLeads.length === 0 ? <Empty msg="No leads found for selected view" /> : (
-          <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-100">
-                  {isAdminLike && <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Select</th>}
-                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Lead ID</th>
-                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Lead Name</th>
-                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Last Interaction</th>
-                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Source</th>
-                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Allocated To</th>
-                  <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {displayLeads.map(lead => {
-                  const stageInfo = allStages.find(s => s.stage === lead.pipeline_stage);
-                  const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
-                  const lastInteractionAt = leadFollowupMap[lead.lead_id]?.lastInteractionAt;
-                  const lastInteractionText = lastInteractionAt
-                    ? new Date(lastInteractionAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
-                    : lead.days_since_contact !== null
-                      ? `${lead.days_since_contact}d ago`
-                      : 'No interaction';
-                  return (
-                    <tr key={lead.id} className="hover:bg-gray-50">
-                      {isAdminLike && (
+          <>
+            {/* Desktop Table View */}
+            <div className="hidden lg:block bg-white rounded-2xl shadow-sm border overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    {isAdminLike && <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Select</th>}
+                    <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Lead ID</th>
+                    <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Lead Name</th>
+                    <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Last Interaction</th>
+                    <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Source</th>
+                    <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Allocated To</th>
+                    <th className="text-left text-xs font-medium text-gray-500 uppercase px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {displayLeads.map(lead => {
+                    const stageInfo = allStages.find(s => s.stage === lead.pipeline_stage);
+                    const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
+                    const lastInteractionAt = leadFollowupMap[lead.lead_id]?.lastInteractionAt;
+                    const lastInteractionText = lastInteractionAt
+                      ? new Date(lastInteractionAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+                      : lead.days_since_contact !== null
+                        ? `${lead.days_since_contact}d ago`
+                        : 'No interaction';
+                    return (
+                      <tr key={lead.id} className="hover:bg-gray-50">
+                        {isAdminLike && (
+                          <td className="px-4 py-3">
+                            <input type="checkbox" checked={selectedLeads.includes(lead.id)}
+                              onChange={e => setSelectedLeads(prev => e.target.checked ? [...prev, lead.id] : prev.filter(x => x !== lead.id))}
+                              className="rounded" />
+                          </td>
+                        )}
+                        <td className="px-4 py-3 text-sm font-mono text-gray-600">{lead.lead_id}</td>
                         <td className="px-4 py-3">
+                          <button onClick={() => setShowLeadDetail(lead)} className="text-left">
+                            <div className="text-sm font-medium text-gray-900 hover:text-blue-600">{lead.name}</div>
+                            <div className="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
+                              {contactNumbers.length > 0 && <span>{contactNumbers.join(' | ')}</span>}
+                              {lead.temperature && (
+                                <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-medium ${getTemperatureBadgeClass(lead.temperature)}`}>
+                                  {lead.temperature}
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{lastInteractionText}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700">{lead.source || lead.campaign_name || '-'}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700">{lead.assigned_rep || 'Unassigned'}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              onClick={() => setLogTarget({
+                                id: lead.id,
+                                entity_type: 'lead',
+                                name: lead.name,
+                                mobile: lead.mobile,
+                                additional_mobiles: lead.additional_mobiles || [],
+                                temperature: lead.temperature,
+                                defaultRepId: lead.assigned_rep_id || ''
+                              })}
+                              className="py-1 px-2 text-xs border rounded-lg hover:bg-blue-50 text-blue-600"
+                            >
+                              Log
+                            </button>
+                            <select value={lead.pipeline_stage} onChange={e => handleStageChange(lead.id, e.target.value)}
+                              className="px-2 py-1 text-xs border rounded-lg bg-white"
+                              style={{ borderColor: stageInfo?.color || '#d1d5db' }}>
+                              {allStages.map(s => <option key={s.stage} value={s.stage}>{s.stage}</option>)}
+                            </select>
+                            {role === 'admin' && (
+                              <button onClick={() => { if (confirm(`Delete lead "${lead.name}"?`)) api.delete(`/leads/${lead.id}`).then(() => loadPipeline()).catch(e => window.showToast?.('Error', e.response?.data?.detail || 'Delete failed', 'error')); }}
+                                className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete lead">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="lg:hidden space-y-3">
+              {displayLeads.map(lead => {
+                const stageInfo = allStages.find(s => s.stage === lead.pipeline_stage);
+                const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
+                const lastInteractionAt = leadFollowupMap[lead.lead_id]?.lastInteractionAt;
+                const lastInteractionText = lastInteractionAt
+                  ? new Date(lastInteractionAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
+                  : lead.days_since_contact !== null
+                    ? `${lead.days_since_contact}d ago`
+                    : 'No interaction';
+                return (
+                  <div key={lead.id} className="bg-white rounded-lg border p-4 space-y-3">
+                    {/* Header with checkbox and ID */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2 flex-1 min-w-0">
+                        {isAdminLike && (
                           <input type="checkbox" checked={selectedLeads.includes(lead.id)}
                             onChange={e => setSelectedLeads(prev => e.target.checked ? [...prev, lead.id] : prev.filter(x => x !== lead.id))}
-                            className="rounded" />
-                        </td>
-                      )}
-                      <td className="px-4 py-3 text-sm font-mono text-gray-600">{lead.lead_id}</td>
-                      <td className="px-4 py-3">
-                        <button onClick={() => setShowLeadDetail(lead)} className="text-left">
-                          <div className="text-sm font-medium text-gray-900 hover:text-blue-600">{lead.name}</div>
-                          <div className="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
-                            {contactNumbers.length > 0 && <span>{contactNumbers.join(' | ')}</span>}
+                            className="rounded mt-1 flex-shrink-0" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <button onClick={() => setShowLeadDetail(lead)} className="text-left w-full">
+                            <div className="font-medium text-gray-900 truncate">{lead.name}</div>
+                          </button>
+                          <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap mt-1">
+                            <span className="font-mono">{lead.lead_id}</span>
                             {lead.temperature && (
-                              <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-medium ${getTemperatureBadgeClass(lead.temperature)}`}>
+                              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${getTemperatureBadgeClass(lead.temperature)}`}>
                                 {lead.temperature}
                               </span>
                             )}
                           </div>
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-600">{lastInteractionText}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{lead.source || lead.campaign_name || '-'}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{lead.assigned_rep || 'Unassigned'}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <button
-                            onClick={() => setLogTarget({
-                              id: lead.id,
-                              entity_type: 'lead',
-                              name: lead.name,
-                              mobile: lead.mobile,
-                              additional_mobiles: lead.additional_mobiles || [],
-                              temperature: lead.temperature,
-                              defaultRepId: lead.assigned_rep_id || ''
-                            })}
-                            className="py-1 px-2 text-xs border rounded-lg hover:bg-blue-50 text-blue-600"
-                          >
-                            Log
-                          </button>
-                          <select value={lead.pipeline_stage} onChange={e => handleStageChange(lead.id, e.target.value)}
-                            className="px-2 py-1 text-xs border rounded-lg bg-white"
-                            style={{ borderColor: stageInfo?.color || '#d1d5db' }}>
-                            {allStages.map(s => <option key={s.stage} value={s.stage}>{s.stage}</option>)}
-                          </select>
-                          {role === 'admin' && (
-                            <button onClick={() => { if (confirm(`Delete lead "${lead.name}"?`)) api.delete(`/leads/${lead.id}`).then(() => loadPipeline()).catch(e => window.showToast?.('Error', e.response?.data?.detail || 'Delete failed', 'error')); }}
-                              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete lead">
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                            </button>
-                          )}
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                      </div>
+                      {role === 'admin' && (
+                        <button onClick={() => { if (confirm(`Delete lead "${lead.name}"?`)) api.delete(`/leads/${lead.id}`).then(() => loadPipeline()).catch(e => window.showToast?.('Error', e.response?.data?.detail || 'Delete failed', 'error')); }}
+                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded flex-shrink-0" title="Delete lead">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Contact Numbers */}
+                    {contactNumbers.length > 0 && (
+                      <div className="text-sm text-gray-600 flex flex-wrap gap-1.5">
+                        {contactNumbers.map((num, i) => (
+                          <a key={i} href={`tel:${num}`} className="hover:text-blue-600">{num}</a>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Info Grid */}
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <div className="text-xs text-gray-500">Source</div>
+                        <div className="text-gray-900">{lead.source || lead.campaign_name || '-'}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Assigned To</div>
+                        <div className="text-gray-900">{lead.assigned_rep || 'Unassigned'}</div>
+                      </div>
+                      <div className="col-span-2">
+                        <div className="text-xs text-gray-500">Last Interaction</div>
+                        <div className="text-gray-900">{lastInteractionText}</div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-2 pt-2 border-t">
+                      <button
+                        onClick={() => setLogTarget({
+                          id: lead.id,
+                          entity_type: 'lead',
+                          name: lead.name,
+                          mobile: lead.mobile,
+                          additional_mobiles: lead.additional_mobiles || [],
+                          temperature: lead.temperature,
+                          defaultRepId: lead.assigned_rep_id || ''
+                        })}
+                        className="flex-1 py-2 px-3 text-sm border rounded-lg hover:bg-blue-50 text-blue-600 font-medium"
+                      >
+                        Log Interaction
+                      </button>
+                      <select value={lead.pipeline_stage} onChange={e => handleStageChange(lead.id, e.target.value)}
+                        className="flex-1 px-3 py-2 text-sm border rounded-lg bg-white"
+                        style={{ borderColor: stageInfo?.color || '#d1d5db' }}>
+                        {allStages.map(s => <option key={s.stage} value={s.stage}>{s.stage}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
         {/* Pagination */}
         {totalPages > 1 && (
@@ -2156,16 +2390,16 @@ function PipelineView() {
             )}
             <Input label="Name" required value={newLeadForm.name} onChange={e => setNewLeadForm({...newLeadForm, name: e.target.value})} />
             <PhoneInput label="Mobile" value={newLeadForm.mobile} onChange={value => setNewLeadForm({...newLeadForm, mobile: value})} />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Additional Mobile 1" value={newLeadForm.additional_mobiles[0] || ''} onChange={e => updateMobile(0, e.target.value)} />
               <Input label="Additional Mobile 2" value={newLeadForm.additional_mobiles[1] || ''} onChange={e => updateMobile(1, e.target.value)} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Additional Mobile 3" value={newLeadForm.additional_mobiles[2] || ''} onChange={e => updateMobile(2, e.target.value)} />
               <Input label="Additional Mobile 4" value={newLeadForm.additional_mobiles[3] || ''} onChange={e => updateMobile(3, e.target.value)} />
             </div>
             <Input label="Email" type="email" value={newLeadForm.email} onChange={e => setNewLeadForm({...newLeadForm, email: e.target.value})} />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
                 <select value={newLeadForm.source} onChange={e => setNewLeadForm({...newLeadForm, source: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
                   <option value="">Select source</option>
@@ -2181,11 +2415,11 @@ function PipelineView() {
             </div>
             {newLeadForm.source === 'Other' && <Input label="Source (Other)" value={newLeadForm.source_other} onChange={e => setNewLeadForm({...newLeadForm, source_other: e.target.value})} />}
             {newLeadForm.occupation === 'Other' && <Input label="Occupation (Other)" value={newLeadForm.occupation_other} onChange={e => setNewLeadForm({...newLeadForm, occupation_other: e.target.value})} />}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Area" value={newLeadForm.area} onChange={e => setNewLeadForm({...newLeadForm, area: e.target.value})} />
               <Input label="City" value={newLeadForm.city} onChange={e => setNewLeadForm({...newLeadForm, city: e.target.value})} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Interested Project</label>
                 <select value={newLeadForm.interested_project_id} onChange={e => setNewLeadForm({...newLeadForm, interested_project_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
                   <option value="">Select project</option>
@@ -2841,7 +3075,7 @@ function BrokersView() {
 
       {summary && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <SummaryCard label="Total Brokers" value={summary.total_brokers} />
             <SummaryCard label="Active Brokers" value={summary.active_brokers} />
             <SummaryCard label="Total Deals" value={summary.total_deals} />
@@ -3079,7 +3313,7 @@ function ReceiptsView() {
 
       {summary && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <SummaryCard label="Total Receipts" value={summary.total_receipts} />
             <SummaryCard label="Total Collected" value={formatCurrency(summary.total_amount)} />
             <SummaryCard label="Today" value={summary.today_count} sub={formatCurrency(summary.today_amount)} />
@@ -4386,7 +4620,7 @@ function EOICollectionView() {
       {sum && (
         <>
           {/* KPI Cards: Total / Received / Pending */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-white rounded-xl border p-5 cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => { clearFilters(); }}>
               <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Total EOIs</div>
@@ -4825,7 +5059,7 @@ function EOICollectionView() {
               <Input label="Area (Marla)" type="number" step="0.01" required value={convertForm.area_marla} onChange={e => setConvertForm({...convertForm, area_marla: e.target.value})} />
               <Input label="Rate per Marla (PKR)" type="number" required value={convertForm.rate_per_marla} onChange={e => setConvertForm({...convertForm, rate_per_marla: e.target.value})} />
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Input label="# Installments" type="number" value={convertForm.num_installments} onChange={e => setConvertForm({...convertForm, num_installments: parseInt(e.target.value) || 4})} />
               <Input label="First Due Date" type="date" value={convertForm.first_due_date} onChange={e => setConvertForm({...convertForm, first_due_date: e.target.value})} />
               <div>
@@ -4838,7 +5072,7 @@ function EOICollectionView() {
                 </select>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Input label="Unit #" value={convertForm.unit_number} onChange={e => setConvertForm({...convertForm, unit_number: e.target.value})} />
               <Input label="Block" value={convertForm.block} onChange={e => setConvertForm({...convertForm, block: e.target.value})} />
               <Input label="Broker Commission %" type="number" step="0.1" value={convertForm.broker_commission_rate} onChange={e => setConvertForm({...convertForm, broker_commission_rate: e.target.value})} />
@@ -5373,7 +5607,7 @@ function ZakatView({ deepLink = null }) {
 
       {showDisburse && disbursing && <Modal title={`Disburse ${disbursing.zakat_id}`} onClose={() => { setShowDisburse(false); setDisbursing(null); }} wide>
         <form onSubmit={disburseRecord} className="space-y-4">
-          <div className="grid grid-cols-3 gap-4"><Input label="Remaining (PKR)" value={disbursing.remaining_amount || 0} disabled /><Input label="Disburse Amount (PKR)" type="number" required value={disburseForm.amount} onChange={e => setDisburseForm({ ...disburseForm, amount: e.target.value })} /><Input label="Date" type="date" value={disburseForm.disbursement_date} onChange={e => setDisburseForm({ ...disburseForm, disbursement_date: e.target.value })} /></div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4"><Input label="Remaining (PKR)" value={disbursing.remaining_amount || 0} disabled /><Input label="Disburse Amount (PKR)" type="number" required value={disburseForm.amount} onChange={e => setDisburseForm({ ...disburseForm, amount: e.target.value })} /><Input label="Date" type="date" value={disburseForm.disbursement_date} onChange={e => setDisburseForm({ ...disburseForm, disbursement_date: e.target.value })} /></div>
           <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-medium text-gray-500 mb-1">Disbursed By</label><select value={disburseForm.disbursed_by} onChange={e => setDisburseForm({ ...disburseForm, disbursed_by: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm"><option value="">Current user</option>{disburserReps.map(r => <option key={r.id} value={r.rep_id}>{r.name} ({r.rep_id})</option>)}</select></div><div><label className="block text-xs font-medium text-gray-500 mb-1">Payment Method</label><select value={disburseForm.payment_method} onChange={e => setDisburseForm({ ...disburseForm, payment_method: e.target.value })} className="w-full border rounded-lg px-3 py-2 text-sm">{paymentMethods.map(m => <option key={m} value={m}>{m}</option>)}</select></div></div>
           <div className="grid grid-cols-2 gap-4"><Input label="Reference #" value={disburseForm.reference_number} onChange={e => setDisburseForm({ ...disburseForm, reference_number: e.target.value })} /><Input label="Receipt #" value={disburseForm.receipt_number} onChange={e => setDisburseForm({ ...disburseForm, receipt_number: e.target.value })} /></div>
           <div><label className="block text-xs font-medium text-gray-500 mb-1">Notes</label><textarea value={disburseForm.notes} onChange={e => setDisburseForm({ ...disburseForm, notes: e.target.value })} rows={2} className="w-full border rounded-lg px-3 py-2 text-sm" /></div>
@@ -5488,7 +5722,7 @@ function InteractionsView() {
 
       {summary && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             {[
               { label: 'Total Interactions', value: summary.total_interactions, filter: { label: 'Total Interactions' } },
               { label: 'Total Calls', value: summary.total_calls, filter: { type: 'call', label: 'Total Calls' } },
@@ -5502,7 +5736,7 @@ function InteractionsView() {
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {[
               { label: 'Today', value: summary.today, filter: { period: 'today', label: 'Today' } },
               { label: 'This Week', value: summary.this_week, filter: { period: 'week', label: 'This Week' } },
@@ -6624,7 +6858,7 @@ function PaymentsView() {
 
       {summary && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <SummaryCard label="Total Payments" value={summary.total_payments} />
             <SummaryCard label="Total Paid" value={formatCurrency(summary.total_amount)} />
             <SummaryCard label="Today" value={summary.today_count} sub={formatCurrency(summary.today_amount)} />
@@ -7201,14 +7435,14 @@ function DashboardView() {
           {/* ====== OVERVIEW TAB ====== */}
           {dashSubTab === 'overview' && (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 <SummaryCard label="Total Customers" value={summary.customers?.total} />
                 <SummaryCard label="Total Transactions" value={summary.transactions?.total} />
                 <SummaryCard label="Total Sale Value" value={formatCurrency(summary.financials?.total_sale)} />
                 <SummaryCard label="Total Received" value={formatCurrency(summary.financials?.total_received)} />
               </div>
               {['admin', 'cco', 'manager'].includes(getUserRole()) && <StaleLeadsCard />}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 <SummaryCard label="This Month Sale" value={formatCurrency(summary.transactions?.this_month_value)} />
                 <SummaryCard label="Active Projects" value={summary.projects?.active} />
                 <SummaryCard label="Available Inventory" value={summary.inventory?.available} sub={`${summary.inventory?.total} total units`} />
@@ -7296,14 +7530,14 @@ function DashboardView() {
           {/* ====== SALES TAB ====== */}
           {dashSubTab === 'sales' && (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 <SummaryCard label="Total Sale Value" value={formatCurrency(summary.financials?.total_sale)} />
                 <SummaryCard label="This Month Sale" value={formatCurrency(summary.transactions?.this_month_value)} />
                 <SummaryCard label="Total Received" value={formatCurrency(summary.financials?.total_received)} />
                 {receiptSummary && <SummaryCard label="This Month Received" value={formatCurrency(receiptSummary.month_amount)} />}
               </div>
               {txnSummary && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                   <SummaryCard label="Total Transactions" value={txnSummary.total_transactions} />
                   <SummaryCard label="This Month Txns" value={txnSummary.this_month_count} />
                   {receiptSummary && <SummaryCard label="Today Receipts" value={receiptSummary.today_count} sub={formatCurrency(receiptSummary.today_amount)} />}
@@ -7364,7 +7598,7 @@ function DashboardView() {
           {dashSubTab === 'brokers' && (
             <>
               {brokerSummary && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                   <SummaryCard label="Total Brokers" value={brokerSummary.total_brokers} />
                   <SummaryCard label="Active Brokers" value={brokerSummary.active_brokers} />
                   <SummaryCard label="Total Commission" value={formatCurrency(brokerSummary.total_commission_owed)} />
@@ -7426,7 +7660,7 @@ function DashboardView() {
           {/* ====== PROJECTS & INVENTORY TAB ====== */}
           {dashSubTab === 'projects' && (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 <SummaryCard label="Active Projects" value={summary.projects?.active} sub={`${summary.projects?.total} total`} />
                 <SummaryCard label="Total Inventory" value={summary.inventory?.total} />
                 <SummaryCard label="Available" value={summary.inventory?.available} />
@@ -7489,13 +7723,13 @@ function DashboardView() {
               {campaignMetricsLoading && <Loader />}
               {campaignMetrics && (
                 <>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                     <SummaryCard label="Total Leads" value={campaignMetrics.overall?.total_leads} />
                     <SummaryCard label="Converted" value={campaignMetrics.overall?.converted} />
                     <SummaryCard label="Conversion Rate" value={`${campaignMetrics.overall?.conversion_rate}%`} />
                     <SummaryCard label="Revenue Attributed" value={formatCurrency(campaignMetrics.overall?.total_revenue_attributed)} />
                   </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                     <SummaryCard label="Active Leads" value={campaignMetrics.overall?.active} />
                     <SummaryCard label="Lost" value={campaignMetrics.overall?.lost} />
                     <SummaryCard label="Avg Days to Convert" value={campaignMetrics.overall?.avg_days_to_conversion} />
@@ -8420,7 +8654,7 @@ function ReportsView() {
                 </div>
 
                 {/* Commission Summary Cards */}
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="bg-white rounded-lg border p-4">
                     <div className="text-xs text-gray-600 mb-1">Total Commission Earned</div>
                     <div className="text-2xl font-semibold text-gray-900">{formatCurrency(brokerReport.commission.total_earned)}</div>
@@ -9957,7 +10191,7 @@ function CustomerDetailModal({ customer, onClose }) {
         {/* Financial Summary */}
         <div>
           <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Financial Summary</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-blue-50 p-4 rounded-lg">
               <div className="text-xs text-blue-600 mb-1">Total Sale</div>
               <div className="text-lg font-semibold text-blue-900">{formatCurrency(financials.total_sale)}</div>
@@ -10213,7 +10447,7 @@ function BrokerDetailModal({ broker, onClose }) {
         {/* Performance Summary */}
         <div>
           <h3 className="text-sm font-semibold text-gray-700 uppercase mb-3">Performance Summary</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-blue-50 p-4 rounded-lg">
               <div className="text-xs text-blue-600 mb-1">Total Sales</div>
               <div className="text-lg font-semibold text-blue-900">{formatCurrency(broker.performance.total_sale_value)}</div>
@@ -10850,13 +11084,13 @@ function SummaryCard({ label, value, sub }) {
 
 function Modal({ title, onClose, children, wide }) {
   return (
-    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className={`bg-white rounded-2xl shadow-xl mx-4 max-h-[90vh] overflow-y-auto ${wide ? 'w-full max-w-2xl' : 'w-full max-w-lg'}`}>
-        <div className="p-5 border-b flex justify-between items-center sticky top-0 bg-white rounded-t-2xl">
-          <h3 className="text-lg font-semibold">{title}</h3>
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className={`bg-white rounded-2xl shadow-xl w-full max-h-[90vh] overflow-y-auto ${wide ? 'sm:max-w-2xl' : 'sm:max-w-lg'}`}>
+        <div className="p-4 sm:p-5 border-b flex justify-between items-center sticky top-0 bg-white rounded-t-2xl">
+          <h3 className="text-base sm:text-lg font-semibold">{title}</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-4 sm:p-5">{children}</div>
       </div>
     </div>
   );
@@ -11344,8 +11578,8 @@ function VectorMapEditor({ project, onClose, onUpdate }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-xl w-full h-full max-w-[95vw] max-h-[95vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full h-full sm:max-w-[95vw] sm:max-h-[95vh] flex flex-col">
         {/* Header */}
         <div className="p-4 border-b flex justify-between items-center">
           <div>
@@ -11581,8 +11815,8 @@ function AnnotationEditor({ annotation, plots, onSave, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
-      <div className="bg-white rounded-lg p-6 max-w-md w-full">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-lg p-4 sm:p-6 w-full sm:max-w-md max-h-[90vh] overflow-y-auto">
         <h3 className="text-lg font-semibold mb-4">Edit Annotation</h3>
         <div className="space-y-4">
           <div>
