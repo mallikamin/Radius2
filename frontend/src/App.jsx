@@ -1922,8 +1922,10 @@ function PipelineView() {
       loadPipeline();
     } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed', 'error'); }
   };
+  const [addLeadError, setAddLeadError] = useState(null);
   const handleAddLead = async (e) => {
     e.preventDefault();
+    setAddLeadError(null);
     try {
       const payload = {
         ...newLeadForm,
@@ -1935,7 +1937,14 @@ function PipelineView() {
       loadPipeline();
       if (window.showToast) window.showToast('Lead Created', 'Lead added to pipeline', 'success');
     } catch (e2) {
-      if (window.showToast) window.showToast('Error', e2.response?.data?.detail || 'Failed to create lead', 'error');
+      const resp = e2.response?.data;
+      if (e2.response?.status === 409 && resp?.detail?.duplicate) {
+        const dup = resp.detail.duplicate;
+        setAddLeadError(`Duplicate number detected — this mobile already belongs to ${dup.type} ${dup.entity_id} (${dup.name})${dup.assigned_rep ? ', assigned to ' + dup.assigned_rep : ''}. Contact administrator for reassignment.`);
+      } else {
+        const msg = typeof resp?.detail === 'string' ? resp.detail : (resp?.detail?.message || 'Failed to create lead');
+        setAddLeadError(msg);
+      }
     }
   };
   const updateMobile = (index, value) => {
@@ -2138,13 +2147,15 @@ function PipelineView() {
       {showLeadDetail && <LeadDetailModal lead={showLeadDetail} onClose={() => { setShowLeadDetail(null); loadPipeline(); }}
         stages={allStages} reps={reps} />}
       {showAddLeadModal && (
-        <Modal title="Add Lead" onClose={() => setShowAddLeadModal(false)}>
+        <Modal title="Add Lead" onClose={() => { setShowAddLeadModal(false); setAddLeadError(null); }}>
           <form onSubmit={handleAddLead} className="space-y-4">
+            {addLeadError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                {addLeadError}
+              </div>
+            )}
             <Input label="Name" required value={newLeadForm.name} onChange={e => setNewLeadForm({...newLeadForm, name: e.target.value})} />
-            <div className="grid grid-cols-2 gap-4">
-              <PhoneInput label="Mobile" value={newLeadForm.mobile} onChange={value => setNewLeadForm({...newLeadForm, mobile: value})} />
-              <Input label="Email" type="email" value={newLeadForm.email} onChange={e => setNewLeadForm({...newLeadForm, email: e.target.value})} />
-            </div>
+            <PhoneInput label="Mobile" value={newLeadForm.mobile} onChange={value => setNewLeadForm({...newLeadForm, mobile: value})} />
             <div className="grid grid-cols-2 gap-4">
               <Input label="Additional Mobile 1" value={newLeadForm.additional_mobiles[0] || ''} onChange={e => updateMobile(0, e.target.value)} />
               <Input label="Additional Mobile 2" value={newLeadForm.additional_mobiles[1] || ''} onChange={e => updateMobile(1, e.target.value)} />
@@ -2153,6 +2164,7 @@ function PipelineView() {
               <Input label="Additional Mobile 3" value={newLeadForm.additional_mobiles[2] || ''} onChange={e => updateMobile(2, e.target.value)} />
               <Input label="Additional Mobile 4" value={newLeadForm.additional_mobiles[3] || ''} onChange={e => updateMobile(3, e.target.value)} />
             </div>
+            <Input label="Email" type="email" value={newLeadForm.email} onChange={e => setNewLeadForm({...newLeadForm, email: e.target.value})} />
             <div className="grid grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
                 <select value={newLeadForm.source} onChange={e => setNewLeadForm({...newLeadForm, source: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
@@ -5778,8 +5790,10 @@ function CampaignsView() {
     } catch (e) { alert(e.response?.data?.detail || 'Error'); }
   };
 
+  const [campaignLeadError, setCampaignLeadError] = useState(null);
   const handleLeadSubmit = async (e) => {
     e.preventDefault();
+    setCampaignLeadError(null);
     try {
       const payload = {
         ...leadForm,
@@ -5793,13 +5807,13 @@ function CampaignsView() {
       loadData();
       if (window.showToast) window.showToast('Success', 'Lead created successfully', 'success');
     } catch (e) {
-      if (e.response?.status === 409 && e.response?.data?.detail?.duplicate) {
-        const dup = e.response.data.detail.duplicate;
-        const repInfo = dup.assigned_rep ? ` | Assigned to: ${dup.assigned_rep}` : '';
-        if (window.showToast) window.showToast('Duplicate Mobile', `Already exists as ${dup.type} ${dup.entity_id} — ${dup.name}${repInfo}`, 'error');
-        // Keep modal open so user can correct mobile
+      const resp = e.response?.data;
+      if (e.response?.status === 409 && resp?.detail?.duplicate) {
+        const dup = resp.detail.duplicate;
+        setCampaignLeadError(`Duplicate number detected — this mobile already belongs to ${dup.type} ${dup.entity_id} (${dup.name})${dup.assigned_rep ? ', assigned to ' + dup.assigned_rep : ''}. Contact administrator for reassignment.`);
       } else {
-        alert(e.response?.data?.detail?.message || e.response?.data?.detail || 'Error');
+        const msg = typeof resp?.detail === 'string' ? resp.detail : (resp?.detail?.message || 'Failed to create lead');
+        setCampaignLeadError(msg);
       }
     }
   };
@@ -6083,13 +6097,15 @@ function CampaignsView() {
       )}
 
       {showLeadModal && (
-        <Modal title="Add Lead" onClose={() => setShowLeadModal(false)}>
+        <Modal title="Add Lead" onClose={() => { setShowLeadModal(false); setCampaignLeadError(null); }}>
           <form onSubmit={handleLeadSubmit} className="space-y-4">
+            {campaignLeadError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                {campaignLeadError}
+              </div>
+            )}
             <Input label="Name" required value={leadForm.name} onChange={e => setLeadForm({...leadForm, name: e.target.value})} />
-            <div className="grid grid-cols-2 gap-4">
-              <PhoneInput label="Mobile" value={leadForm.mobile} onChange={value => setLeadForm({...leadForm, mobile: value})} />
-              <Input label="Email" type="email" value={leadForm.email} onChange={e => setLeadForm({...leadForm, email: e.target.value})} />
-            </div>
+            <PhoneInput label="Mobile" value={leadForm.mobile} onChange={value => setLeadForm({...leadForm, mobile: value})} />
             <div className="grid grid-cols-2 gap-4">
               <Input label="Additional Mobile 1" value={leadForm.additional_mobiles[0] || ''} onChange={e => updateMobile(0, e.target.value)} />
               <Input label="Additional Mobile 2" value={leadForm.additional_mobiles[1] || ''} onChange={e => updateMobile(1, e.target.value)} />
@@ -6098,6 +6114,7 @@ function CampaignsView() {
               <Input label="Additional Mobile 3" value={leadForm.additional_mobiles[2] || ''} onChange={e => updateMobile(2, e.target.value)} />
               <Input label="Additional Mobile 4" value={leadForm.additional_mobiles[3] || ''} onChange={e => updateMobile(3, e.target.value)} />
             </div>
+            <Input label="Email" type="email" value={leadForm.email} onChange={e => setLeadForm({...leadForm, email: e.target.value})} />
             <div className="grid grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Lead Type</label>
                 <select value={leadForm.lead_type} onChange={e => setLeadForm({...leadForm, lead_type: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm">
