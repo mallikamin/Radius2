@@ -418,8 +418,8 @@ export default function App() {
   const TEAM_HEADER_CONFIG = {
     // Zakat/Finance team
     finance: {
-      members: ['REP-0002', 'REP-0010', 'REP-0011', 'REP-0012', 'REP-0013'],
-      primaryIds: ['zakat', 'tasks', 'reports', 'dashboard'],
+      members: ['REP-0002', 'REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020'],
+      primaryIds: ['zakat', 'eoi', 'tasks', 'reports', 'dashboard'],
     },
     // Operations team: COO Hassan Danish, Ahsan Ejaz (Director Land), Sarosh Javed (CEO)
     operations: {
@@ -2212,11 +2212,45 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
   const [showLogForm, setShowLogForm] = useState(false);
   const [logForm, setLogForm] = useState({ interaction_type: 'call', status: getDefaultInteractionStatus('call'), notes: '', next_follow_up: '', contact_number: '' });
   const [currentStage, setCurrentStage] = useState(lead.pipeline_stage);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: lead.name || '',
+    mobile: lead.mobile || '',
+    email: lead.email || '',
+    additional_mobiles: [...(lead.additional_mobiles || []), '', '', '', ''].slice(0, 4),
+  });
+  const [saving, setSaving] = useState(false);
   const role = getUserRole();
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
   const canRunSyncActions = ['admin', 'director', 'cco', 'coo', 'manager'].includes(role);
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const contactNumbers = [lead.mobile, ...(lead.additional_mobiles || [])].filter(Boolean);
+
+  const handleSaveEdit = async () => {
+    setSaving(true);
+    try {
+      const payload = {
+        name: editForm.name,
+        mobile: editForm.mobile,
+        email: editForm.email,
+        additional_mobiles: editForm.additional_mobiles.map(v => String(v || '').trim()).filter(Boolean),
+      };
+      await api.put(`/leads/${lead.id}`, payload);
+      lead.name = payload.name;
+      lead.mobile = payload.mobile;
+      lead.email = payload.email;
+      lead.additional_mobiles = payload.additional_mobiles;
+      setIsEditing(false);
+      if (window.showToast) window.showToast('Updated', 'Lead details saved', 'success');
+    } catch (e) {
+      if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Failed to save', 'error');
+    } finally { setSaving(false); }
+  };
+  const updateEditMobile = (index, value) => {
+    const mobiles = [...editForm.additional_mobiles];
+    mobiles[index] = value;
+    setEditForm({...editForm, additional_mobiles: mobiles});
+  };
 
   useEffect(() => { loadInteractions(); }, []);
   const loadInteractions = async () => {
@@ -2291,15 +2325,62 @@ function LeadDetailModal({ lead, onClose, stages, reps }) {
     <Modal title={`Lead: ${lead.name}`} onClose={onClose} wide>
       <div className="space-y-5">
         {/* Lead info */}
-        <div className="grid grid-cols-2 gap-3 bg-gray-50 p-4 rounded-lg text-sm">
-          <div><span className="text-xs text-gray-500 block">Lead ID</span><span className="font-mono">{lead.lead_id}</span></div>
-          <div><span className="text-xs text-gray-500 block">Mobile</span>{contactNumbers.length ? contactNumbers.join(' | ') : 'N/A'}</div>
-          <div><span className="text-xs text-gray-500 block">Email</span>{lead.email || 'N/A'}</div>
-          <div><span className="text-xs text-gray-500 block">Campaign</span>{lead.campaign_name || 'Direct'}</div>
-          <div><span className="text-xs text-gray-500 block">Assigned Rep</span>{lead.assigned_rep || 'Unassigned'}</div>
-          <div><span className="text-xs text-gray-500 block">Temperature</span>{lead.temperature ? <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getTemperatureBadgeClass(lead.temperature)}`}>{lead.temperature}</span> : 'N/A'}</div>
-          <div><span className="text-xs text-gray-500 block">Created</span>{new Date(lead.created_at).toLocaleDateString()}</div>
-        </div>
+        {isEditing ? (
+          <div className="bg-gray-50 p-4 rounded-lg space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Name</label>
+                <input value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-gray-900" /></div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Primary Mobile</label>
+                <input value={editForm.mobile} onChange={e => setEditForm({...editForm, mobile: e.target.value})}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-gray-900" /></div>
+            </div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Email</label>
+              <input value={editForm.email} onChange={e => setEditForm({...editForm, email: e.target.value})}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-gray-900" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Additional Mobile 1</label>
+                <input value={editForm.additional_mobiles[0] || ''} onChange={e => updateEditMobile(0, e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" /></div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Additional Mobile 2</label>
+                <input value={editForm.additional_mobiles[1] || ''} onChange={e => updateEditMobile(1, e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Additional Mobile 3</label>
+                <input value={editForm.additional_mobiles[2] || ''} onChange={e => updateEditMobile(2, e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" /></div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Additional Mobile 4</label>
+                <input value={editForm.additional_mobiles[3] || ''} onChange={e => updateEditMobile(3, e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg" /></div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={handleSaveEdit} disabled={saving}
+                className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50">
+                {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+              <button onClick={() => setIsEditing(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-gray-50 p-4 rounded-lg text-sm">
+            <div className="flex justify-between items-start mb-3">
+              <span className="text-xs font-medium text-gray-500">Lead Details</span>
+              {role !== 'viewer' && (
+                <button onClick={() => setIsEditing(true)} className="text-xs px-2.5 py-1 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700">Edit</button>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><span className="text-xs text-gray-500 block">Lead ID</span><span className="font-mono">{lead.lead_id}</span></div>
+              <div><span className="text-xs text-gray-500 block">Mobile</span>{contactNumbers.length ? contactNumbers.join(' | ') : 'N/A'}</div>
+              <div><span className="text-xs text-gray-500 block">Email</span>{lead.email || 'N/A'}</div>
+              <div><span className="text-xs text-gray-500 block">Campaign</span>{lead.campaign_name || 'Direct'}</div>
+              <div><span className="text-xs text-gray-500 block">Assigned Rep</span>{lead.assigned_rep || 'Unassigned'}</div>
+              <div><span className="text-xs text-gray-500 block">Temperature</span>{lead.temperature ? <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getTemperatureBadgeClass(lead.temperature)}`}>{lead.temperature}</span> : 'N/A'}</div>
+              <div><span className="text-xs text-gray-500 block">Created</span>{new Date(lead.created_at).toLocaleDateString()}</div>
+            </div>
+          </div>
+        )}
 
         {/* Lead stage selector */}
         <div>

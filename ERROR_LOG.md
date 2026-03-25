@@ -192,14 +192,28 @@ docker restart orbit_dev_web
 # Wait 5s, then tell user to Ctrl+Shift+R
 ```
 
-### Before deploying to DO:
-1. Clean dist: `ssh root@159.65.158.26 "rm -rf ~/orbit-crm/frontend/dist/*"`
-2. SCP files (specific files, not wildcards)
-3. Rebuild API: `docker compose up -d --build orbit_api`
-4. WAIT for rebuild to complete
-5. Reconnect networks: `docker network connect pos-system_default orbit_web && docker network connect pos-system_default orbit_api`
-6. Reload nginx: `docker exec pos-system-nginx-1 nginx -s reload`
-7. Verify: `docker network inspect pos-system_default --format '{{range .Containers}}{{.Name}} {{end}}'`
+### Before deploying to DO (FRONTEND-ONLY — no container restarts):
+1. Build locally: `cd frontend && ./node_modules/.bin/vite build`
+2. Clean dist: `ssh root@159.65.158.26 "rm -rf ~/orbit-crm/frontend/dist/*"`
+3. SCP files: `scp -r frontend/dist/* root@159.65.158.26:~/orbit-crm/frontend/dist/`
+4. Verify JS hash: `ssh root@159.65.158.26 "ls ~/orbit-crm/frontend/dist/assets/index-*.js"`
+5. **VERIFY site works**: `ssh root@159.65.158.26 "curl -s -o /dev/null -w '%{http_code}' https://orbit-voice.duckdns.org"`
+6. Must return 200. If not, investigate — do NOT restart containers.
+
+### Before deploying to DO (BACKEND changes — requires API rebuild):
+1. SCP backend files: `main.py`, `services/`
+2. Rebuild API: `docker compose up -d --build orbit_api`
+3. WAIT for rebuild to complete
+4. Reconnect networks: `docker network connect pos-system_default orbit_web && docker network connect pos-system_default orbit_api`
+5. Reload nginx: `docker exec pos-system-nginx-1 nginx -s reload`
+6. Verify network: `docker network inspect pos-system_default --format '{{range .Containers}}{{.Name}} {{end}}'`
+7. **VERIFY site works**: `curl -s -o /dev/null -w '%{http_code}' https://orbit-voice.duckdns.org`
+
+### ABSOLUTE PROHIBITIONS during Orbit deploy:
+- NEVER `docker restart orbit_web` (changes IP, breaks nginx routing)
+- NEVER `docker compose up -d` in `~/pos-system/` (recreates ALL POS containers)
+- NEVER replace ssl directory with symlinks (Docker can't follow host symlinks)
+- NEVER declare "deploy complete" without curl verification
 
 ### Before DB migrations:
 1. Create test DB first (see HANDOFF_NOTES.md Section 2)
@@ -234,6 +248,31 @@ docker restart orbit_dev_web
 - **Root Cause**: The bulk migration inserted explicit `lead_id` values (LEAD-00031 to LEAD-08573), which bypasses the trigger's `nextval('lead_id_seq')` call because of the condition `WHEN (NEW.lead_id IS NULL)`. The sequence remained stuck at ~57 while 8,543 leads existed.
 - **Fix**: `SELECT setval('lead_id_seq', (SELECT MAX(CAST(SUBSTRING(lead_id FROM 6) AS INTEGER)) FROM leads));` — returned 8573. Ran directly on prod DB via `docker exec orbit_db psql`.
 - **Rule**: After ANY bulk SQL import that inserts explicit entity_id values (bypassing triggers), ALWAYS run `setval('<entity>_id_seq', ...)` to sync the sequence to the max existing ID. This applies to ALL entity tables (leads, customers, brokers, transactions, etc.) that use the `WHEN (NEW.<field> IS NULL)` trigger pattern.
+
+### 2026-03-25 — CRITICAL: Frontend-only deploy caused full site outage (1+ hour downtime)
+
+- **Error**: Both `orbit-voice.duckdns.org` and `pos-demo.duckdns.org` returned 502/444/000 for ~1 hour
+- **Context**: Simple task — grant EOI access to 3 users (frontend-only change). Agent built new frontend, SCP'd to server, then ran `docker restart orbit_web`.
+- **Root Cause (chain of failures)**:
+  1. `docker restart orbit_web` gave the container a **new IP address** (172.18.0.7 → 172.18.0.5)
+  2. POS nginx had the old IP cached → 502 Bad Gateway for Orbit
+  3. Agent tried `docker exec pos-system-nginx-1 nginx -s reload` but POS nginx was in crash-loop (unrelated SSL issue)
+  4. Agent replaced SSL symlink directory, breaking Docker volume mount (Docker cannot follow host-to-host symlinks in bind mounts)
+  5. Agent ran `docker compose -f docker-compose.prod.yml up -d` which **recreated ALL POS containers** (not just nginx)
+  6. POS backend entered unhealthy state, blocking nginx startup
+  7. Both sites completely down
+- **Fix**:
+  1. Copied actual SSL cert files (not symlinks) to `~/pos-system/docker/nginx/ssl/`
+  2. Created proper dual-domain nginx.conf with separate server blocks for `pos-demo.duckdns.org` and `orbit-voice.duckdns.org`
+  3. Manually created nginx container with `docker run` (not docker-compose) to avoid touching POS services
+  4. Both sites restored
+- **Rules (MANDATORY for all agents)**:
+  1. **NEVER `docker restart orbit_web` for frontend-only deploys.** Just SCP new dist files — nginx serves them immediately. The container does NOT need restart for static file changes.
+  2. **NEVER touch POS containers during Orbit deploy.** If POS nginx has issues, investigate — don't blindly recreate.
+  3. **Docker cannot follow host symlinks in bind mounts.** Always use real files, never symlinks, in mounted directories.
+  4. **`docker compose up -d --force-recreate <service>` recreates ALL dependencies** — it is NOT scoped to just that service. Use `docker run` or `docker start/stop` for isolated container operations.
+  5. **ALWAYS verify site accessibility with `curl` BEFORE declaring deploy complete.** Never trust `docker ps` alone.
+  6. **Frontend-only deploy checklist**: Build → Clean dist → SCP → Verify JS hash on server → curl test. NO container restarts needed.
 
 ### 2026-02-27 - SSL cert mismatch on Orbit domain (wrong cert served)
 - **Error**: Browser showed `net::ERR_CERT_COMMON_NAME_INVALID` on `https://orbit-voice.duckdns.org/`; served cert CN was `pos-demo.duckdns.org`.
