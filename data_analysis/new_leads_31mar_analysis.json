@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-03-31T18:37:57.224692",
+  "rep_id": "REP-0018",
+  "rep_name": "Syed Ali Zaib Zaidi",
+  "input_file": "C:/Users/Malik/Downloads/new leads data.xlsx",
+  "total_rows": 498,
+  "valid_leads": 497,
+  "skipped": {
+    "no_mobile": 0,
+    "junk_name": 0,
+    "invalid_mobile": 0
+  },
+  "internal_duplicates": {
+    "count": 1,
+    "details": {
+      "03217171501": [
+        327
+      ]
+    }
+  },
+  "statistics": {
+    "pakistani_mobiles": 496,
+    "international_mobiles": 1,
+    "with_additional_mobiles": 0,
+    "with_email": 0,
+    "with_occupation": 0,
+    "with_area": 0,
+    "with_city": 497
+  },
+  "weird_mobiles": [],
+  "name_issues": [],
+  "mobiles_export_file": "C:/Users/Malik/desktop/radius2-analytics/data_analysis/new_leads_mobiles.txt"
+}
