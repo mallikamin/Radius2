@@ -381,6 +381,11 @@ export default function App() {
     if (!u) return false;
     return ZAKAT_ALLOWED_REPS.includes(u.rep_id || '');
   };
+  const EOI_ALLOWED_REPS = ['REP-0002', 'REP-0010', 'REP-0011', 'REP-0012', 'REP-0013', 'REP-0020'];
+  const hasEoiAccess = (u) => {
+    if (!u) return false;
+    return EOI_ALLOWED_REPS.includes(u.rep_id || '');
+  };
 
   const canAccess = (tabId) => {
     if (!user) return false;
@@ -404,6 +409,7 @@ export default function App() {
     };
     
     if (tabId === 'zakat') return hasZakatAccess(user);
+    if (tabId === 'eoi') return hasEoiAccess(user) || roleAccess[role]?.includes(tabId);
 
     const allowedByRole = roleAccess[role]?.includes(tabId) || false;
     if (!allowedByRole) return false;

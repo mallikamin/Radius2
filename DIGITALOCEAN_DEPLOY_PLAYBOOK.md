@@ -94,17 +94,24 @@ ssh root@159.65.158.26 "docker exec pos-system-nginx-1 ping -c1 orbit_api"
 ssh root@159.65.158.26 "docker exec pos-system-nginx-1 nginx -t && docker exec pos-system-nginx-1 nginx -s reload"
 ```
 
-4. Health endpoint from droplet:
+4. Health endpoint from droplet (internal check — `-k` OK here since loopback bypasses DNS):
 ```bash
 ssh root@159.65.158.26 "curl -sk https://orbit-voice.duckdns.org/api/health -H 'Host: orbit-voice.duckdns.org' --resolve orbit-voice.duckdns.org:443:127.0.0.1"
 ```
 
-5. Health endpoint from local machine:
+5. Health endpoint from local machine (**MANDATORY — NO `-k` flag! This catches SSL cert mismatches**):
 ```powershell
 curl https://orbit-voice.duckdns.org/api/health
 ```
 
-6. Confirm network membership (post-rebuild):
+6. **SSL cert verification (MANDATORY — added 25 Mar 2026 after cert mismatch incident)**:
+```bash
+openssl s_client -connect 159.65.158.26:443 -servername orbit-voice.duckdns.org 2>/dev/null | openssl x509 -noout -subject
+# Must show: subject=CN = orbit-voice.duckdns.org
+# If it shows pos-demo.duckdns.org — nginx is serving the wrong cert!
+```
+
+7. Confirm network membership (post-rebuild):
 ```bash
 ssh root@159.65.158.26 "docker inspect orbit_api -f '{{json .NetworkSettings.Networks}}'"
 ```

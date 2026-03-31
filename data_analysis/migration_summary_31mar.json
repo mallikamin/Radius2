@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-03-31T18:41:03.607990",
+  "rep_id": "REP-0018",
+  "rep_name": "Syed Ali Zaib Zaidi",
+  "rep_uuid": "d8d0b91f-9753-4c86-8149-30ebf312ad21",
+  "input_file": "C:/Users/Malik/Downloads/new leads data.xlsx",
+  "total_raw_rows": 498,
+  "internal_duplicates_removed": 37,
+  "production_duplicates_removed": 37,
+  "final_leads_to_upload": 460,
+  "lead_id_range": "LEAD-09650 to LEAD-10109",
+  "sql_files": {
+    "staging": "C:/Users/Malik/desktop/radius2-analytics/database/new_leads_31mar_STAGING.sql",
+    "production": "C:/Users/Malik/desktop/radius2-analytics/database/new_leads_31mar_PRODUCTION.sql"
+  },
+  "deployment_steps": [
+    "1. Test on local/staging DB first",
+    "2. Verify counts and no duplicates",
+    "3. Deploy to DigitalOcean production",
+    "4. Re-verify on production"
+  ]
+}

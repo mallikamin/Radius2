@@ -197,8 +197,9 @@ docker restart orbit_dev_web
 2. Clean dist: `ssh root@159.65.158.26 "rm -rf ~/orbit-crm/frontend/dist/*"`
 3. SCP files: `scp -r frontend/dist/* root@159.65.158.26:~/orbit-crm/frontend/dist/`
 4. Verify JS hash: `ssh root@159.65.158.26 "ls ~/orbit-crm/frontend/dist/assets/index-*.js"`
-5. **VERIFY site works**: `ssh root@159.65.158.26 "curl -s -o /dev/null -w '%{http_code}' https://orbit-voice.duckdns.org"`
-6. Must return 200. If not, investigate — do NOT restart containers.
+5. **VERIFY site works (NO -k flag!)**: `curl -s -o /dev/null -w '%{http_code}' https://orbit-voice.duckdns.org`
+6. Must return 200. If exit code 60 (SSL error) — cert is broken, investigate nginx SSL config.
+7. **VERIFY SSL cert**: `openssl s_client -connect 159.65.158.26:443 -servername orbit-voice.duckdns.org 2>/dev/null | openssl x509 -noout -subject` → must show `CN = orbit-voice.duckdns.org`
 
 ### Before deploying to DO (BACKEND changes — requires API rebuild):
 1. SCP backend files: `main.py`, `services/`
@@ -207,13 +208,16 @@ docker restart orbit_dev_web
 4. Reconnect networks: `docker network connect pos-system_default orbit_web && docker network connect pos-system_default orbit_api`
 5. Reload nginx: `docker exec pos-system-nginx-1 nginx -s reload`
 6. Verify network: `docker network inspect pos-system_default --format '{{range .Containers}}{{.Name}} {{end}}'`
-7. **VERIFY site works**: `curl -s -o /dev/null -w '%{http_code}' https://orbit-voice.duckdns.org`
+7. **VERIFY site works (NO -k flag!)**: `curl -s -o /dev/null -w '%{http_code}' https://orbit-voice.duckdns.org`
+8. **VERIFY SSL cert**: `openssl s_client -connect 159.65.158.26:443 -servername orbit-voice.duckdns.org 2>/dev/null | openssl x509 -noout -subject`
 
 ### ABSOLUTE PROHIBITIONS during Orbit deploy:
 - NEVER `docker restart orbit_web` (changes IP, breaks nginx routing)
 - NEVER `docker compose up -d` in `~/pos-system/` (recreates ALL POS containers)
 - NEVER replace ssl directory with symlinks (Docker can't follow host symlinks)
 - NEVER declare "deploy complete" without curl verification
+- NEVER use `curl -k` for final deployment verification (hides SSL cert errors — caused 25 Mar 2026 incident)
+- NEVER use `server_name _;` catch-all for multi-domain SSL nginx (serves wrong cert for non-default domains)
 
 ### Before DB migrations:
 1. Create test DB first (see HANDOFF_NOTES.md Section 2)
@@ -303,3 +307,49 @@ docker restart orbit_dev_web
 - **Rule**:
   - For Orbit TLS/certificate mismatches on this host, debug shared nginx mounts first, not Orbit app code or git history.
   - Preserve POS and Orbit data by limiting the repair to the nginx config mount plus `docker compose ... up -d nginx`; do not rebuild app or DB containers for this class of issue.
+
+### 2026-03-25 — SSL cert domain mismatch: `curl -k` masked broken SSL on both domains
+- **Error**: Browser showed "Your connection is not private" on `https://orbit-voice.duckdns.org/` (both mobile and desktop). Certificate CN was `pos-demo.duckdns.org` — wrong cert served for Orbit domain.
+- **Context**: After mobile optimization deploy. We declared deploy "successful" using `curl -k` which bypasses SSL validation entirely.
+- **Root Cause**: POS nginx had a single catch-all `server_name _;` server block using only the POS SSL cert (`fullchain.pem` for `pos-demo.duckdns.org`). Orbit-specific certs (`orbit-fullchain.pem`, `orbit-privkey.pem`) existed on the server at `~/pos-system/docker/nginx/ssl/` but were NOT wired into any nginx server block. SNI needs per-domain server blocks to serve the correct cert.
+- **Fix**: Split the single nginx server block into two SNI-aware server blocks:
+  - `server_name pos-demo.duckdns.org` → `fullchain.pem` / `privkey.pem` + POS upstream routing
+  - `server_name orbit-voice.duckdns.org` → `orbit-fullchain.pem` / `orbit-privkey.pem` + Orbit upstream routing
+  - Graceful reload: `docker exec pos-system-nginx-1 nginx -s reload` (no container restart)
+  - Verified both domains return 200 WITHOUT `-k` flag
+- **Rule**:
+  1. **NEVER use `curl -k` for final deployment verification.** The `-k` flag skips SSL certificate validation — it will return 200 even when the cert is completely wrong. Real browsers enforce SSL, so `curl -k` hides cert issues. Always use `curl` WITHOUT `-k` for verification.
+  2. When co-hosting multiple domains on shared nginx, ALWAYS use per-domain `server_name` blocks with matching SSL certs. Never use `server_name _;` catch-all for SSL — it serves the default cert for ALL domains.
+  3. If adding a new domain to shared nginx, verify SNI by checking the cert CN: `openssl s_client -connect <host>:443 -servername <domain> 2>/dev/null | openssl x509 -noout -subject`
+
+### 2026-03-25 — Mobile UI completely broken: no responsive breakpoints in entire frontend
+- **Error**: On mobile devices — header navigation overflowed off-screen (8+ horizontal tabs), all data tables unreadable (7-9 columns crammed), forms cramped (2-column grids too narrow), modals cut off (fixed 512px width)
+- **Context**: App was built entirely for desktop. No mobile testing was ever done. Discovered when deploying mobile optimization.
+- **Root Cause**: The entire frontend (`App.jsx`, 11,000+ lines) was built without ANY mobile responsive breakpoints on navigation, tables, modals, or forms. Tailwind CSS was already in use but only desktop classes were applied.
+- **Fix**: Full mobile optimization in 3 phases:
+  1. Phase 1: Hamburger menu + slide-out drawer, responsive modals (`sm:max-w-lg`), container padding (`px-4 sm:px-6`), form grids (`grid-cols-1 sm:grid-cols-2`), leads mobile card view
+  2. Phase 2: Interactions table + Customers table → mobile card views (dual-view pattern: `hidden lg:block` desktop table + `lg:hidden space-y-3` mobile cards)
+  3. Phase 3: Responsive typography (`text-xl sm:text-2xl`)
+- **Rule**: When building ANY new view or table in Orbit CRM:
+  1. Use mobile-first Tailwind: start with mobile styles, add `sm:` / `md:` / `lg:` for larger screens
+  2. Tables with 5+ columns MUST have a mobile card view using the dual-view pattern
+  3. Forms MUST use `grid-cols-1 sm:grid-cols-2` (never bare `grid-cols-2`)
+  4. Modals MUST use `sm:max-w-lg` (never bare `max-w-lg`)
+  5. Navigation on new sections must be tested at 375px viewport width
+
+### 2026-03-25 — Deployment verification gap: `curl -k` hides SSL errors
+- **Error**: Deploy declared "successful" but SSL was actually broken. Users could not access the site on any browser (mobile or desktop).
+- **Context**: Standard frontend deploy verification step used `curl -s -o /dev/null -w '%{http_code}' -k https://orbit-voice.duckdns.org` — the `-k` flag returned 200 despite cert mismatch.
+- **Root Cause**: The deployment playbook (ERROR_LOG.md, MEMORY.md, CLAUDE.md) all used `curl -k` or `curl -s` patterns. The `-k` flag (insecure) tells curl to ignore SSL certificate errors, which is exactly the class of error that broke the site.
+- **Fix**: Updated ALL verification commands across all docs to use curl WITHOUT `-k`. Added explicit SSL cert verification step.
+- **Rule**: The deployment verification step MUST be:
+  ```bash
+  # Step 1: HTTP status check (NO -k flag!)
+  curl -s -o /dev/null -w '%{http_code}' https://orbit-voice.duckdns.org
+  # Must return 200. If it returns 60 (SSL error), the cert is broken.
+
+  # Step 2: SSL cert verification (new mandatory step)
+  openssl s_client -connect 159.65.158.26:443 -servername orbit-voice.duckdns.org 2>/dev/null | openssl x509 -noout -subject
+  # Must show: subject=CN = orbit-voice.duckdns.org
+  ```
+  If curl returns exit code 60 (SSL certificate problem), that IS the bug — do NOT add `-k` to "fix" it.

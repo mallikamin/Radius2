@@ -77,7 +77,13 @@
       "Bash(__NEW_LINE_ed6b07a23f92d4a5__ echo \"=== IMMUTABILITY: Edit disbursed record ===\")",
       "Bash(__NEW_LINE_ed6b07a23f92d4a5__ echo \"\")",
       "Bash(__NEW_LINE_ed6b07a23f92d4a5__ echo \"=== CREATE 2nd record for cancel test ===\")",
-      "Bash(__NEW_LINE_ed6b07a23f92d4a5__ echo \"=== CANCEL ZKT-00002 ===\")"
+      "Bash(__NEW_LINE_ed6b07a23f92d4a5__ echo \"=== CANCEL ZKT-00002 ===\")",
+      "Bash(npm.cmd run build:*)",
+      "Bash(if docker ps --filter \"name=radius2.*db\" --format \"{{.Names}}\")",
+      "Bash(then)",
+      "Bash(else)",
+      "Bash(./START_LOCAL.ps1)",
+      "Bash(fi)"
     ]
   }
 }
