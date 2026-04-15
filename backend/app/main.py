@@ -797,6 +797,19 @@ class MonthlyRepTarget(Base):
 # ============================================
 # HELPER FUNCTIONS
 # ============================================
+def sync_lead_id_sequence(db):
+    """Sync lead_id_seq to MAX existing lead_id. Prevents UniqueViolation after bulk imports."""
+    try:
+        result = db.execute(text(
+            "SELECT setval('lead_id_seq', COALESCE((SELECT MAX(CAST(SUBSTRING(lead_id FROM 6) AS INTEGER)) FROM leads), 1))"
+        ))
+        new_val = result.scalar()
+        print(f"[sequence-sync] lead_id_seq synced to {new_val}")
+        return new_val
+    except Exception as e:
+        print(f"[sequence-sync] Failed to sync lead_id_seq: {e}")
+        return None
+
 def normalize_mobile(mobile):
     """Normalize Pakistan mobile number for duplicate detection.
     All variants collapse to canonical 03XXXXXXXXX form:
@@ -3363,6 +3376,34 @@ def create_lead(data: dict, db: Session = Depends(get_db),
         raise
     except Exception as e:
         db.rollback()
+        # Auto-recover from stale lead_id_seq (UniqueViolation on lead_id)
+        if "leads_lead_id_key" in str(e):
+            print(f"[auto-recover] lead_id_seq stale, syncing and retrying...")
+            sync_lead_id_sequence(db)
+            try:
+                l2 = Lead(
+                    campaign_id=campaign.id if campaign else None,
+                    assigned_rep_id=rep.id if rep else current_user.id,
+                    name=data["name"], mobile=mobile or None, email=data.get("email"),
+                    source_details=data.get("source_details"), status=data.get("status", "new"),
+                    lead_type=data.get("lead_type", "prospect"), notes=data.get("notes"),
+                    pipeline_stage=data.get("pipeline_stage", "New"),
+                    additional_mobiles=additional if additional else [],
+                    source=data.get("source"), source_other=data.get("source_other"),
+                    occupation=data.get("occupation"), occupation_other=data.get("occupation_other"),
+                    interested_project_id=interested_project_id,
+                    interested_project_other=data.get("interested_project_other"),
+                    area=data.get("area"), city=data.get("city"),
+                    country_code=data.get("country_code", "+92"),
+                    temperature=data.get("temperature")
+                )
+                db.add(l2); db.commit(); db.refresh(l2)
+                print(f"[auto-recover] Retry succeeded — created {l2.lead_id}")
+                return {"message": "Lead created", "id": str(l2.id), "lead_id": l2.lead_id}
+            except Exception as e2:
+                db.rollback()
+                print(f"[auto-recover] Retry also failed: {e2}")
+                raise HTTPException(500, f"Error creating lead after sequence fix: {str(e2)}")
         print(f"Error creating lead: {e}")
         import traceback
         traceback.print_exc()
@@ -3484,6 +3525,9 @@ async def bulk_import_leads(file: UploadFile = File(...), campaign_id: str = Non
             results["success"] += 1
         except Exception as e: results["errors"].append(f"Row {i}: {e}")
     db.commit()
+    # Auto-sync lead_id_seq after bulk import to prevent stale sequence errors
+    if results["success"] > 0:
+        sync_lead_id_sequence(db)
     # Notify admin/CCO about duplicates (not individual reps — individual already notified above)
     if all_dup_records:
         notify_duplicate_attempt(db, all_dup_records, current_user, "bulk", campaign_name)
@@ -10385,6 +10429,34 @@ def unified_search(q: str = "", search_type: str = "mobile",
                         "owner_rep": rep.name if rep else None,
                         "owner_rep_id": rep.rep_id if rep else None
                     })
+
+            # ALSO search customer additional_mobiles JSONB array (fix for mobile search bug)
+            try:
+                add_mob_cust = db.execute(text("""
+                    SELECT c.id, c.customer_id, c.name, c.mobile, am.elem,
+                           r.name as rep_name, r.rep_id as rep_rep_id
+                    FROM customers c
+                    LEFT JOIN transactions t ON t.customer_id = c.id
+                    LEFT JOIN company_reps r ON r.id = t.company_rep_id
+                    CROSS JOIN jsonb_array_elements_text(c.additional_mobiles) AS am(elem)
+                    WHERE c.additional_mobiles IS NOT NULL AND c.additional_mobiles != '[]'::jsonb
+                      AND regexp_replace(am.elem, '[^0-9]', '', 'g') LIKE :suffix_pattern
+                """), {"suffix_pattern": f"%{suffix}%"})
+                for row in add_mob_cust:
+                    if normalize_mobile(row.elem) == normalized:
+                        # Avoid duplicates if primary mobile was already added
+                        if str(row.id) not in seen_ids:
+                            seen_ids.add(str(row.id))
+                            results.append({
+                                "type": "customer", "id": str(row.id), "entity_id": row.customer_id,
+                                "name": row.name, "mobile": row.elem,
+                                "owner_rep": row.rep_name,
+                                "owner_rep_id": row.rep_rep_id
+                            })
+            except Exception as e:
+                print(f"[unified-search] additional_mobiles customer search failed: {e}")
+                pass
+
             # Search leads via SQL with JOIN for rep
             lead_rows = db.query(Lead, CompanyRep).outerjoin(
                 CompanyRep, CompanyRep.id == Lead.assigned_rep_id
@@ -10402,6 +10474,34 @@ def unified_search(q: str = "", search_type: str = "mobile",
                         "owner_rep": rep.name if rep else None,
                         "owner_rep_id": rep.rep_id if rep else None
                     })
+
+            # ALSO search lead additional_mobiles JSONB array (fix for mobile search bug)
+            try:
+                add_mob_lead = db.execute(text("""
+                    SELECT l.id, l.lead_id, l.name, l.mobile, am.elem, l.pipeline_stage,
+                           r.name as rep_name, r.rep_id as rep_rep_id
+                    FROM leads l
+                    LEFT JOIN company_reps r ON l.assigned_rep_id = r.id
+                    CROSS JOIN jsonb_array_elements_text(l.additional_mobiles) AS am(elem)
+                    WHERE l.status != 'converted'
+                      AND l.additional_mobiles IS NOT NULL AND l.additional_mobiles != '[]'::jsonb
+                      AND regexp_replace(am.elem, '[^0-9]', '', 'g') LIKE :suffix_pattern
+                """), {"suffix_pattern": f"%{suffix}%"})
+                for row in add_mob_lead:
+                    if normalize_mobile(row.elem) == normalized:
+                        # Avoid duplicates if primary mobile was already added
+                        already = any(r["id"] == str(row.id) and r["type"] == "lead" for r in results)
+                        if not already:
+                            results.append({
+                                "type": "lead", "id": str(row.id), "entity_id": row.lead_id,
+                                "name": row.name, "mobile": row.elem,
+                                "pipeline_stage": row.pipeline_stage,
+                                "owner_rep": row.rep_name,
+                                "owner_rep_id": row.rep_rep_id
+                            })
+            except Exception as e:
+                print(f"[unified-search] additional_mobiles lead search failed: {e}")
+                pass
     else:
         # Name search via SQL ILIKE
         cust_rows = db.query(Customer, CompanyRep).outerjoin(
@@ -10737,30 +10837,55 @@ def bulk_assign_leads(data: dict, db: Session = Depends(get_db),
                       current_user: CompanyRep = Depends(require_role(["admin", "manager", "cco"]))):
     lead_ids = data.get("lead_ids", [])
     rep_id = data.get("rep_id")
+
+    # Validate inputs
     if not lead_ids or not rep_id:
         raise HTTPException(400, "lead_ids and rep_id required")
+    if not isinstance(lead_ids, list) or len(lead_ids) == 0:
+        raise HTTPException(400, "lead_ids must be a non-empty array")
 
-    rep = db.query(CompanyRep).filter((CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)).first()
-    if not rep: raise HTTPException(404, "Rep not found")
+    # Find target rep (support both UUID and rep_id string)
+    rep = db.query(CompanyRep).filter(
+        (CompanyRep.id == rep_id) | (CompanyRep.rep_id == rep_id)
+    ).first()
+    if not rep:
+        raise HTTPException(404, f"Rep not found with id: {rep_id}")
 
     # Batch fetch leads to avoid N+1
     leads = db.query(Lead).filter(
         or_(Lead.id.in_(lead_ids), Lead.lead_id.in_(lead_ids))
     ).all()
-    count = 0
-    for l in leads:
-        l.assigned_rep_id = rep.id
-        count += 1
 
-    # Notification + data in single atomic commit
-    create_notification(
-        db, rep.rep_id, "assignment",
-        f"{count} leads assigned to you",
-        f"{current_user.name} assigned {count} leads to you",
-        category="assignment"
-    )
-    db.commit()
-    return {"message": f"{count} leads assigned to {rep.name}"}
+    if len(leads) == 0:
+        raise HTTPException(404, f"No leads found matching the provided IDs")
+
+    # Assign leads
+    count = 0
+    try:
+        for l in leads:
+            l.assigned_rep_id = rep.id  # Set to UUID
+            count += 1
+
+        # Create notification
+        try:
+            create_notification(
+                db, rep.rep_id, "assignment",
+                f"{count} leads assigned to you",
+                f"{current_user.name} assigned {count} leads to you",
+                category="assignment"
+            )
+        except Exception as notif_err:
+            # Log but don't fail the assignment if notification fails
+            print(f"[bulk-assign] Notification creation failed: {notif_err}")
+
+        # Commit all changes
+        db.commit()
+        return {"message": f"{count} leads assigned to {rep.name}"}
+
+    except Exception as e:
+        db.rollback()
+        print(f"[bulk-assign] Assignment failed: {str(e)}")
+        raise HTTPException(500, f"Assignment failed: {str(e)}")
 
 @app.post("/api/leads/{lid}/request-assignment")
 def request_lead_assignment(lid: str, data: dict, db: Session = Depends(get_db),

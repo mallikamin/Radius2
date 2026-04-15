@@ -2051,7 +2051,12 @@ function PipelineView() {
       await api.post('/leads/bulk-assign', { lead_ids: selectedLeads, rep_id: assignRepId });
       if (window.showToast) window.showToast('Leads Assigned', `${selectedLeads.length} leads assigned`, 'success');
       setSelectedLeads([]); setAssignRepId(''); loadPipeline();
-    } catch (e) { if (window.showToast) window.showToast('Error', e.response?.data?.detail || 'Assignment failed', 'error'); }
+    } catch (e) {
+      console.error('[bulk-assign] Full error:', e);
+      console.error('[bulk-assign] Response data:', e.response?.data);
+      const errorMsg = e.response?.data?.detail || e.response?.data?.message || 'Assignment failed';
+      if (window.showToast) window.showToast('Error', errorMsg, 'error');
+    }
   };
 
   const handleStageChange = async (leadId, newStage) => {

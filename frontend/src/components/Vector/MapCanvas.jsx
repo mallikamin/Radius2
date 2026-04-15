@@ -637,8 +637,8 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
         };
         vectorState.addPlot(newPlot);
         vectorState.addChangeLog('Manual plot added', `Added plot: ${plotNum.trim()}`);
-        // Auto-switch to select to prevent accidental double-add on next click
-        if (setTool) setTool('select');
+        // Keep tool in 'add' mode for sticky behavior - user can add multiple plots
+        // Tool will reset to 'select' when user clicks another tool button or presses ESC
       }
       return; // Don't process other clicks when adding plot
     }

@@ -32,10 +32,14 @@ export function useKeyboardShortcuts(vectorState) {
         return;
       }
 
-      // Escape to deselect
+      // Escape to deselect and reset tool to 'select'
       if (e.key === 'Escape') {
         e.preventDefault();
         vectorState.clearSelection();
+        // Reset tool to 'select' mode (exits add/label/shape/etc modes)
+        if (window.setVectorTool) {
+          window.setVectorTool('select');
+        }
         return;
       }
 
