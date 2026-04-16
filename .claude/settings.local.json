@@ -83,7 +83,14 @@
       "Bash(then)",
       "Bash(else)",
       "Bash(./START_LOCAL.ps1)",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(database/add_plot_font_sizes.sql << 'EOF'\n-- Add plot_font_sizes JSONB column to vector_annotations table\n-- This allows per-plot font size control within an annotation\n\nALTER TABLE vector_annotations \nADD COLUMN IF NOT EXISTS plot_font_sizes JSONB DEFAULT '{}'::jsonb;\n\nCOMMENT ON COLUMN vector_annotations.plot_font_sizes IS 'Per-plot font sizes as JSON object: {\"plotId1\": 14, \"plotId2\": 18, ...}. Falls back to font_size if not specified for a plot.';\nEOF)",
+      "Bash(openssl s_client:*)",
+      "Bash(openssl x509:*)",
+      "Bash(frontend/src/version.js << 'EOF'\n// Auto-generated during build - DO NOT EDIT\nexport const BUILD_INFO = {\n  hash: '__BUILD_HASH__',\n  date: '__BUILD_DATE__',\n  branch: '__BUILD_BRANCH__'\n};\nEOF)",
+      "Bash(generate-version.sh:*)",
+      "Bash(chmod:*)",
+      "Bash(./generate-version.sh:*)"
     ]
   }
 }
