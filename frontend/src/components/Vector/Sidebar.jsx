@@ -240,52 +240,107 @@ export default function Sidebar({ vectorState, displayMode = 'plot' }) {
             <div className="flex justify-end mb-1">
               <button
                 onClick={() => {
-                  const note = prompt('Annotation note:');
-                  if (!note) return;
-                  const color = prompt('Color (hex):', '#6366f1');
-                  const plotInput = prompt('Plot numbers (comma-separated, e.g. 1,2,3,5-10)\nLeave empty to add plots later:');
+                  // Create a modal for adding annotation with color picker
+                  const modal = document.createElement('div');
+                  modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+                  modal.innerHTML = `
+                    <div class="bg-white rounded-lg p-6 w-96">
+                      <h3 class="text-lg font-bold mb-4">Add New Annotation</h3>
+                      <div class="space-y-3">
+                        <div>
+                          <label class="block text-sm font-medium mb-1">Note:</label>
+                          <input type="text" id="anno-note" class="w-full px-3 py-2 border border-gray-300 rounded" placeholder="Enter annotation note" />
+                        </div>
+                        <div>
+                          <label class="block text-sm font-medium mb-1">Color:</label>
+                          <input type="color" id="anno-color" value="#6366f1" class="w-full h-10 border border-gray-300 rounded" />
+                        </div>
+                        <div>
+                          <label class="block text-sm font-medium mb-1">Plot numbers (optional):</label>
+                          <input type="text" id="anno-plots" class="w-full px-3 py-2 border border-gray-300 rounded" placeholder="e.g. 1,2,3,5-10" />
+                          <div class="text-xs text-gray-500 mt-1">Comma-separated or ranges. Leave empty to add plots later.</div>
+                        </div>
+                      </div>
+                      <div class="flex gap-2 mt-6">
+                        <button id="anno-save" class="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Add</button>
+                        <button id="anno-cancel" class="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">Cancel</button>
+                      </div>
+                    </div>
+                  `;
+                  document.body.appendChild(modal);
 
-                  // Parse plot numbers
-                  let plotIds = [];
-                  let plotNums = [];
-                  if (plotInput && plotInput.trim()) {
-                    const parts = plotInput.split(',').map(s => s.trim()).filter(Boolean);
-                    const numSet = new Set();
-                    for (const part of parts) {
-                      if (part.includes('-') && /^\d+-\d+$/.test(part)) {
-                        const [start, end] = part.split('-').map(Number);
-                        for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
-                          numSet.add(String(i));
-                        }
-                      } else {
-                        numSet.add(part);
-                      }
+                  const noteInput = modal.querySelector('#anno-note');
+                  const colorInput = modal.querySelector('#anno-color');
+                  const plotsInput = modal.querySelector('#anno-plots');
+
+                  noteInput.focus();
+
+                  modal.querySelector('#anno-save').addEventListener('click', () => {
+                    const note = noteInput.value.trim();
+                    if (!note) {
+                      alert('Note is required');
+                      return;
                     }
-                    (vectorState.plots || []).forEach(p => {
-                      if (numSet.has(String(p.n || '').trim())) {
-                        plotIds.push(p.id);
-                        plotNums.push(p.n);
-                      }
-                    });
-                  }
+                    const color = colorInput.value;
+                    const plotInput = plotsInput.value;
 
-                  vectorState.addAnnotation({
-                    id: Date.now(),
-                    note,
-                    cat: '',
-                    color: color || '#6366f1',
-                    plotIds,
-                    plotNums: [...new Set(plotNums)],
-                    rotation: 0,
-                    fontSize: 12
+                    // Parse plot numbers
+                    let plotIds = [];
+                    let plotNums = [];
+                    if (plotInput && plotInput.trim()) {
+                      const parts = plotInput.split(',').map(s => s.trim()).filter(Boolean);
+                      const numSet = new Set();
+                      for (const part of parts) {
+                        if (part.includes('-') && /^\d+-\d+$/.test(part)) {
+                          const [start, end] = part.split('-').map(Number);
+                          for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
+                            numSet.add(String(i));
+                          }
+                        } else {
+                          numSet.add(part);
+                        }
+                      }
+                      (vectorState.plots || []).forEach(p => {
+                        if (numSet.has(String(p.n || '').trim())) {
+                          plotIds.push(p.id);
+                          plotNums.push(p.n);
+                        }
+                      });
+                    }
+
+                    vectorState.addAnnotation({
+                      id: Date.now(),
+                      note,
+                      cat: '',
+                      color,
+                      plotIds,
+                      plotNums: [...new Set(plotNums)],
+                      rotation: 0,
+                      fontSize: 12
+                    });
+
+                    document.body.removeChild(modal);
                   });
+
+                  modal.querySelector('#anno-cancel').addEventListener('click', () => {
+                    document.body.removeChild(modal);
+                  });
+
+                  // Allow ESC to close
+                  const handleEsc = (e) => {
+                    if (e.key === 'Escape') {
+                      document.body.removeChild(modal);
+                      document.removeEventListener('keydown', handleEsc);
+                    }
+                  };
+                  document.addEventListener('keydown', handleEsc);
                 }}
                 className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
               >
                 + Add
               </button>
             </div>
-            {vectorState.annos.map(anno => (
+            {[...vectorState.annos].reverse().map(anno => (
               <div key={anno.id} className="p-2 border border-gray-200 rounded text-xs">
                 <div className="flex items-center gap-2 mb-1">
                   <div

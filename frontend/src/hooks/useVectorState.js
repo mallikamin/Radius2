@@ -223,6 +223,7 @@ export function useVectorState() {
       if (processedAnno.rotation === undefined) processedAnno.rotation = 0;
       if (!processedAnno.color) processedAnno.color = "#6366f1";
       if (processedAnno.fontSize === undefined) processedAnno.fontSize = 12;
+      if (!processedAnno.plotFontSizes) processedAnno.plotFontSizes = {};
       
       // Log if plotIds don't match any plots (with type-flexible matching)
       const validPlotIds = processedAnno.plotIds.filter(id =>

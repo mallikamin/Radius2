@@ -8,6 +8,10 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
   const [rotation, setRotation] = useState(annotation.rotation || 0);
   const [plotFilter, setPlotFilter] = useState('');
   const [bulkInput, setBulkInput] = useState('');
+  const [usePerPlotFontSize, setUsePerPlotFontSize] = useState(
+    annotation.plotFontSizes && Object.keys(annotation.plotFontSizes).length > 0
+  );
+  const [plotFontSizes, setPlotFontSizes] = useState(annotation.plotFontSizes || {});
 
   // Get all plots
   const allPlots = vectorState.plots || [];
@@ -32,34 +36,83 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
       fontSize: parseInt(fontSize),
       rotation: parseFloat(rotation) || 0,
       plotIds: Array.from(selectedPlotIds),
-      plotNums
+      plotNums,
+      plotFontSizes: usePerPlotFontSize ? plotFontSizes : {}
     });
     onClose();
   };
 
   const handleMoveToNew = () => {
-    const newNote = prompt('New annotation note:');
-    if (!newNote) return;
+    // Create a modal for new annotation with color picker
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg p-6 w-96">
+        <h3 class="text-lg font-bold mb-4">Move to New Annotation</h3>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm font-medium mb-1">Note:</label>
+            <input type="text" id="move-note" class="w-full px-3 py-2 border border-gray-300 rounded" placeholder="Enter annotation note" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Color:</label>
+            <input type="color" id="move-color" value="${color}" class="w-full h-10 border border-gray-300 rounded" />
+          </div>
+        </div>
+        <div class="flex gap-2 mt-6">
+          <button id="move-save" class="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Move</button>
+          <button id="move-cancel" class="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
 
-    const newColor = prompt('Color (hex):', color);
-    const newAnno = {
-      id: Date.now(),
-      note: newNote,
-      cat: '',
-      color: newColor || color,
-      plotIds: Array.from(selectedPlotIds),
-      plotNums: [],
-      rotation: 0,
-      fontSize: parseInt(fontSize)
-    };
-    vectorState.addAnnotation(newAnno);
+    const noteInput = modal.querySelector('#move-note');
+    const colorInput = modal.querySelector('#move-color');
 
-    // Remove selected plots from current annotation
-    vectorState.updateAnnotation(annotation.id, {
-      plotIds: annotation.plotIds.filter(id => !selectedPlotIds.has(id))
+    noteInput.focus();
+
+    modal.querySelector('#move-save').addEventListener('click', () => {
+      const newNote = noteInput.value.trim();
+      if (!newNote) {
+        alert('Note is required');
+        return;
+      }
+      const newColor = colorInput.value;
+
+      const newAnno = {
+        id: Date.now(),
+        note: newNote,
+        cat: '',
+        color: newColor,
+        plotIds: Array.from(selectedPlotIds),
+        plotNums: [],
+        rotation: 0,
+        fontSize: parseInt(fontSize)
+      };
+      vectorState.addAnnotation(newAnno);
+
+      // Remove selected plots from current annotation
+      vectorState.updateAnnotation(annotation.id, {
+        plotIds: annotation.plotIds.filter(id => !selectedPlotIds.has(id))
+      });
+
+      document.body.removeChild(modal);
+      onClose();
     });
 
-    onClose();
+    modal.querySelector('#move-cancel').addEventListener('click', () => {
+      document.body.removeChild(modal);
+    });
+
+    // Allow ESC to close
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        document.body.removeChild(modal);
+        document.removeEventListener('keydown', handleEsc);
+      }
+    };
+    document.addEventListener('keydown', handleEsc);
   };
 
   const togglePlot = (plotId) => {
@@ -138,15 +191,55 @@ export default function AnnotationEditor({ annotation, vectorState, onClose }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Font Size:</label>
-            <input
-              type="number"
-              value={fontSize}
-              onChange={(e) => setFontSize(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded"
-              min="8"
-              max="24"
-            />
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium">Font Size:</label>
+              <label className="flex items-center gap-1 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={usePerPlotFontSize}
+                  onChange={(e) => setUsePerPlotFontSize(e.target.checked)}
+                  className="cursor-pointer"
+                />
+                <span>Per-plot control</span>
+              </label>
+            </div>
+            {!usePerPlotFontSize ? (
+              <input
+                type="number"
+                value={fontSize}
+                onChange={(e) => setFontSize(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded"
+                min="8"
+                max="24"
+              />
+            ) : (
+              <div className="border border-gray-300 rounded p-2 max-h-40 overflow-y-auto">
+                <div className="text-xs text-gray-600 mb-2">
+                  Set font size for each plot (default: {fontSize})
+                </div>
+                {annotationPlots.map(plot => (
+                  <div key={plot.id} className="flex items-center gap-2 mb-1">
+                    <span className="text-xs w-16">Plot {plot.n}:</span>
+                    <input
+                      type="number"
+                      value={plotFontSizes[plot.id] || fontSize}
+                      onChange={(e) => {
+                        const newSizes = { ...plotFontSizes };
+                        if (e.target.value === '' || e.target.value === fontSize.toString()) {
+                          delete newSizes[plot.id];
+                        } else {
+                          newSizes[plot.id] = parseInt(e.target.value);
+                        }
+                        setPlotFontSizes(newSizes);
+                      }}
+                      className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded"
+                      min="8"
+                      max="32"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div>

@@ -92,8 +92,9 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
       const offset = vectorState.plotOffsets[p.id] || { ox: 0, oy: 0 };
       const drawX = p.x + offset.ox;
       const drawY = p.y + offset.oy;
-      
-      const fontSize = anno.fontSize || 12;
+
+      // Check for per-plot font size first, then fall back to annotation default
+      const fontSize = (anno.plotFontSizes && anno.plotFontSizes[p.id]) || anno.fontSize || 12;
       const displayText = p.n;
       const textW = fontSize * displayText.length * 0.6; // Approximate
       const bw = Math.max(textW + 6, 16);
@@ -238,7 +239,8 @@ export default function MapCanvas({ vectorState, tool = 'select', setTool, displ
 
         if (anno || isSel || p.manual || isHovered) {
           const displayText = anno ? (displayMode === 'note' ? (anno.note || anno.cat || '•') : p.n) : p.n;
-          const fontSize = anno ? (anno.fontSize || 12) : 10;
+          // Check for per-plot font size first, then fall back to annotation default
+          const fontSize = anno ? ((anno.plotFontSizes && anno.plotFontSizes[p.id]) || anno.fontSize || 12) : 10;
           ctx.font = `bold ${fontSize}px Arial`;
 
           const textW = ctx.measureText(displayText).width;

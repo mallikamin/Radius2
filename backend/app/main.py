@@ -535,6 +535,7 @@ class VectorAnnotation(Base):
     rotation = Column(Integer, default=0)
     plot_ids = Column(JSONB, nullable=True)  # Array of plot IDs
     plot_nums = Column(JSONB, nullable=True)  # Array of plot numbers
+    plot_font_sizes = Column(JSONB, nullable=True)  # Per-plot font sizes: {"plotId1": 14, "plotId2": 18}
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -7548,7 +7549,8 @@ def get_vector_project(
                     "fontSize": a.font_size or 12,
                     "rotation": a.rotation or 0,
                     "plotIds": a.plot_ids or [],
-                    "plotNums": a.plot_nums or []
+                    "plotNums": a.plot_nums or [],
+                    "plotFontSizes": a.plot_font_sizes or {}
                 })
         else:
             pass

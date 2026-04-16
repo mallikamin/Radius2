@@ -191,6 +191,14 @@ export default function VectorMap() {
         ? vectorState.inventory
         : inventoryRef.current || {};
 
+      // DEBUG: Log rotation values before save
+      console.log('SAVE DEBUG - Annotations with rotation:',
+        annosToSave
+          .filter(a => a.rotation && a.rotation !== 0)
+          .map(a => ({ note: a.note, rotation: a.rotation, id: a.id }))
+      );
+      console.log('SAVE DEBUG - Total annotations:', annosToSave.length);
+
       const vectorMetadata = {
         plots: plotsToSave,
         plotOffsets: vectorState.plotOffsets || {},
@@ -325,6 +333,14 @@ export default function VectorMap() {
       if (!data) throw new Error('No project data received from server');
 
       console.log('Load:', data.projectName, '|', data.plots?.length || 0, 'plots,', data.annos?.length || 0, 'annos, PDF:', !!data.pdfBase64);
+
+      // DEBUG: Log rotation values after load
+      if (data.annos && data.annos.length > 0) {
+        const annosWithRotation = data.annos.filter(a => a.rotation && a.rotation !== 0);
+        console.log('LOAD DEBUG - Annotations with rotation:',
+          annosWithRotation.map(a => ({ note: a.note, rotation: a.rotation, id: a.id }))
+        );
+      }
 
       // Store all data in refs BEFORE any async operations (preserves during React batching)
       if (data.annos?.length > 0) annosRef.current = data.annos;
