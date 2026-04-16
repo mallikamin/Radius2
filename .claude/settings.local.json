@@ -90,7 +90,9 @@
       "Bash(frontend/src/version.js << 'EOF'\n// Auto-generated during build - DO NOT EDIT\nexport const BUILD_INFO = {\n  hash: '__BUILD_HASH__',\n  date: '__BUILD_DATE__',\n  branch: '__BUILD_BRANCH__'\n};\nEOF)",
       "Bash(generate-version.sh:*)",
       "Bash(chmod:*)",
-      "Bash(./generate-version.sh:*)"
+      "Bash(./generate-version.sh:*)",
+      "Bash(cat:*)",
+      "Bash(bash:*)"
     ]
   }
 }

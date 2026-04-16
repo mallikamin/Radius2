@@ -353,3 +353,36 @@ docker restart orbit_dev_web
   # Must show: subject=CN = orbit-voice.duckdns.org
   ```
   If curl returns exit code 60 (SSL certificate problem), that IS the bug — do NOT add `-k` to "fix" it.
+
+### 2026-04-16 — Site extremely slow to load: gzip compression not enabled
+- **Error**: "Site taking forever to load" — 60+ seconds for initial page load. User reported internet working fine, all other websites loading normally.
+- **Context**: After deploying build version feature and vector annotation improvements (commits 79d07f8, 5a9d1e3). User's build badge showed correct version (`v5a9d1e3`) but loading was painfully slow.
+- **Root Cause**: Gzip compression was NOT enabled in ANY nginx configuration (orbit_web or POS nginx). Browser was downloading 2.4MB uncompressed JS files at only ~38KB/sec. Typical gzip would reduce to ~673KB (72% smaller).
+- **Fix**: Added gzip configuration to three locations:
+  1. `/etc/nginx/nginx.conf` in `orbit_web` container (via `sed -i` — ephemeral, container-specific)
+  2. `~/pos-system/docker/nginx/nginx.conf` on DO server (main POS nginx config — added at top of http block)
+  3. `~/orbit-crm/voice.conf` on DO server (Orbit-specific server block — added after `server_tokens off;`)
+  - Reloaded nginx in all containers
+  - Gzip settings: `gzip on; gzip_vary on; gzip_proxied any; gzip_comp_level 6;` plus mime types for JS/CSS/JSON/fonts/SVG
+- **Rule**:
+  1. **ALWAYS enable gzip compression in nginx for production deployments.** Should be in standard deployment checklist and base nginx configs.
+  2. When co-hosting (POS + Orbit), gzip must be enabled in BOTH the main nginx config AND per-domain server blocks (e.g., voice.conf).
+  3. To verify gzip is working: `curl -I -H "Accept-Encoding: gzip" <URL>` should return `Content-Encoding: gzip` header. If it's missing, gzip is not working.
+  4. Expected compression ratio for minified JS: ~70% (2.4MB → ~673KB).
+  5. If adding nginx config to mounted volumes (like voice.conf), ensure the mount is NOT read-only — edit on host, then reload nginx.
+
+### 2026-04-16 — Browser cache confusion: build version badge solves verification gap
+- **Error**: User couldn't see deployed features ("don't see add new annotation button") despite successful deployment.
+- **Context**: Deployed new frontend build with vector annotation improvements. Server had correct files, but user's browser was serving cached old version.
+- **Root Cause**: Aggressive browser caching of JS/CSS files. Hard refresh not performed, so browser kept serving stale files despite new deployment with different hashes.
+- **Fix**:
+  1. Added build version badge to bottom-left corner of UI showing `v{hash}` (git commit short hash)
+  2. Tooltip shows full details: branch + build timestamp
+  3. Auto-generated during `npm run build` via `generate-version.sh` script
+  4. Instructed user to hard refresh (Ctrl+Shift+R) and check version badge
+- **Rule**:
+  1. **ALWAYS add a visible version indicator** in production apps to diagnose cache issues. Should be visible without opening DevTools.
+  2. After ANY frontend deployment, instruct user to hard refresh BEFORE testing: `Ctrl + Shift + R` (Windows/Linux) or `Cmd + Shift + R` (Mac).
+  3. If user reports "changes not visible," FIRST ask them to check the version badge. If it shows old hash, it's a cache issue — not a deployment issue.
+  4. Build version should be generated at build time (not runtime) so it matches the deployed code exactly.
+  5. Consider adding cache-busting query params or using Vite's built-in hash-based filenames (already doing this in Orbit).

@@ -38,7 +38,10 @@ export function exportPlotDetailsToPDF(plotsToExport, vectorState) {
     // Single plot detailed view
     const p = plotsToExport[0];
     const inv = vectorState.inventory[p.n] || {};
-    const anno = vectorState.annos.find(a => a.plotIds.includes(p.id));
+    const anno = vectorState.annos.find(a =>
+      a.plotIds && Array.isArray(a.plotIds) &&
+      a.plotIds.some(apid => String(apid) === String(p.id))
+    );
     
     doc.setTextColor(0, 0, 0);
     doc.setFontSize(16);
@@ -110,8 +113,11 @@ export function exportPlotDetailsToPDF(plotsToExport, vectorState) {
       }
       
       const inv = vectorState.inventory[p.n] || {};
-      const anno = vectorState.annos.find(a => a.plotIds.includes(p.id));
-      
+      const anno = vectorState.annos.find(a =>
+        a.plotIds && Array.isArray(a.plotIds) &&
+        a.plotIds.some(apid => String(apid) === String(p.id))
+      );
+
       // Plot header
       doc.setFontSize(12);
       doc.setFont(undefined, 'bold');
@@ -804,7 +810,10 @@ export async function exportProposalPDF(plotsToExport, vectorState, fieldConfig,
       if (y > ph - 20) { pdf.addPage(); y = margin; }
 
       const inv = vectorState.inventory[p.n] || {};
-      const anno = vectorState.annos.find(a => a.plotIds.includes(p.id));
+      const anno = vectorState.annos.find(a =>
+        a.plotIds && Array.isArray(a.plotIds) &&
+        a.plotIds.some(apid => String(apid) === String(p.id))
+      );
 
       // Alternate row shading
       if (idx % 2 === 0) {
