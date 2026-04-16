@@ -8,6 +8,7 @@ import ChatWidget from './components/Voice/ChatWidget';
 import PhoneInput from './components/PhoneInput';
 import { fetchLookupValues, LOOKUP_KEYS } from './utils/lookupValues';
 import { SBL_LOGO_BASE64 } from './sblLogo';
+import { BUILD_INFO } from './version';
 
 const api = axios.create({ baseURL: '/api' });
 const formatCurrency = (n) => new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(n || 0);
@@ -782,6 +783,10 @@ export default function App() {
             {t.message && <div className="text-xs mt-0.5 opacity-80">{t.message}</div>}
           </div>
         ))}
+      </div>
+      {/* Build Version Footer */}
+      <div className="fixed bottom-2 left-2 z-[50] text-[10px] text-gray-400 font-mono bg-white/80 backdrop-blur-sm px-2 py-1 rounded border border-gray-200" title={`Branch: ${BUILD_INFO.branch} | Built: ${BUILD_INFO.date}`}>
+        v{BUILD_INFO.hash}
       </div>
       <style>{`@keyframes slide-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } .animate-slide-in { animation: slide-in 0.3s ease-out; }`}</style>
     </div>
