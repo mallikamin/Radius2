@@ -10,6 +10,52 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [projectFilter, setProjectFilter] = useState('master'); // 'all', 'master', 'auto'
   const [expandedGroups, setExpandedGroups] = useState(new Set());
+
+  // Smart rotation handler: tries annotation-based rotation first, falls back to per-plot
+  const handleSmartRotation = (angle, isReset = false) => {
+    if (!vectorState.selected || vectorState.selected.size === 0) return;
+
+    // Build set of selected plot IDs
+    const selectedPlotIds = Array.from(vectorState.selected);
+
+    // Find annotations containing any of the selected plots (type-flexible matching)
+    const matchingAnnos = vectorState.annos.filter(anno => {
+      if (!anno.plotIds || !Array.isArray(anno.plotIds)) return false;
+      return anno.plotIds.some(apid =>
+        selectedPlotIds.some(spid => String(apid) === String(spid))
+      );
+    });
+
+    // Check if ALL selected plots belong to exactly ONE annotation
+    if (matchingAnnos.length === 1) {
+      const targetAnno = matchingAnnos[0];
+      // Verify all selected plots belong to this annotation
+      const allInSameAnno = selectedPlotIds.every(spid =>
+        targetAnno.plotIds.some(apid => String(apid) === String(spid))
+      );
+
+      if (allInSameAnno) {
+        // Use annotation-based rotation (persistent!)
+        const currentRot = targetAnno.rotation || 0;
+        const newRot = isReset ? 0 : (currentRot + angle + 360) % 360;
+        vectorState.updateAnnotation(targetAnno.id, { rotation: newRot });
+
+        // Clear any per-plot rotation overrides for consistency (optional but preferred)
+        vectorState.updatePlotRotations(prev => {
+          const next = { ...prev };
+          selectedPlotIds.forEach(pid => {
+            delete next[pid];
+          });
+          return next;
+        });
+        return;
+      }
+    }
+
+    // Fallback: per-plot rotation (multiple annotations or no annotation)
+    const newRotations = rotateSelectedPlots(vectorState.selected, vectorState.plotRotations, angle, isReset);
+    vectorState.updatePlotRotations(newRotations);
+  };
   
   // Get user role for admin check
   const getUserRole = () => {
@@ -295,6 +341,15 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
           💾 Save
         </button>
 
+        <button
+          onClick={() => window.openVectorAddAnnotationModal?.()}
+          className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-700 rounded font-medium"
+          style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
+          title="Add Annotation"
+        >
+          📝 + Annotation
+        </button>
+
         {vectorState.pdfImg && (
           <button
             onClick={() => {
@@ -362,6 +417,22 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
               {t.icon || t.label}
             </button>
           ))}
+          <button
+            onClick={() => window.openVectorAddAnnotationModal?.()}
+            className="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700"
+            style={{
+              color: '#fff',
+              border: 'none',
+              cursor: 'pointer',
+              minWidth: '28px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="Add Annotation"
+          >
+            📝
+          </button>
         </div>
 
         <div className="w-px h-5 bg-gray-700 mx-1" />
@@ -393,12 +464,7 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
         {/* Rotation Buttons */}
         <div className="flex items-center gap-0.5">
           <button
-            onClick={() => {
-              if (vectorState.selected && vectorState.selected.size > 0) {
-                const newRotations = rotateSelectedPlots(vectorState.selected, vectorState.plotRotations, -15);
-                vectorState.setPlotRotations(newRotations);
-              }
-            }}
+            onClick={() => handleSmartRotation(-15)}
             className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
             style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
             title="Rotate selected -15°"
@@ -406,12 +472,7 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
             ↶
           </button>
           <button
-            onClick={() => {
-              if (vectorState.selected && vectorState.selected.size > 0) {
-                const newRotations = rotateSelectedPlots(vectorState.selected, vectorState.plotRotations, 15);
-                vectorState.setPlotRotations(newRotations);
-              }
-            }}
+            onClick={() => handleSmartRotation(15)}
             className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
             style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
             title="Rotate selected +15°"
@@ -419,12 +480,7 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
             ↷
           </button>
           <button
-            onClick={() => {
-              if (vectorState.selected && vectorState.selected.size > 0) {
-                const newRotations = rotateSelectedPlots(vectorState.selected, vectorState.plotRotations, 0, true);
-                vectorState.setPlotRotations(newRotations);
-              }
-            }}
+            onClick={() => handleSmartRotation(0, true)}
             className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
             style={{ color: '#fff', border: 'none', cursor: 'pointer' }}
             title="Reset rotation"
@@ -651,6 +707,7 @@ export default function Toolbar({ onOpenProject, onNewProject, vectorState, tool
                                     <span className="text-blue-500">{project.linked_project_name} • </span>
                                   )}
                                   {new Date(project.updated_at).toLocaleDateString()}
+                                  <span className="ml-1 text-gray-300 font-mono">#{String(project.id).slice(-8)}</span>
                                 </div>
                               </div>
                               <div className="flex items-center gap-1 ml-2 flex-shrink-0">

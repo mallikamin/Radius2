@@ -16,6 +16,13 @@ export function useVectorState() {
   const [labels, setLabels] = useState([]);
   const [plots, setPlots] = useState([]);
 
+  // CRITICAL: Deterministic refs — always synced inside every mutator.
+  // These are the ONLY source of truth for save operations (never use React state directly for save).
+  const _annosRef = useRef([]);
+  const _plotsRef = useRef([]);
+  const _inventoryRef = useRef({});
+  const _plotRotationsRef = useRef({});
+
   // Undo/Redo history
   const historyRef = useRef([]);
   const historyIndexRef = useRef(-1);
@@ -83,6 +90,7 @@ export function useVectorState() {
     setActiveView('all');
     setBranches(data.branches || []);
     setInventory(data.inventory || {});
+    _inventoryRef.current = data.inventory || {}; // Sync deterministic ref
     setChangeLog(data.changeLog || []);
     // Ensure plotOffsets is an object with proper structure
     const offsets = data.plotOffsets || {};
@@ -97,7 +105,9 @@ export function useVectorState() {
       }
     });
     setPlotOffsets(normalizedOffsets);
-    setPlotRotations(data.plotRotations || {});
+    const rotations = data.plotRotations || {};
+    setPlotRotations(rotations);
+    _plotRotationsRef.current = rotations; // Sync deterministic ref
     setShapes(data.shapes || []);
     setHasUnsavedChanges(false);
     
@@ -143,6 +153,7 @@ export function useVectorState() {
       });
     }
     setPlots(loadedPlots);
+    _plotsRef.current = loadedPlots; // Sync deterministic ref
     console.log('loadProjectData: Plots loaded:', loadedPlots.length, 'First plot ID:', loadedPlots[0]?.id);
 
     // Debug: Show what plot IDs exist for annotation matching
@@ -245,6 +256,7 @@ export function useVectorState() {
     
     // CRITICAL: Preserve exact order and count - Vector does not filter annotations
     setAnnos(processedAnnos);
+    _annosRef.current = processedAnnos; // Sync deterministic ref
     
     // Verify annotations were set correctly
     if (processedAnnos.length !== rawAnnos.length) {
@@ -310,28 +322,44 @@ export function useVectorState() {
 
   // Add plot
   const addPlot = useCallback((plot) => {
-    setPlots(prev => [...prev, plot]);
+    setPlots(prev => {
+      const next = [...prev, plot];
+      _plotsRef.current = next;
+      return next;
+    });
   }, []);
 
   // Update plot
   const updatePlot = useCallback((plotId, updates) => {
-    setPlots(prev => prev.map(p => p.id === plotId ? { ...p, ...updates } : p));
+    setPlots(prev => {
+      const next = prev.map(p => p.id === plotId ? { ...p, ...updates } : p);
+      _plotsRef.current = next;
+      return next;
+    });
   }, []);
 
   // Remove plot — also cleans up annotations that reference it
   const removePlot = useCallback((plotId) => {
-    setPlots(prev => prev.filter(p => p.id !== plotId));
+    setPlots(prev => {
+      const next = prev.filter(p => p.id !== plotId);
+      _plotsRef.current = next;
+      return next;
+    });
     // Remove this plotId from any annotations
     const plotIdStr = String(plotId);
-    setAnnos(prev => prev.map(a => {
-      const hasIt = a.plotIds.some(pid => String(pid) === plotIdStr);
-      if (!hasIt) return a;
-      return {
-        ...a,
-        plotIds: a.plotIds.filter(pid => String(pid) !== plotIdStr),
-        plotNums: (a.plotNums || []) // plotNums will be stale but harmless; recalculated on next render
-      };
-    }));
+    setAnnos(prev => {
+      const next = prev.map(a => {
+        const hasIt = a.plotIds.some(pid => String(pid) === plotIdStr);
+        if (!hasIt) return a;
+        return {
+          ...a,
+          plotIds: a.plotIds.filter(pid => String(pid) !== plotIdStr),
+          plotNums: (a.plotNums || []) // plotNums will be stale but harmless; recalculated on next render
+        };
+      });
+      _annosRef.current = next;
+      return next;
+    });
     setSelected(prev => {
       const next = new Set(prev);
       next.delete(plotId);
@@ -342,60 +370,81 @@ export function useVectorState() {
 
   // Add annotation
   const addAnnotation = useCallback((anno) => {
-    setAnnos(prev => [...prev, anno]);
+    setAnnos(prev => {
+      const next = [...prev, anno];
+      _annosRef.current = next;
+      return next;
+    });
     setHasUnsavedChanges(true);
   }, []);
 
   // Update annotation - PRESERVE ORDER, deduplicate plotIds
   const updateAnnotation = useCallback((annoId, updates) => {
-    setAnnos(prev => prev.map(a => {
-      if (a.id !== annoId) return a;
-      const merged = { ...a, ...updates };
-      // Deduplicate plotIds if present
-      if (merged.plotIds && Array.isArray(merged.plotIds)) {
-        const seen = new Set();
-        merged.plotIds = merged.plotIds.filter(pid => {
-          const key = String(pid);
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      }
-      return merged;
-    })); // map preserves order
+    setAnnos(prev => {
+      const next = prev.map(a => {
+        if (a.id !== annoId) return a;
+        const merged = { ...a, ...updates };
+        // Deduplicate plotIds if present
+        if (merged.plotIds && Array.isArray(merged.plotIds)) {
+          const seen = new Set();
+          merged.plotIds = merged.plotIds.filter(pid => {
+            const key = String(pid);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        }
+        return merged;
+      }); // map preserves order
+      _annosRef.current = next;
+      return next;
+    });
+    setHasUnsavedChanges(true);
   }, []);
 
   // Remove annotation
   const removeAnnotation = useCallback((annoId) => {
-    setAnnos(prev => prev.filter(a => a.id !== annoId));
+    setAnnos(prev => {
+      const next = prev.filter(a => a.id !== annoId);
+      _annosRef.current = next;
+      return next;
+    });
     setHasUnsavedChanges(true);
   }, []);
 
   // Atomic: add a single plot to an annotation (stale-closure safe)
   const addPlotToAnnotation = useCallback((annoId, plotId, plotNum) => {
-    setAnnos(prev => prev.map(a => {
-      if (a.id !== annoId) return a;
-      const plotIdStr = String(plotId);
-      if (a.plotIds.some(pid => String(pid) === plotIdStr)) return a; // already present
-      return {
-        ...a,
-        plotIds: [...a.plotIds, plotId],
-        plotNums: [...new Set([...(a.plotNums || []), plotNum])]
-      };
-    }));
+    setAnnos(prev => {
+      const next = prev.map(a => {
+        if (a.id !== annoId) return a;
+        const plotIdStr = String(plotId);
+        if (a.plotIds.some(pid => String(pid) === plotIdStr)) return a; // already present
+        return {
+          ...a,
+          plotIds: [...a.plotIds, plotId],
+          plotNums: [...new Set([...(a.plotNums || []), plotNum])]
+        };
+      });
+      _annosRef.current = next;
+      return next;
+    });
     setHasUnsavedChanges(true);
   }, []);
 
   // Atomic: remove a single plot from an annotation (stale-closure safe)
   const removePlotFromAnnotation = useCallback((annoId, plotId) => {
     const plotIdStr = String(plotId);
-    setAnnos(prev => prev.map(a => {
-      if (a.id !== annoId) return a;
-      return {
-        ...a,
-        plotIds: a.plotIds.filter(pid => String(pid) !== plotIdStr)
-      };
-    }));
+    setAnnos(prev => {
+      const next = prev.map(a => {
+        if (a.id !== annoId) return a;
+        return {
+          ...a,
+          plotIds: a.plotIds.filter(pid => String(pid) !== plotIdStr)
+        };
+      });
+      _annosRef.current = next;
+      return next;
+    });
     setHasUnsavedChanges(true);
   }, []);
 
@@ -736,6 +785,23 @@ export function useVectorState() {
     addChangeLog('Mass rename', `Renamed ${renameMatches.length} plots`);
   }, [addChangeLog]);
 
+  // Deterministic snapshot getters — always returns the latest value,
+  // even if React state hasn't re-rendered yet. Use these in save handlers.
+  const getLatestAnnos = useCallback(() => _annosRef.current, []);
+  const getLatestPlots = useCallback(() => _plotsRef.current, []);
+  const getLatestInventory = useCallback(() => _inventoryRef.current, []);
+  const getLatestPlotRotations = useCallback(() => _plotRotationsRef.current, []);
+
+  // Update plot rotations (functional update + sync ref + mark unsaved)
+  const updatePlotRotations = useCallback((updater) => {
+    setPlotRotations(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      _plotRotationsRef.current = next; // Sync deterministic ref
+      return next;
+    });
+    setHasUnsavedChanges(true);
+  }, []);
+
   return {
     // State
     projectName,
@@ -834,7 +900,14 @@ export function useVectorState() {
     selectByList,
     addToSelection,
     removeFromSelection,
-    massRenamePlots
+    massRenamePlots,
+
+    // Deterministic snapshot getters (race-safe for save handlers)
+    getLatestAnnos,
+    getLatestPlots,
+    getLatestInventory,
+    getLatestPlotRotations,
+    updatePlotRotations
   };
 }
 

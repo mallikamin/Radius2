@@ -2,6 +2,8 @@
 
 Last updated: 2026-02-21
 
+Canonical hygiene gates: `DEPLOYMENT_HYGIENE_CHECKLIST.md` (must be followed on every deploy).
+
 ## Scope
 - Droplet: `159.65.158.26`
 - Orbit domain: `https://orbit-voice.duckdns.org/`

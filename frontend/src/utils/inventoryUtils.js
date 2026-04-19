@@ -226,16 +226,25 @@ export function exportInventoryToExcel(inventory, plots, filename = 'inventory')
 /**
  * Export manual plots to Excel separately
  */
-export function exportManualPlotsToExcel(plots, inventory, filename = 'manual_plots') {
+export function exportManualPlotsToExcel(plots, inventory, filename = 'manual_plots', annos = []) {
   const manualPlots = plots.filter(p => p.manual);
   const data = [];
-  
-  // Header
-  data.push(['Plot#', 'X', 'Y', 'Width', 'Height', 'Marla', 'Total Value', 'Rate per Marla', 'Dimensions', 'Owner', 'Status', 'Notes']);
-  
+
+  // Header - added Annotation and Rotation columns
+  data.push(['Plot#', 'X', 'Y', 'Width', 'Height', 'Marla', 'Total Value', 'Rate per Marla', 'Dimensions', 'Owner', 'Status', 'Annotation', 'Rotation', 'Notes']);
+
   // Data rows
   manualPlots.forEach(plot => {
     const inv = inventory[plot.n] || {};
+
+    // Find matching annotation (type-flexible ID comparison)
+    const anno = annos.find(a =>
+      a.plotIds && Array.isArray(a.plotIds) &&
+      a.plotIds.some(apid => String(apid) === String(plot.id))
+    );
+    const annotationText = anno ? (anno.note || anno.cat || '') : '';
+    const rotation = anno ? (anno.rotation || 0) : '';
+
     data.push([
       plot.n,
       Math.round(plot.x),
@@ -248,6 +257,8 @@ export function exportManualPlotsToExcel(plots, inventory, filename = 'manual_pl
       inv.dimensions || '',
       (typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner) || '',
       inv.status || '',
+      annotationText,
+      rotation,
       inv.notes || ''
     ]);
   });
