@@ -195,12 +195,21 @@ export function importInventoryFromExcel(file, onProgress) {
 /**
  * Export inventory to Excel
  */
-export function exportInventoryToExcel(inventory, plots, filename = 'inventory') {
+export function exportInventoryToExcel(inventory, plots, filename = 'inventory', annos = []) {
   const data = [];
-  
+
+  const plotToAnnotation = {};
+  (annos || []).forEach(a => {
+    const label = (a.note || a.cat || '').trim();
+    if (!label) return;
+    (a.plotNums || []).forEach(pn => {
+      plotToAnnotation[String(pn)] = label;
+    });
+  });
+
   // Header
-  data.push(['Plot#', 'Marla', 'Total Value', 'Rate per Marla', 'Dimensions', 'Owner', 'Status', 'Factor Notes', 'Notes']);
-  
+  data.push(['Plot#', 'Marla', 'Total Value', 'Rate per Marla', 'Dimensions', 'Owner', 'Annotation', 'Status', 'Factor Notes', 'Notes']);
+
   // Data rows
   Object.keys(inventory).forEach(plotNum => {
     const inv = inventory[plotNum];
@@ -211,6 +220,7 @@ export function exportInventoryToExcel(inventory, plots, filename = 'inventory')
       inv.ratePerMarla || '',
       inv.dimensions || '',
       (typeof inv.owner === 'object' ? inv.owner.name || '' : inv.owner) || '',
+      plotToAnnotation[String(plotNum)] || '',
       inv.status || '',
       inv.factorNotes || '',
       inv.notes || ''

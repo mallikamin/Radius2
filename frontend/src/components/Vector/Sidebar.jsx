@@ -204,7 +204,7 @@ export default function Sidebar({ vectorState, displayMode = 'plot' }) {
 
   // Export Excel
   const handleExportExcel = () => {
-    exportInventoryToExcel(vectorState.inventory, vectorState.plots, vectorState.projectName || 'inventory');
+    exportInventoryToExcel(vectorState.inventory, vectorState.plots, vectorState.projectName || 'inventory', vectorState.annos);
   };
 
   // Export Manual Plots Excel

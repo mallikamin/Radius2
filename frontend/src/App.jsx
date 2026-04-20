@@ -1996,10 +1996,29 @@ function PipelineView() {
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
+  const [dupCheck, setDupCheck] = useState({ loading: false, matches: [] });
+
   const openAddLeadModal = () => {
     setNewLeadForm({ ...emptyEnhancedLead, assigned_rep_id: currentUser.id || '' });
+    setDupCheck({ loading: false, matches: [] });
     setShowAddLeadModal(true);
   };
+
+  useEffect(() => {
+    if (!showAddLeadModal) { setDupCheck({ loading: false, matches: [] }); return; }
+    const digits = String(newLeadForm.mobile || '').replace(/\D/g, '');
+    if (digits.length < 7) { setDupCheck({ loading: false, matches: [] }); return; }
+    setDupCheck(prev => ({ ...prev, loading: true }));
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.get('/duplicate-check', { params: { mobile: newLeadForm.mobile } });
+        setDupCheck({ loading: false, matches: res.data?.matches || [] });
+      } catch (e) {
+        setDupCheck({ loading: false, matches: [] });
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [newLeadForm.mobile, showAddLeadModal]);
 
   useEffect(() => { loadPipeline(); loadReps(); loadLeadMeta(); }, [repFilter, activeStage, leadSearch, leadPage]);
   // Debounce search input
@@ -2412,6 +2431,22 @@ function PipelineView() {
             )}
             <Input label="Name" required value={newLeadForm.name} onChange={e => setNewLeadForm({...newLeadForm, name: e.target.value})} />
             <PhoneInput label="Mobile" value={newLeadForm.mobile} onChange={value => setNewLeadForm({...newLeadForm, mobile: value})} />
+            {dupCheck.loading && (
+              <div className="text-xs text-gray-500 -mt-2">Checking for duplicates…</div>
+            )}
+            {!dupCheck.loading && dupCheck.matches.length > 0 && (
+              <div className="p-3 -mt-2 rounded-lg border border-amber-300 bg-amber-50 text-xs text-amber-900">
+                <div className="font-semibold mb-1">⚠ This mobile is already in the system</div>
+                <ul className="space-y-0.5">
+                  {dupCheck.matches.slice(0, 5).map((m, i) => (
+                    <li key={i}>
+                      <span className="uppercase font-medium">{m.type}</span> {m.entity_id ? `• ${m.entity_id}` : ''} — {m.name || 'Unnamed'}
+                      {m.assigned_rep ? ` (assigned to ${m.assigned_rep})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
                 <select value={newLeadForm.source} onChange={e => setNewLeadForm({...newLeadForm, source: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
