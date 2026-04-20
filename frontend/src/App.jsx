@@ -1994,6 +1994,12 @@ function PipelineView() {
   const [leadPageSize] = useState(50);
   const role = getUserRole();
   const isAdminLike = ['admin', 'cco', 'manager'].includes(role);
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+
+  const openAddLeadModal = () => {
+    setNewLeadForm({ ...emptyEnhancedLead, assigned_rep_id: currentUser.id || '' });
+    setShowAddLeadModal(true);
+  };
 
   useEffect(() => { loadPipeline(); loadReps(); loadLeadMeta(); }, [repFilter, activeStage, leadSearch, leadPage]);
   // Debounce search input
@@ -2114,7 +2120,7 @@ function PipelineView() {
     <div className="space-y-4">
       {/* Filters row */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 flex-wrap">
-        <button onClick={() => setShowAddLeadModal(true)} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800">+ Add Lead</button>
+        <button onClick={openAddLeadModal} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800">+ Add Lead</button>
         {isAdminLike && (
           <select value={repFilter} onChange={e => { setRepFilter(e.target.value); setLeadPage(1); setLoading(true); }}
             className="px-3 py-2 text-sm border rounded-lg bg-white">
@@ -2407,15 +2413,6 @@ function PipelineView() {
             <Input label="Name" required value={newLeadForm.name} onChange={e => setNewLeadForm({...newLeadForm, name: e.target.value})} />
             <PhoneInput label="Mobile" value={newLeadForm.mobile} onChange={value => setNewLeadForm({...newLeadForm, mobile: value})} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Additional Mobile 1" value={newLeadForm.additional_mobiles[0] || ''} onChange={e => updateMobile(0, e.target.value)} />
-              <Input label="Additional Mobile 2" value={newLeadForm.additional_mobiles[1] || ''} onChange={e => updateMobile(1, e.target.value)} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Additional Mobile 3" value={newLeadForm.additional_mobiles[2] || ''} onChange={e => updateMobile(2, e.target.value)} />
-              <Input label="Additional Mobile 4" value={newLeadForm.additional_mobiles[3] || ''} onChange={e => updateMobile(3, e.target.value)} />
-            </div>
-            <Input label="Email" type="email" value={newLeadForm.email} onChange={e => setNewLeadForm({...newLeadForm, email: e.target.value})} />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Source</label>
                 <select value={newLeadForm.source} onChange={e => setNewLeadForm({...newLeadForm, source: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
                   <option value="">Select source</option>
@@ -2432,6 +2429,15 @@ function PipelineView() {
             {newLeadForm.source === 'Other' && <Input label="Source (Other)" value={newLeadForm.source_other} onChange={e => setNewLeadForm({...newLeadForm, source_other: e.target.value})} />}
             {newLeadForm.occupation === 'Other' && <Input label="Occupation (Other)" value={newLeadForm.occupation_other} onChange={e => setNewLeadForm({...newLeadForm, occupation_other: e.target.value})} />}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="Additional Mobile 1" value={newLeadForm.additional_mobiles[0] || ''} onChange={e => updateMobile(0, e.target.value)} />
+              <Input label="Additional Mobile 2" value={newLeadForm.additional_mobiles[1] || ''} onChange={e => updateMobile(1, e.target.value)} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="Additional Mobile 3" value={newLeadForm.additional_mobiles[2] || ''} onChange={e => updateMobile(2, e.target.value)} />
+              <Input label="Additional Mobile 4" value={newLeadForm.additional_mobiles[3] || ''} onChange={e => updateMobile(3, e.target.value)} />
+            </div>
+            <Input label="Email" type="email" value={newLeadForm.email} onChange={e => setNewLeadForm({...newLeadForm, email: e.target.value})} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Area" value={newLeadForm.area} onChange={e => setNewLeadForm({...newLeadForm, area: e.target.value})} />
               <Input label="City" value={newLeadForm.city} onChange={e => setNewLeadForm({...newLeadForm, city: e.target.value})} />
             </div>
@@ -2444,10 +2450,16 @@ function PipelineView() {
                 </select>
               </div>
               <div><label className="block text-xs font-medium text-gray-500 mb-1">Assign to Rep</label>
-                <select value={newLeadForm.assigned_rep_id} onChange={e => setNewLeadForm({...newLeadForm, assigned_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
-                  <option value="">Unassigned</option>
-                  {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
+                {isAdminLike ? (
+                  <select value={newLeadForm.assigned_rep_id} onChange={e => setNewLeadForm({...newLeadForm, assigned_rep_id: e.target.value})} className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                    <option value="">Unassigned</option>
+                    {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  </select>
+                ) : (
+                  <div className="w-full border rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-700">
+                    {currentUser.name || 'You'}
+                  </div>
+                )}
               </div>
             </div>
             {newLeadForm.interested_project_id === 'other' && (
