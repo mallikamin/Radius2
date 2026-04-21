@@ -412,6 +412,12 @@ export default function App() {
     if (tabId === 'zakat') return hasZakatAccess(user);
     if (tabId === 'eoi') return hasEoiAccess(user) || roleAccess[role]?.includes(tabId);
 
+    // Rep-specific overrides
+    if (repId === 'REP-0013') {
+      if (tabId === 'reports') return true;
+      if (tabId === 'dashboard') return false;
+    }
+
     const allowedByRole = roleAccess[role]?.includes(tabId) || false;
     if (!allowedByRole) return false;
 
