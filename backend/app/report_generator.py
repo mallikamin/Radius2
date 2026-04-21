@@ -686,7 +686,7 @@ def generate_broker_pdf(report_data: dict) -> BytesIO:
         ]))
         story.append(fin_table)
         story.append(Spacer(1, 0.3*inch))
-    
+
     # Footer
     footer_style = ParagraphStyle(
         'Footer',
@@ -696,8 +696,320 @@ def generate_broker_pdf(report_data: dict) -> BytesIO:
         alignment=1
     )
     story.append(Paragraph(f"Report Generated via Radius CRM • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
-    
+
     doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+# ─── Receivables Timeline ────────────────────────────────────────────────────
+
+def generate_receivables_timeline_pdf(report_data: dict) -> BytesIO:
+    """Generate PDF for receivables timeline report"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=0.4*inch, bottomMargin=0.4*inch,
+        leftMargin=0.5*inch, rightMargin=0.5*inch,
+    )
+    styles = getSampleStyleSheet()
+    story = []
+
+    header_style = ParagraphStyle(
+        'TimelineHeader', parent=styles['Heading1'],
+        fontSize=16, textColor=colors.HexColor('#ffffff'),
+        spaceAfter=5, alignment=1, fontName='Helvetica-Bold',
+    )
+    subtitle_style = ParagraphStyle(
+        'TimelineSubtitle', parent=styles['Normal'],
+        fontSize=9, textColor=colors.HexColor('#e5e7eb'),
+        spaceAfter=10, alignment=1,
+    )
+    section_style = ParagraphStyle(
+        'SectionHead', parent=styles['Heading2'],
+        fontSize=11, spaceAfter=4, spaceBefore=12,
+    )
+
+    page_w = 7.27*inch  # A4 - margins
+    hdr_data = [
+        [Paragraph("Receivables Timeline Report", header_style)],
+        [Paragraph(f"Generated via <b>Radius CRM</b> \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style)],
+    ]
+    hdr_table = Table(hdr_data, colWidths=[page_w])
+    hdr_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0),(-1,-1), colors.HexColor('#1a1a1a')),
+        ('ALIGN', (0,0),(-1,-1), 'CENTER'),
+        ('VALIGN', (0,0),(-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0),(-1,-1), 10),
+        ('BOTTOMPADDING', (0,0),(-1,-1), 10),
+    ]))
+    story.append(hdr_table)
+    story.append(Spacer(1, 0.2*inch))
+
+    filters = report_data.get("filters", {})
+    proj_names = list(filters.get("project_names", {}).values())
+    filter_label = "All Projects" if filters.get("all_projects") else ", ".join(proj_names) or "Selected Projects"
+    story.append(Paragraph(f"Projects: {filter_label}", styles['Normal']))
+    story.append(Spacer(1, 0.15*inch))
+
+    summary = report_data.get("summary", {})
+    sum_data = [
+        ["Summary", ""],
+        ["Total Outstanding", f"PKR {summary.get('total_outstanding', 0):,.0f}"],
+        ["Overdue",           f"PKR {summary.get('total_overdue', 0):,.0f}"],
+        ["Future Receivable", f"PKR {summary.get('total_future', 0):,.0f}"],
+        ["Total Installments", str(summary.get('total_installments', 0))],
+    ]
+    sum_table = Table(sum_data, colWidths=[2.5*inch, 4.0*inch])
+    sum_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0),(-1,0), colors.HexColor('#1a1a1a')),
+        ('TEXTCOLOR', (0,0),(-1,0), colors.whitesmoke),
+        ('FONTNAME', (0,0),(-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0),(-1,-1), 10),
+        ('GRID', (0,0),(-1,-1), 0.5, colors.grey),
+        ('BOTTOMPADDING', (0,0),(-1,-1), 8),
+        ('TOPPADDING', (0,0),(-1,-1), 8),
+    ]))
+    story.append(sum_table)
+    story.append(Spacer(1, 0.25*inch))
+
+    COL_W = [1.55*inch, 0.45*inch, 0.9*inch, 0.75*inch, 0.95*inch, 1.0*inch]
+    TYPE_HDR_COLORS = {
+        "overdue":  colors.HexColor('#dc2626'),
+        "current":  colors.HexColor('#d97706'),
+        "future":   colors.HexColor('#16a34a'),
+    }
+    TYPE_ROW_COLORS = {
+        "overdue":  colors.HexColor('#fef2f2'),
+        "current":  colors.HexColor('#fffbeb'),
+        "future":   colors.HexColor('#f0fdf4'),
+    }
+
+    for month in report_data.get("months", []):
+        mtype  = month.get("month_type", "future")
+        hdr_bg = TYPE_HDR_COLORS.get(mtype, colors.HexColor('#374151'))
+        row_bg = TYPE_ROW_COLORS.get(mtype, colors.white)
+
+        story.append(Paragraph(month["month_label"], section_style))
+
+        tbl_rows = [["Customer / Project", "#", "Total Due", "Paid", "Overdue", "Future Recv."]]
+
+        for proj in month.get("projects", []):
+            tbl_rows.append([
+                Paragraph(f"<b>{proj['project_name']}</b>", styles['Normal']),
+                str(proj["installments_count"]),
+                f"{proj['total_due']:,.0f}",
+                f"{proj['total_paid']:,.0f}",
+                f"{proj['overdue']:,.0f}" if proj['overdue'] else "-",
+                f"{proj['future_receivable']:,.0f}" if proj['future_receivable'] else "-",
+            ])
+            for cust in proj.get("customers", []):
+                tbl_rows.append([
+                    f"   {cust['customer_name']}",
+                    str(len(cust["installments"])),
+                    f"{cust['total_due']:,.0f}",
+                    f"{cust['total_paid']:,.0f}",
+                    f"{cust['overdue']:,.0f}" if cust['overdue'] else "-",
+                    f"{cust['future_receivable']:,.0f}" if cust['future_receivable'] else "-",
+                ])
+
+        tbl_rows.append([
+            Paragraph("<b>Month Total</b>", styles['Normal']),
+            str(month["total_installments"]),
+            f"{month['total_due']:,.0f}",
+            f"{month['total_paid']:,.0f}",
+            f"{month['overdue']:,.0f}" if month['overdue'] else "-",
+            f"{month['future_receivable']:,.0f}" if month['future_receivable'] else "-",
+        ])
+
+        n = len(tbl_rows)
+        tbl = Table(tbl_rows, colWidths=COL_W)
+        tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0,0),(-1,0), hdr_bg),
+            ('TEXTCOLOR', (0,0),(-1,0), colors.white),
+            ('FONTNAME', (0,0),(-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0),(-1,-1), 7),
+            ('ALIGN', (1,0),(-1,-1), 'RIGHT'),
+            ('ALIGN', (0,0),(0,-1), 'LEFT'),
+            ('GRID', (0,0),(-1,-1), 0.3, colors.HexColor('#d1d5db')),
+            ('ROWBACKGROUNDS', (0,1),(-1,n-2), [colors.white, row_bg]),
+            ('BACKGROUND', (0,n-1),(-1,n-1), colors.HexColor('#f3f4f6')),
+            ('FONTNAME', (0,n-1),(-1,n-1), 'Helvetica-Bold'),
+            ('TOPPADDING', (0,0),(-1,-1), 4),
+            ('BOTTOMPADDING', (0,0),(-1,-1), 4),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 0.15*inch))
+
+    footer_style2 = ParagraphStyle(
+        'Footer2', parent=styles['Normal'],
+        fontSize=8, textColor=colors.HexColor('#6b7280'), alignment=1,
+    )
+    story.append(Spacer(1, 0.2*inch))
+    story.append(Paragraph(
+        f"Report Generated via Radius CRM \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        footer_style2,
+    ))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def generate_receivables_timeline_excel(report_data: dict) -> BytesIO:
+    """Generate Excel for receivables timeline — three sheets: Summary, Month-wise, Pivot"""
+    buffer = BytesIO()
+    wb = xlsxwriter.Workbook(buffer, {'in_memory': True})
+
+    title_fmt     = wb.add_format({'bold': True, 'font_size': 14})
+    hdr_fmt       = wb.add_format({'bold': True, 'bg_color': '#1a1a1a', 'font_color': 'white', 'border': 1})
+    num_fmt       = wb.add_format({'num_format': '#,##0', 'border': 1})
+    num_red_fmt   = wb.add_format({'num_format': '#,##0', 'border': 1, 'font_color': '#dc2626'})
+    num_grn_fmt   = wb.add_format({'num_format': '#,##0', 'border': 1, 'font_color': '#16a34a'})
+    month_hdr_od  = wb.add_format({'bold': True, 'bg_color': '#fee2e2', 'border': 1})
+    month_hdr_cur = wb.add_format({'bold': True, 'bg_color': '#fef9c3', 'border': 1})
+    month_hdr_fut = wb.add_format({'bold': True, 'bg_color': '#dcfce7', 'border': 1})
+    proj_fmt      = wb.add_format({'bold': True, 'bg_color': '#f3f4f6', 'border': 1})
+    cust_fmt      = wb.add_format({'indent': 1, 'border': 1})
+    total_fmt     = wb.add_format({'bold': True, 'bg_color': '#e5e7eb', 'border': 1, 'num_format': '#,##0'})
+    plain_fmt     = wb.add_format({'border': 1})
+    center_fmt    = wb.add_format({'align': 'center', 'border': 1})
+    pv_hdr_fmt    = wb.add_format({'bold': True, 'bg_color': '#1a1a1a', 'font_color': 'white', 'border': 1, 'align': 'center'})
+    pv_num_fmt    = wb.add_format({'num_format': '#,##0', 'border': 1, 'align': 'right'})
+    pv_zero_fmt   = wb.add_format({'border': 1, 'align': 'center', 'font_color': '#9ca3af'})
+    pv_tot_fmt    = wb.add_format({'bold': True, 'bg_color': '#e5e7eb', 'border': 1, 'num_format': '#,##0'})
+
+    summary = report_data.get("summary", {})
+    filters = report_data.get("filters", {})
+    months  = report_data.get("months", [])
+
+    # ── Sheet 1: Summary ─────────────────────────────────────────
+    ws_sum = wb.add_worksheet("Summary")
+    ws_sum.set_column(0, 0, 28)
+    ws_sum.set_column(1, 1, 20)
+
+    ws_sum.write(0, 0, "Receivables Timeline Report", title_fmt)
+    ws_sum.write(1, 0, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    pnames = list(filters.get("project_names", {}).values())
+    flabel = "All Projects" if filters.get("all_projects") else ", ".join(pnames)
+    ws_sum.write(2, 0, f"Projects: {flabel}")
+
+    r = 4
+    ws_sum.write(r, 0, "Metric",       hdr_fmt)
+    ws_sum.write(r, 1, "Amount (PKR)", hdr_fmt)
+    r += 1
+    for label, val, fmt in [
+        ("Total Outstanding", summary.get("total_outstanding", 0), num_fmt),
+        ("Overdue",           summary.get("total_overdue",    0), num_red_fmt),
+        ("Future Receivable", summary.get("total_future",     0), num_grn_fmt),
+    ]:
+        ws_sum.write(r, 0, label, plain_fmt)
+        ws_sum.write(r, 1, val,   fmt)
+        r += 1
+    ws_sum.write(r, 0, "Total Installments", plain_fmt)
+    ws_sum.write(r, 1, summary.get("total_installments", 0), center_fmt)
+
+    # ── Sheet 2: Month-wise ──────────────────────────────────────
+    ws_mw = wb.add_worksheet("Month-wise")
+    ws_mw.set_column(0, 0, 36)
+    ws_mw.set_column(1, 1, 6)
+    ws_mw.set_column(2, 5, 18)
+
+    MTYPE_FMT = {"overdue": month_hdr_od, "current": month_hdr_cur, "future": month_hdr_fut}
+    HDR_COLS  = ["Customer / Project", "#", "Total Due (PKR)", "Paid (PKR)", "Overdue (PKR)", "Future Receivable (PKR)"]
+
+    r = 0
+    ws_mw.write(r, 0, "Receivables Timeline — Month-wise Breakdown", title_fmt)
+    r += 2
+
+    for month in months:
+        mfmt = MTYPE_FMT.get(month.get("month_type", "future"), month_hdr_fut)
+        for c, col in enumerate(HDR_COLS):
+            ws_mw.write(r, c, f"{month['month_label']} — {col}" if c == 0 else col, mfmt)
+        r += 1
+
+        for proj in month.get("projects", []):
+            ws_mw.write(r, 0, proj["project_name"],           proj_fmt)
+            ws_mw.write(r, 1, proj["installments_count"],     proj_fmt)
+            ws_mw.write(r, 2, proj["total_due"],              proj_fmt)
+            ws_mw.write(r, 3, proj["total_paid"],             proj_fmt)
+            ws_mw.write(r, 4, proj["overdue"] or 0,           proj_fmt)
+            ws_mw.write(r, 5, proj["future_receivable"] or 0, proj_fmt)
+            r += 1
+
+            for cust in proj.get("customers", []):
+                ws_mw.write(r, 0, f"  {cust['customer_name']} ({cust['customer_id'] or '-'})", cust_fmt)
+                ws_mw.write(r, 1, len(cust["installments"]),         plain_fmt)
+                ws_mw.write(r, 2, cust["total_due"],                  num_fmt)
+                ws_mw.write(r, 3, cust["total_paid"],                 num_fmt)
+                ws_mw.write(r, 4, cust["overdue"] or 0,               num_red_fmt if cust["overdue"] else plain_fmt)
+                ws_mw.write(r, 5, cust["future_receivable"] or 0,     num_grn_fmt if cust["future_receivable"] else plain_fmt)
+                r += 1
+
+        ws_mw.write(r, 0, f"  Total — {month['month_label']}", total_fmt)
+        ws_mw.write(r, 1, month["total_installments"],     total_fmt)
+        ws_mw.write(r, 2, month["total_due"],              total_fmt)
+        ws_mw.write(r, 3, month["total_paid"],             total_fmt)
+        ws_mw.write(r, 4, month["overdue"] or 0,           total_fmt)
+        ws_mw.write(r, 5, month["future_receivable"] or 0, total_fmt)
+        r += 2
+
+    # ── Sheet 3: Pivot ────────────────────────────────────────────
+    ws_pv = wb.add_worksheet("Pivot")
+    ws_pv.set_column(0, 0, 28)
+
+    all_month_keys   = [m["month_key"]   for m in months]
+    all_month_labels = [m["month_label"] for m in months]
+    for ci in range(1, len(all_month_keys)+2):
+        ws_pv.set_column(ci, ci, 14)
+
+    all_proj_rows: list = []
+    seen_proj: set = set()
+    for month in months:
+        for proj in month.get("projects", []):
+            if proj["project_id"] not in seen_proj:
+                all_proj_rows.append((proj["project_id"], proj["project_name"]))
+                seen_proj.add(proj["project_id"])
+
+    r = 0
+    ws_pv.write(r, 0, "Receivables Timeline — Pivot (Balance by Project x Month)", title_fmt)
+    r += 2
+
+    ws_pv.write(r, 0, "Project", pv_hdr_fmt)
+    for ci, lbl in enumerate(all_month_labels):
+        ws_pv.write(r, ci+1, lbl, pv_hdr_fmt)
+    ws_pv.write(r, len(all_month_keys)+1, "Total", pv_hdr_fmt)
+    r += 1
+
+    month_totals: dict = {mk: 0.0 for mk in all_month_keys}
+    grand_total  = 0.0
+
+    for pid, pname in all_proj_rows:
+        proj_total = 0.0
+        ws_pv.write(r, 0, pname, plain_fmt)
+        for ci, mk in enumerate(all_month_keys):
+            balance = 0.0
+            for month in months:
+                if month["month_key"] == mk:
+                    for proj in month.get("projects", []):
+                        if proj["project_id"] == pid:
+                            balance = proj["total_balance"]
+            if balance:
+                ws_pv.write(r, ci+1, balance, pv_num_fmt)
+                proj_total       += balance
+                month_totals[mk] += balance
+            else:
+                ws_pv.write(r, ci+1, "-", pv_zero_fmt)
+        ws_pv.write(r, len(all_month_keys)+1, proj_total, pv_tot_fmt)
+        grand_total += proj_total
+        r += 1
+
+    ws_pv.write(r, 0, "Total", pv_tot_fmt)
+    for ci, mk in enumerate(all_month_keys):
+        ws_pv.write(r, ci+1, month_totals.get(mk, 0) or "-", pv_tot_fmt)
+    ws_pv.write(r, len(all_month_keys)+1, grand_total, pv_tot_fmt)
+
+    wb.close()
     buffer.seek(0)
     return buffer
 

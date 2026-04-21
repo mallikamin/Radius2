@@ -6901,6 +6901,61 @@ def get_brokers_excel(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating Excel: {str(e)}")
 
+@app.get("/api/reports/receivables-timeline")
+def get_receivables_timeline_report(project_ids: str = "", db: Session = Depends(get_db)):
+    """Month-wise receivables timeline. project_ids = comma-separated project IDs; empty = all."""
+    try:
+        try:
+            from app.reports import get_receivables_timeline
+        except ImportError:
+            from reports import get_receivables_timeline
+        ids = [pid.strip() for pid in project_ids.split(",") if pid.strip()] if project_ids else []
+        return get_receivables_timeline(ids, db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating timeline: {str(e)}")
+
+@app.get("/api/reports/receivables-timeline/pdf")
+def get_receivables_timeline_pdf(project_ids: str = "", db: Session = Depends(get_db)):
+    """PDF export of receivables timeline."""
+    try:
+        try:
+            from app.reports import get_receivables_timeline
+            from app.report_generator import generate_receivables_timeline_pdf
+        except ImportError:
+            from reports import get_receivables_timeline
+            from report_generator import generate_receivables_timeline_pdf
+        ids = [pid.strip() for pid in project_ids.split(",") if pid.strip()] if project_ids else []
+        report = get_receivables_timeline(ids, db)
+        buf = generate_receivables_timeline_pdf(report)
+        return StreamingResponse(
+            buf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=receivables_timeline.pdf"},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating PDF: {str(e)}")
+
+@app.get("/api/reports/receivables-timeline/excel")
+def get_receivables_timeline_excel(project_ids: str = "", db: Session = Depends(get_db)):
+    """Excel export of receivables timeline."""
+    try:
+        try:
+            from app.reports import get_receivables_timeline
+            from app.report_generator import generate_receivables_timeline_excel
+        except ImportError:
+            from reports import get_receivables_timeline
+            from report_generator import generate_receivables_timeline_excel
+        ids = [pid.strip() for pid in project_ids.split(",") if pid.strip()] if project_ids else []
+        report = get_receivables_timeline(ids, db)
+        buf = generate_receivables_timeline_excel(report)
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=receivables_timeline.xlsx"},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating Excel: {str(e)}")
+
 # ============================================
 # MEDIA API
 # ============================================

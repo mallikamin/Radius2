@@ -640,3 +640,203 @@ def get_broker_detailed_report(broker_id: str, db: Session) -> Dict:
         }
     }
 
+
+def get_receivables_timeline(project_ids: List[str], db: Session) -> Dict:
+    """Month-wise receivables timeline across selected projects.
+
+    Groups all installments with outstanding balance by calendar month.
+    Overdue = due_date < today, Future = due_date >= today.
+    """
+    try:
+        from app.main import Project, Transaction, Installment, Customer
+    except ImportError:
+        from main import Project, Transaction, Installment, Customer
+
+    today = date.today()
+    current_month_key = today.strftime("%Y-%m")
+
+    # Resolve project IDs to ORM objects
+    if project_ids:
+        project_list = []
+        for pid in project_ids:
+            try:
+                p_uuid = uuid.UUID(pid)
+                project = db.query(Project).filter(
+                    (Project.id == p_uuid) | (Project.project_id == pid)
+                ).first()
+            except ValueError:
+                project = db.query(Project).filter(Project.project_id == pid).first()
+            if project:
+                project_list.append(project)
+    else:
+        project_list = db.query(Project).all()
+
+    # month_key -> month bucket
+    months_data: Dict[str, Dict] = {}
+    summary = {
+        "total_overdue": 0.0,
+        "total_future": 0.0,
+        "total_outstanding": 0.0,
+        "total_installments": 0,
+    }
+
+    for project in project_list:
+        txns = db.query(Transaction).filter(Transaction.project_id == project.id).all()
+
+        for txn in txns:
+            customer = db.query(Customer).filter(Customer.id == txn.customer_id).first() if txn.customer_id else None
+            installments = (
+                db.query(Installment)
+                .filter(Installment.transaction_id == txn.id)
+                .order_by(Installment.installment_number)
+                .all()
+            )
+
+            for inst in installments:
+                amount = float(inst.amount or 0)
+                amount_paid = float(inst.amount_paid or 0)
+                balance = amount - amount_paid
+
+                if balance <= 0 or not inst.due_date:
+                    continue
+
+                is_overdue = inst.due_date < today
+                month_key = inst.due_date.strftime("%Y-%m")
+                month_label = inst.due_date.strftime("%B %Y")
+                days_outstanding = (today - inst.due_date).days if is_overdue else 0
+
+                # Determine month category for visual labelling
+                if month_key < current_month_key:
+                    month_type = "overdue"
+                elif month_key == current_month_key:
+                    month_type = "current"
+                else:
+                    month_type = "future"
+
+                # --- month bucket ---
+                if month_key not in months_data:
+                    months_data[month_key] = {
+                        "month_key": month_key,
+                        "month_label": month_label,
+                        "month_type": month_type,
+                        "total_installments": 0,
+                        "total_due": 0.0,
+                        "total_paid": 0.0,
+                        "overdue": 0.0,
+                        "future_receivable": 0.0,
+                        "total_balance": 0.0,
+                        "projects": {},
+                    }
+
+                month = months_data[month_key]
+                month["total_installments"] += 1
+                month["total_due"] += amount
+                month["total_paid"] += amount_paid
+                month["total_balance"] += balance
+                if is_overdue:
+                    month["overdue"] += balance
+                else:
+                    month["future_receivable"] += balance
+
+                # --- project bucket inside month ---
+                proj_key = str(project.id)
+                if proj_key not in month["projects"]:
+                    month["projects"][proj_key] = {
+                        "project_id": project.project_id,
+                        "project_name": project.name,
+                        "installments_count": 0,
+                        "total_due": 0.0,
+                        "total_paid": 0.0,
+                        "overdue": 0.0,
+                        "future_receivable": 0.0,
+                        "total_balance": 0.0,
+                        "customers": {},
+                    }
+
+                proj = month["projects"][proj_key]
+                proj["installments_count"] += 1
+                proj["total_due"] += amount
+                proj["total_paid"] += amount_paid
+                proj["total_balance"] += balance
+                if is_overdue:
+                    proj["overdue"] += balance
+                else:
+                    proj["future_receivable"] += balance
+
+                # --- customer bucket inside project ---
+                cust_key = customer.customer_id if customer else "unknown"
+                if cust_key not in proj["customers"]:
+                    proj["customers"][cust_key] = {
+                        "customer_id": customer.customer_id if customer else None,
+                        "customer_name": customer.name if customer else "Unknown",
+                        "mobile": customer.mobile if customer else None,
+                        "total_due": 0.0,
+                        "total_paid": 0.0,
+                        "overdue": 0.0,
+                        "future_receivable": 0.0,
+                        "total_balance": 0.0,
+                        "installments": [],
+                    }
+
+                cust = proj["customers"][cust_key]
+                cust["total_due"] += amount
+                cust["total_paid"] += amount_paid
+                cust["total_balance"] += balance
+                if is_overdue:
+                    cust["overdue"] += balance
+                else:
+                    cust["future_receivable"] += balance
+
+                cust["installments"].append({
+                    "installment_number": inst.installment_number or 0,
+                    "due_date": str(inst.due_date),
+                    "amount": amount,
+                    "paid": amount_paid,
+                    "balance": balance,
+                    "is_overdue": is_overdue,
+                    "days_outstanding": days_outstanding,
+                    "unit_number": txn.unit_number or "-",
+                    "transaction_id": txn.transaction_id,
+                })
+
+                summary["total_installments"] += 1
+                summary["total_outstanding"] += balance
+                if is_overdue:
+                    summary["total_overdue"] += balance
+                else:
+                    summary["total_future"] += balance
+
+    # Flatten dicts to sorted lists
+    months_sorted = []
+    for month_key in sorted(months_data.keys()):
+        month = months_data[month_key]
+        projects_list = []
+        for proj in sorted(month["projects"].values(), key=lambda x: x["project_name"]):
+            customers_list = sorted(
+                proj["customers"].values(),
+                key=lambda x: x["total_balance"],
+                reverse=True,
+            )
+            for c in customers_list:
+                c["installments"].sort(key=lambda x: x["due_date"] or "")
+            proj["customers"] = customers_list
+            projects_list.append(proj)
+        month["projects"] = projects_list
+        months_sorted.append(month)
+
+    return {
+        "report_header": {
+            "title": "Receivables Timeline Report",
+            "generated_by": "Radius CRM",
+            "generated_at": str(datetime.now()),
+            "report_type": "receivables_timeline",
+        },
+        "filters": {
+            "project_ids": [p.project_id for p in project_list],
+            "project_names": {p.project_id: p.name for p in project_list},
+            "all_projects": len(project_ids) == 0,
+        },
+        "summary": summary,
+        "months": months_sorted,
+    }
+
