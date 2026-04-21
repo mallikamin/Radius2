@@ -8038,6 +8038,15 @@ function ReportsView() {
   const [projectSearch, setProjectSearch] = useState('');
   const [brokerSearch, setBrokerSearch] = useState('');
 
+  // Receivables Timeline state
+  const [timelineSelectedProjects, setTimelineSelectedProjects] = useState([]);
+  const [timelineReport, setTimelineReport] = useState(null);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineView, setTimelineView] = useState('rows');
+  const [expandedMonths, setExpandedMonths] = useState(new Set());
+  const [expandedMonthProjects, setExpandedMonthProjects] = useState(new Set());
+  const [tlProjectDropdownOpen, setTlProjectDropdownOpen] = useState(false);
+
   useEffect(() => { loadData(); }, []);
   const loadData = async () => {
     try {
@@ -8090,6 +8099,43 @@ function ReportsView() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadTimelineReport = async (projectIds) => {
+    try {
+      setTimelineLoading(true);
+      const qs = projectIds.length ? `?project_ids=${projectIds.join(',')}` : '';
+      const res = await api.get(`/reports/receivables-timeline${qs}`);
+      setTimelineReport(res.data);
+    } catch (e) {
+      window.showToast && window.showToast('Error', 'Failed to load timeline report', 'error');
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
+
+  const downloadTimelinePDF = async () => {
+    try {
+      const qs = timelineSelectedProjects.length ? `?project_ids=${timelineSelectedProjects.join(',')}` : '';
+      const response = await fetch(`/api/reports/receivables-timeline/pdf${qs}`);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'receivables_timeline.pdf';
+      document.body.appendChild(a); a.click();
+      window.URL.revokeObjectURL(url); document.body.removeChild(a);
+    } catch (e) { alert('Error downloading PDF'); }
+  };
+
+  const downloadTimelineExcel = async () => {
+    try {
+      const qs = timelineSelectedProjects.length ? `?project_ids=${timelineSelectedProjects.join(',')}` : '';
+      const response = await fetch(`/api/reports/receivables-timeline/excel${qs}`);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'receivables_timeline.xlsx';
+      document.body.appendChild(a); a.click();
+      window.URL.revokeObjectURL(url); document.body.removeChild(a);
+    } catch (e) { alert('Error downloading Excel'); }
   };
 
   const downloadPDF = async (type, id) => {
@@ -8150,6 +8196,9 @@ function ReportsView() {
           </button>
           <button onClick={() => setReportType('broker')} className={`px-4 py-2 rounded-lg text-sm font-medium ${reportType === 'broker' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'}`}>
             Broker Reports
+          </button>
+          <button onClick={() => setReportType('timeline')} className={`px-4 py-2 rounded-lg text-sm font-medium ${reportType === 'timeline' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'}`}>
+            Receivables Timeline
           </button>
         </div>
       </div>
@@ -9017,6 +9066,290 @@ function ReportsView() {
           </div>
         </div>
       )}
+
+      {/* ── Receivables Timeline ── */}
+      {reportType === 'timeline' && (() => {
+        const MTYPE_BADGE = { overdue: 'bg-red-100 text-red-700', current: 'bg-amber-100 text-amber-700', future: 'bg-green-100 text-green-700' };
+        const MTYPE_BORDER = { overdue: 'border-red-300', current: 'border-amber-300', future: 'border-green-300' };
+        const MTYPE_HDR = { overdue: 'bg-red-600', current: 'bg-amber-500', future: 'bg-green-600' };
+        const MTYPE_LABEL = { overdue: 'Overdue', current: 'Current', future: 'Future' };
+
+        const toggleProject = (pid) => {
+          const next = timelineSelectedProjects.includes(pid)
+            ? timelineSelectedProjects.filter(x => x !== pid)
+            : [...timelineSelectedProjects, pid];
+          setTimelineSelectedProjects(next);
+        };
+        const allSelected = projects.length > 0 && timelineSelectedProjects.length === projects.length;
+        const toggleAll = () => setTimelineSelectedProjects(allSelected ? [] : projects.map(p => p.project_id));
+
+        const selectedLabel = timelineSelectedProjects.length === 0
+          ? 'All Projects'
+          : timelineSelectedProjects.length === projects.length
+            ? 'All Projects'
+            : `${timelineSelectedProjects.length} Project${timelineSelectedProjects.length > 1 ? 's' : ''} Selected`;
+
+        const toggleMonth = (mk) => setExpandedMonths(s => { const n = new Set(s); n.has(mk) ? n.delete(mk) : n.add(mk); return n; });
+        const toggleMonthProject = (key) => setExpandedMonthProjects(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+        // Pivot helpers
+        const pivotMonths = (timelineReport?.months || []);
+        const pivotProjSet = [];
+        const seen = new Set();
+        pivotMonths.forEach(m => m.projects.forEach(p => { if (!seen.has(p.project_id)) { pivotProjSet.push(p); seen.add(p.project_id); } }));
+
+        return (
+          <div className="space-y-4">
+            {/* Controls bar */}
+            <div className="bg-white rounded-xl border p-4 flex flex-wrap gap-3 items-center">
+              {/* Project multi-select */}
+              <div className="relative">
+                <button
+                  onClick={() => setTlProjectDropdownOpen(o => !o)}
+                  className="flex items-center gap-2 px-4 py-2 border rounded-lg text-sm bg-white hover:bg-gray-50 min-w-[180px] justify-between"
+                >
+                  <span className="text-gray-700">{selectedLabel}</span>
+                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                </button>
+                {tlProjectDropdownOpen && (
+                  <div className="absolute z-50 top-full mt-1 left-0 bg-white border rounded-lg shadow-lg w-64 max-h-72 overflow-y-auto">
+                    <div className="p-2 border-b">
+                      <button onClick={toggleAll} className="w-full text-left px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 rounded">
+                        {allSelected ? 'Deselect All' : 'Select All'}
+                      </button>
+                    </div>
+                    {projects.map(p => (
+                      <label key={p.project_id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm">
+                        <input type="checkbox" className="rounded" checked={timelineSelectedProjects.includes(p.project_id)} onChange={() => toggleProject(p.project_id)} />
+                        <span>{p.name}</span>
+                        <span className="text-xs text-gray-400 ml-auto">{p.project_id}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={() => { setTlProjectDropdownOpen(false); loadTimelineReport(timelineSelectedProjects); }}
+                disabled={timelineLoading}
+                className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+              >
+                {timelineLoading ? 'Loading...' : 'Generate Report'}
+              </button>
+
+              {timelineReport && (
+                <>
+                  <div className="flex border rounded-lg overflow-hidden text-sm ml-auto">
+                    <button onClick={() => setTimelineView('rows')} className={`px-3 py-2 ${timelineView === 'rows' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}>
+                      Timeline View
+                    </button>
+                    <button onClick={() => setTimelineView('pivot')} className={`px-3 py-2 ${timelineView === 'pivot' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}>
+                      Pivot View
+                    </button>
+                  </div>
+                  <button onClick={downloadTimelinePDF} className="px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">Export PDF</button>
+                  <button onClick={downloadTimelineExcel} className="px-3 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800">Export Excel</button>
+                </>
+              )}
+            </div>
+
+            {/* Close dropdown on outside click */}
+            {tlProjectDropdownOpen && <div className="fixed inset-0 z-40" onClick={() => setTlProjectDropdownOpen(false)} />}
+
+            {!timelineReport && !timelineLoading && (
+              <div className="bg-white rounded-xl border p-16 text-center text-gray-400">
+                Select projects (or leave blank for all) and click Generate Report
+              </div>
+            )}
+            {timelineLoading && (
+              <div className="bg-white rounded-xl border p-16 text-center text-gray-400">Loading timeline...</div>
+            )}
+
+            {timelineReport && !timelineLoading && (() => {
+              const s = timelineReport.summary;
+              return (
+                <>
+                  {/* Summary cards */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {[
+                      { label: 'Total Outstanding', val: s.total_outstanding, color: 'text-gray-900' },
+                      { label: 'Overdue',           val: s.total_overdue,    color: 'text-red-600' },
+                      { label: 'Future Receivable', val: s.total_future,     color: 'text-green-600' },
+                      { label: 'Installments',      val: s.total_installments, color: 'text-gray-700', isCount: true },
+                    ].map(({ label, val, color, isCount }) => (
+                      <div key={label} className="bg-white rounded-lg border p-4">
+                        <div className="text-xs text-gray-500 mb-1">{label}</div>
+                        <div className={`text-xl font-bold ${color}`}>
+                          {isCount ? val?.toLocaleString() : formatCurrency(val)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── Layout A: Timeline rows ── */}
+                  {timelineView === 'rows' && (
+                    <div className="space-y-3">
+                      {timelineReport.months.map(month => {
+                        const mtype = month.month_type || 'future';
+                        const isOpen = expandedMonths.has(month.month_key);
+                        return (
+                          <div key={month.month_key} className={`bg-white rounded-lg border ${MTYPE_BORDER[mtype]}`}>
+                            {/* Month header row */}
+                            <button
+                              onClick={() => toggleMonth(month.month_key)}
+                              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-left"
+                            >
+                              <span className={`w-5 h-5 flex items-center justify-center rounded text-xs font-bold ${MTYPE_HDR[mtype]} text-white`}>
+                                {isOpen ? '▼' : '▶'}
+                              </span>
+                              <span className="font-semibold text-gray-900 text-sm w-32">{month.month_label}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${MTYPE_BADGE[mtype]}`}>{MTYPE_LABEL[mtype]}</span>
+                              <span className="text-xs text-gray-500">{month.total_installments} installments</span>
+                              <div className="ml-auto flex gap-6 text-sm">
+                                {month.overdue > 0 && <span className="text-red-600 font-medium">Overdue: {formatCurrency(month.overdue)}</span>}
+                                {month.future_receivable > 0 && <span className="text-green-600 font-medium">Future: {formatCurrency(month.future_receivable)}</span>}
+                                <span className="font-bold text-gray-900">Balance: {formatCurrency(month.total_balance)}</span>
+                              </div>
+                            </button>
+
+                            {/* Expanded: projects */}
+                            {isOpen && (
+                              <div className="border-t">
+                                {month.projects.map(proj => {
+                                  const projKey = `${month.month_key}:${proj.project_id}`;
+                                  const projOpen = expandedMonthProjects.has(projKey);
+                                  return (
+                                    <div key={proj.project_id}>
+                                      {/* Project row */}
+                                      <button
+                                        onClick={() => toggleMonthProject(projKey)}
+                                        className="w-full flex items-center gap-3 px-6 py-2.5 hover:bg-gray-50 text-left border-b last:border-b-0 bg-gray-50"
+                                      >
+                                        <span className="text-xs text-gray-400">{projOpen ? '▼' : '▶'}</span>
+                                        <span className="font-medium text-sm text-gray-800 w-40">{proj.project_name}</span>
+                                        <span className="text-xs text-gray-500">{proj.installments_count} inst.</span>
+                                        <div className="ml-auto flex gap-6 text-sm">
+                                          {proj.overdue > 0 && <span className="text-red-600">{formatCurrency(proj.overdue)}</span>}
+                                          {proj.future_receivable > 0 && <span className="text-green-600">{formatCurrency(proj.future_receivable)}</span>}
+                                          <span className="font-semibold text-gray-900">{formatCurrency(proj.total_balance)}</span>
+                                        </div>
+                                      </button>
+
+                                      {/* Expanded: customers */}
+                                      {projOpen && (
+                                        <div className="overflow-x-auto">
+                                          <table className="w-full text-xs">
+                                            <thead className="bg-gray-100 border-b">
+                                              <tr>
+                                                <th className="px-8 py-2 text-left font-semibold text-gray-600">Customer</th>
+                                                <th className="px-3 py-2 text-left font-semibold text-gray-600">Mobile</th>
+                                                <th className="px-3 py-2 text-right font-semibold text-gray-600"># Inst.</th>
+                                                <th className="px-3 py-2 text-right font-semibold text-gray-600">Total Due</th>
+                                                <th className="px-3 py-2 text-right font-semibold text-gray-600">Paid</th>
+                                                <th className="px-3 py-2 text-right font-semibold text-red-600">Overdue</th>
+                                                <th className="px-3 py-2 text-right font-semibold text-green-600">Future Recv.</th>
+                                                <th className="px-3 py-2 text-right font-semibold text-gray-900">Balance</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y">
+                                              {proj.customers.map((cust, ci) => (
+                                                <tr key={ci} className="hover:bg-gray-50">
+                                                  <td className="px-8 py-2 font-medium text-gray-800">{cust.customer_name} <span className="text-gray-400 font-normal">({cust.customer_id || '-'})</span></td>
+                                                  <td className="px-3 py-2 text-gray-500">{cust.mobile || '-'}</td>
+                                                  <td className="px-3 py-2 text-right">{cust.installments.length}</td>
+                                                  <td className="px-3 py-2 text-right">{formatCurrency(cust.total_due)}</td>
+                                                  <td className="px-3 py-2 text-right">{formatCurrency(cust.total_paid)}</td>
+                                                  <td className="px-3 py-2 text-right text-red-600">{cust.overdue > 0 ? formatCurrency(cust.overdue) : '-'}</td>
+                                                  <td className="px-3 py-2 text-right text-green-600">{cust.future_receivable > 0 ? formatCurrency(cust.future_receivable) : '-'}</td>
+                                                  <td className="px-3 py-2 text-right font-semibold">{formatCurrency(cust.total_balance)}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                                {/* Month totals row */}
+                                <div className="flex items-center gap-6 px-6 py-2.5 bg-gray-100 border-t text-sm font-semibold text-gray-700">
+                                  <span className="w-40">Month Total</span>
+                                  <span className="text-xs text-gray-500">{month.total_installments} inst.</span>
+                                  {month.overdue > 0 && <span className="ml-auto text-red-700">{formatCurrency(month.overdue)} overdue</span>}
+                                  {month.future_receivable > 0 && <span className={month.overdue > 0 ? '' : 'ml-auto'} style={month.overdue > 0 ? {} : {marginLeft:'auto'}}><span className="text-green-700">{formatCurrency(month.future_receivable)} future</span></span>}
+                                  <span className="text-gray-900">{formatCurrency(month.total_balance)} total</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* ── Layout B: Pivot view ── */}
+                  {timelineView === 'pivot' && (
+                    <div className="bg-white rounded-xl border overflow-x-auto">
+                      <div className="p-4 border-b">
+                        <h3 className="font-semibold text-gray-900">Pivot — Outstanding Balance by Project × Month</h3>
+                        <p className="text-xs text-gray-500 mt-0.5">Red = overdue months · Green = future months · Amber = current month</p>
+                      </div>
+                      <table className="w-full text-xs min-w-max">
+                        <thead>
+                          <tr className="bg-gray-900 text-white">
+                            <th className="px-4 py-3 text-left font-semibold sticky left-0 bg-gray-900 z-10">Project</th>
+                            {pivotMonths.map(m => (
+                              <th key={m.month_key} className={`px-3 py-3 text-right font-semibold min-w-[110px] ${m.month_type === 'overdue' ? 'bg-red-800' : m.month_type === 'current' ? 'bg-amber-700' : 'bg-green-800'}`}>
+                                <div>{m.month_label}</div>
+                                <div className="text-xs font-normal opacity-75">{MTYPE_LABEL[m.month_type || 'future']}</div>
+                              </th>
+                            ))}
+                            <th className="px-3 py-3 text-right font-semibold bg-gray-700 min-w-[110px]">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {pivotProjSet.map((projRef, ri) => {
+                            const projTotal = pivotMonths.reduce((acc, m) => {
+                              const p = m.projects.find(x => x.project_id === projRef.project_id);
+                              return acc + (p ? p.total_balance : 0);
+                            }, 0);
+                            return (
+                              <tr key={projRef.project_id} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                <td className="px-4 py-2.5 font-medium text-gray-800 sticky left-0 bg-inherit z-10">{projRef.project_name}</td>
+                                {pivotMonths.map(m => {
+                                  const p = m.projects.find(x => x.project_id === projRef.project_id);
+                                  const val = p ? p.total_balance : 0;
+                                  return (
+                                    <td key={m.month_key} className={`px-3 py-2.5 text-right ${val ? (m.month_type === 'overdue' ? 'text-red-600 font-medium' : m.month_type === 'current' ? 'text-amber-700 font-medium' : 'text-green-700 font-medium') : 'text-gray-300'}`}>
+                                      {val ? formatCurrency(val) : '—'}
+                                    </td>
+                                  );
+                                })}
+                                <td className="px-3 py-2.5 text-right font-bold text-gray-900">{formatCurrency(projTotal)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-gray-100 font-bold text-gray-900 border-t-2">
+                            <td className="px-4 py-2.5 sticky left-0 bg-gray-100 z-10">Total</td>
+                            {pivotMonths.map(m => (
+                              <td key={m.month_key} className={`px-3 py-2.5 text-right ${m.month_type === 'overdue' ? 'text-red-700' : m.month_type === 'current' ? 'text-amber-700' : 'text-green-700'}`}>
+                                {formatCurrency(m.total_balance)}
+                              </td>
+                            ))}
+                            <td className="px-3 py-2.5 text-right">{formatCurrency(s.total_outstanding)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        );
+      })()}
     </div>
   );
 }
