@@ -733,7 +733,7 @@ def generate_receivables_timeline_pdf(report_data: dict) -> BytesIO:
     page_w = 7.27*inch  # A4 - margins
     hdr_data = [
         [Paragraph("Receivables Timeline Report", header_style)],
-        [Paragraph(f"Generated via <b>Radius CRM</b> \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style)],
+        [Paragraph(f"Generated via <b>Orbit CRM</b> \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style)],
     ]
     hdr_table = Table(hdr_data, colWidths=[page_w])
     hdr_table.setStyle(TableStyle([
@@ -773,7 +773,7 @@ def generate_receivables_timeline_pdf(report_data: dict) -> BytesIO:
     story.append(sum_table)
     story.append(Spacer(1, 0.25*inch))
 
-    COL_W = [1.55*inch, 0.45*inch, 0.9*inch, 0.75*inch, 0.95*inch, 1.0*inch]
+    COL_W = [1.4*inch, 0.55*inch, 0.55*inch, 0.85*inch, 0.7*inch, 0.85*inch, 0.95*inch]
     TYPE_HDR_COLORS = {
         "overdue":  colors.HexColor('#dc2626'),
         "current":  colors.HexColor('#d97706'),
@@ -792,21 +792,32 @@ def generate_receivables_timeline_pdf(report_data: dict) -> BytesIO:
 
         story.append(Paragraph(month["month_label"], section_style))
 
-        tbl_rows = [["Customer / Project", "#", "Total Due", "Paid", "Overdue", "Future Recv."]]
+        tbl_rows = [["Customer / Project", "Inst #", "Shop #", "Total Due", "Paid", "Overdue", "Future Recv."]]
 
         for proj in month.get("projects", []):
             tbl_rows.append([
                 Paragraph(f"<b>{proj['project_name']}</b>", styles['Normal']),
                 str(proj["installments_count"]),
+                "-",
                 f"{proj['total_due']:,.0f}",
                 f"{proj['total_paid']:,.0f}",
                 f"{proj['overdue']:,.0f}" if proj['overdue'] else "-",
                 f"{proj['future_receivable']:,.0f}" if proj['future_receivable'] else "-",
             ])
             for cust in proj.get("customers", []):
+                inst_nums = ", ".join(
+                    str(i.get("installment_number"))
+                    for i in cust["installments"]
+                    if i.get("installment_number") is not None
+                ) or "-"
+                shop_nums = ", ".join(sorted({
+                    str(i.get("unit_number") or "-")
+                    for i in cust["installments"]
+                })) or "-"
                 tbl_rows.append([
                     f"   {cust['customer_name']}",
-                    str(len(cust["installments"])),
+                    inst_nums,
+                    shop_nums,
                     f"{cust['total_due']:,.0f}",
                     f"{cust['total_paid']:,.0f}",
                     f"{cust['overdue']:,.0f}" if cust['overdue'] else "-",
@@ -816,6 +827,7 @@ def generate_receivables_timeline_pdf(report_data: dict) -> BytesIO:
         tbl_rows.append([
             Paragraph("<b>Month Total</b>", styles['Normal']),
             str(month["total_installments"]),
+            "-",
             f"{month['total_due']:,.0f}",
             f"{month['total_paid']:,.0f}",
             f"{month['overdue']:,.0f}" if month['overdue'] else "-",
@@ -847,7 +859,7 @@ def generate_receivables_timeline_pdf(report_data: dict) -> BytesIO:
     )
     story.append(Spacer(1, 0.2*inch))
     story.append(Paragraph(
-        f"Report Generated via Radius CRM \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Report Generated via Orbit CRM \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         footer_style2,
     ))
 
@@ -912,11 +924,12 @@ def generate_receivables_timeline_excel(report_data: dict) -> BytesIO:
     # ── Sheet 2: Month-wise ──────────────────────────────────────
     ws_mw = wb.add_worksheet("Month-wise")
     ws_mw.set_column(0, 0, 36)
-    ws_mw.set_column(1, 1, 6)
-    ws_mw.set_column(2, 5, 18)
+    ws_mw.set_column(1, 1, 12)
+    ws_mw.set_column(2, 2, 14)
+    ws_mw.set_column(3, 6, 18)
 
     MTYPE_FMT = {"overdue": month_hdr_od, "current": month_hdr_cur, "future": month_hdr_fut}
-    HDR_COLS  = ["Customer / Project", "#", "Total Due (PKR)", "Paid (PKR)", "Overdue (PKR)", "Future Receivable (PKR)"]
+    HDR_COLS  = ["Customer / Project", "Inst #", "Shop #", "Total Due (PKR)", "Paid (PKR)", "Overdue (PKR)", "Future Receivable (PKR)"]
 
     r = 0
     ws_mw.write(r, 0, "Receivables Timeline — Month-wise Breakdown", title_fmt)
@@ -931,27 +944,39 @@ def generate_receivables_timeline_excel(report_data: dict) -> BytesIO:
         for proj in month.get("projects", []):
             ws_mw.write(r, 0, proj["project_name"],           proj_fmt)
             ws_mw.write(r, 1, proj["installments_count"],     proj_fmt)
-            ws_mw.write(r, 2, proj["total_due"],              proj_fmt)
-            ws_mw.write(r, 3, proj["total_paid"],             proj_fmt)
-            ws_mw.write(r, 4, proj["overdue"] or 0,           proj_fmt)
-            ws_mw.write(r, 5, proj["future_receivable"] or 0, proj_fmt)
+            ws_mw.write(r, 2, "—",                            proj_fmt)
+            ws_mw.write(r, 3, proj["total_due"],              proj_fmt)
+            ws_mw.write(r, 4, proj["total_paid"],             proj_fmt)
+            ws_mw.write(r, 5, proj["overdue"] or 0,           proj_fmt)
+            ws_mw.write(r, 6, proj["future_receivable"] or 0, proj_fmt)
             r += 1
 
             for cust in proj.get("customers", []):
+                inst_nums = ", ".join(
+                    str(i.get("installment_number"))
+                    for i in cust["installments"]
+                    if i.get("installment_number") is not None
+                ) or "-"
+                shop_nums = ", ".join(sorted({
+                    str(i.get("unit_number") or "-")
+                    for i in cust["installments"]
+                })) or "-"
                 ws_mw.write(r, 0, f"  {cust['customer_name']} ({cust['customer_id'] or '-'})", cust_fmt)
-                ws_mw.write(r, 1, len(cust["installments"]),         plain_fmt)
-                ws_mw.write(r, 2, cust["total_due"],                  num_fmt)
-                ws_mw.write(r, 3, cust["total_paid"],                 num_fmt)
-                ws_mw.write(r, 4, cust["overdue"] or 0,               num_red_fmt if cust["overdue"] else plain_fmt)
-                ws_mw.write(r, 5, cust["future_receivable"] or 0,     num_grn_fmt if cust["future_receivable"] else plain_fmt)
+                ws_mw.write(r, 1, inst_nums,                          plain_fmt)
+                ws_mw.write(r, 2, shop_nums,                          plain_fmt)
+                ws_mw.write(r, 3, cust["total_due"],                  num_fmt)
+                ws_mw.write(r, 4, cust["total_paid"],                 num_fmt)
+                ws_mw.write(r, 5, cust["overdue"] or 0,               num_red_fmt if cust["overdue"] else plain_fmt)
+                ws_mw.write(r, 6, cust["future_receivable"] or 0,     num_grn_fmt if cust["future_receivable"] else plain_fmt)
                 r += 1
 
         ws_mw.write(r, 0, f"  Total — {month['month_label']}", total_fmt)
         ws_mw.write(r, 1, month["total_installments"],     total_fmt)
-        ws_mw.write(r, 2, month["total_due"],              total_fmt)
-        ws_mw.write(r, 3, month["total_paid"],             total_fmt)
-        ws_mw.write(r, 4, month["overdue"] or 0,           total_fmt)
-        ws_mw.write(r, 5, month["future_receivable"] or 0, total_fmt)
+        ws_mw.write(r, 2, "—",                             total_fmt)
+        ws_mw.write(r, 3, month["total_due"],              total_fmt)
+        ws_mw.write(r, 4, month["total_paid"],             total_fmt)
+        ws_mw.write(r, 5, month["overdue"] or 0,           total_fmt)
+        ws_mw.write(r, 6, month["future_receivable"] or 0, total_fmt)
         r += 2
 
     # ── Sheet 3: Pivot ────────────────────────────────────────────
