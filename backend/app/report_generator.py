@@ -1,5 +1,5 @@
 """
-Radius CRM - PDF and Excel Report Generation
+Orbit by Malik Amin - PDF and Excel Report Generation
 """
 from io import BytesIO
 from reportlab.lib import colors
@@ -42,7 +42,7 @@ def generate_customer_pdf(report_data: dict) -> BytesIO:
     # Header with background - fit within page width (7.5 inch - 1 inch margins = 6.5 inch max)
     header_data = [
         [Paragraph(report_data.get("report_header", {}).get("title", "Customer Detailed Financial Report"), header_style)],
-        [Paragraph(f"Generated via <b>Radius CRM</b> • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_style)]
+        [Paragraph(f"Generated via <b>Orbit by Malik Amin</b> • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_style)]
     ]
     header_table = Table(header_data, colWidths=[6.5*inch])
     header_table.setStyle(TableStyle([
@@ -280,7 +280,7 @@ def generate_customer_pdf(report_data: dict) -> BytesIO:
         textColor=colors.HexColor('#6b7280'),
         alignment=1
     )
-    story.append(Paragraph(f"Report Generated via Radius CRM • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
+    story.append(Paragraph(f"Report Generated via Orbit by Malik Amin • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
     
     doc.build(story)
     buffer.seek(0)
@@ -408,7 +408,7 @@ def generate_project_pdf(report_data: dict) -> BytesIO:
     
     header_data = [
         [Paragraph(report_data.get("report_header", {}).get("title", "Project Financial Report"), header_style)],
-        [Paragraph(f"Generated via <b>Radius CRM</b> • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_style)]
+        [Paragraph(f"Generated via <b>Orbit by Malik Amin</b> • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_style)]
     ]
     header_table = Table(header_data, colWidths=[6.5*inch])
     header_table.setStyle(TableStyle([
@@ -581,7 +581,7 @@ def generate_project_pdf(report_data: dict) -> BytesIO:
         textColor=colors.HexColor('#6b7280'),
         alignment=1
     )
-    story.append(Paragraph(f"Report Generated via Radius CRM • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
+    story.append(Paragraph(f"Report Generated via Orbit by Malik Amin • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
     
     doc.build(story)
     buffer.seek(0)
@@ -617,7 +617,7 @@ def generate_broker_pdf(report_data: dict) -> BytesIO:
     
     header_data = [
         [Paragraph(report_data.get("report_header", {}).get("title", "Broker Detailed Report"), header_style)],
-        [Paragraph(f"Generated via <b>Radius CRM</b> • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_style)]
+        [Paragraph(f"Generated via <b>Orbit by Malik Amin</b> • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_style)]
     ]
     header_table = Table(header_data, colWidths=[6.5*inch])
     header_table.setStyle(TableStyle([
@@ -695,7 +695,7 @@ def generate_broker_pdf(report_data: dict) -> BytesIO:
         textColor=colors.HexColor('#6b7280'),
         alignment=1
     )
-    story.append(Paragraph(f"Report Generated via Radius CRM • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
+    story.append(Paragraph(f"Report Generated via Orbit by Malik Amin • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
 
     doc.build(story)
     buffer.seek(0)
@@ -733,7 +733,7 @@ def generate_receivables_timeline_pdf(report_data: dict) -> BytesIO:
     page_w = 7.27*inch  # A4 - margins
     hdr_data = [
         [Paragraph("Receivables Timeline Report", header_style)],
-        [Paragraph(f"Generated via <b>Orbit CRM</b> \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style)],
+        [Paragraph(f"Generated via <b>Orbit by Malik Amin</b> \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style)],
     ]
     hdr_table = Table(hdr_data, colWidths=[page_w])
     hdr_table.setStyle(TableStyle([
@@ -859,7 +859,7 @@ def generate_receivables_timeline_pdf(report_data: dict) -> BytesIO:
     )
     story.append(Spacer(1, 0.2*inch))
     story.append(Paragraph(
-        f"Report Generated via Orbit CRM \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Report Generated via Orbit by Malik Amin \u2022 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         footer_style2,
     ))
 

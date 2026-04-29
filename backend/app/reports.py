@@ -1,5 +1,5 @@
 """
-Radius CRM - Report Generation Module
+Orbit by Malik Amin - Report Generation Module
 Data aggregation and formatting for customer, project, and broker reports
 """
 from sqlalchemy.orm import Session
@@ -233,7 +233,7 @@ def get_customer_detailed_report(customer_id: str, db: Session) -> Dict:
     return {
         "report_header": {
             "title": "Customer Detailed Financial Report",
-            "generated_by": "Radius CRM",
+            "generated_by": "Orbit by Malik Amin",
             "generated_at": str(datetime.now()),
             "report_type": "customer"
         },
@@ -435,7 +435,7 @@ def get_project_detailed_report(project_id: str, db: Session) -> Dict:
     return {
         "report_header": {
             "title": "Project Financial Report",
-            "generated_by": "Radius CRM",
+            "generated_by": "Orbit by Malik Amin",
             "generated_at": str(datetime.now()),
             "report_type": "project"
         },
@@ -602,7 +602,7 @@ def get_broker_detailed_report(broker_id: str, db: Session) -> Dict:
     return {
         "report_header": {
             "title": "Broker Detailed Report",
-            "generated_by": "Radius CRM",
+            "generated_by": "Orbit by Malik Amin",
             "generated_at": str(datetime.now()),
             "report_type": "broker"
         },
@@ -827,7 +827,7 @@ def get_receivables_timeline(project_ids: List[str], db: Session) -> Dict:
     return {
         "report_header": {
             "title": "Receivables Timeline Report",
-            "generated_by": "Radius CRM",
+            "generated_by": "Orbit by Malik Amin",
             "generated_at": str(datetime.now()),
             "report_type": "receivables_timeline",
         },
